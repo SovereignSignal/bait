@@ -1,0 +1,47 @@
+{
+  "_comment": "Shared fixture for the routable rule (DESIGN.md: not 0x91 prefix AND none of beforeSwapReturnsDelta / afterSwapReturnsDelta / afterAddLiquidityReturnsDelta / afterRemoveLiquidityReturnsDelta AND not dynamicFee). Asserted by pipeline/tests/test_routable_shared.py and web/src/lib/routable.test.ts; both must agree on every case.",
+  "cases": [
+    {
+      "name": "plain lifecycle flags, no deltas, static fee",
+      "address": "0x19aa000000000000000000000000000000000000",
+      "flags": {"beforeSwap": true, "afterSwap": true, "afterInitialize": true, "beforeSwapReturnsDelta": false, "afterSwapReturnsDelta": false, "afterAddLiquidityReturnsDelta": false, "afterRemoveLiquidityReturnsDelta": false},
+      "properties": {"dynamicFee": false, "upgradeable": true},
+      "routable": true
+    },
+    {
+      "name": "0x91 prefix, uppercase hex, otherwise clean",
+      "address": "0X91AA000000000000000000000000000000000000",
+      "flags": {"beforeSwap": true},
+      "properties": {"dynamicFee": false},
+      "routable": false
+    },
+    {
+      "name": "beforeSwapReturnsDelta (published rule)",
+      "address": "0x0000fe59823933ac763611a69c88f91d45f81888",
+      "flags": {"beforeSwap": true, "beforeSwapReturnsDelta": true},
+      "properties": {"dynamicFee": false},
+      "routable": false
+    },
+    {
+      "name": "afterSwapReturnsDelta (published rule)",
+      "address": "0x2222000000000000000000000000000000000000",
+      "flags": {"afterSwap": true, "afterSwapReturnsDelta": true},
+      "properties": {},
+      "routable": false
+    },
+    {
+      "name": "afterRemoveLiquidityReturnsDelta (house rule, stricter than Labs)",
+      "address": "0x3333000000000000000000000000000000000000",
+      "flags": {"afterRemoveLiquidity": true, "afterRemoveLiquidityReturnsDelta": true},
+      "properties": {"dynamicFee": false},
+      "routable": false
+    },
+    {
+      "name": "dynamicFee property, no delta flags",
+      "address": "0x4444000000000000000000000000000000000000",
+      "flags": {"beforeSwap": true, "afterInitialize": true},
+      "properties": {"dynamicFee": true},
+      "routable": false
+    }
+  ]
+}

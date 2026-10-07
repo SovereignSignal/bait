@@ -1,0 +1,26 @@
+import sqlalchemy as sa
+
+from hookfeed import db
+from hookfeed.__main__ import main
+from tests.conftest import FIXTURE
+
+
+def test_cli_end_to_end_sqlite_idempotent(tmp_path, monkeypatch):
+    for k in ("GRAPH_API_KEY", "ANTHROPIC_API_KEY", "EXA_API_KEY", "PARALLEL_API_KEY", "NANSEN_API_KEY", "GITHUB_TOKEN"):
+        monkeypatch.delenv(k, raising=False)
+    url = f"sqlite:///{tmp_path}/t.sqlite"
+    argv = ["run", "--day", "2026-10-06", "--hooklist-file", FIXTURE, "--database-url", url, "--force-digest", "--max-code-fetch", "0"]
+    assert main(argv) == 0
+    assert main(argv) == 0
+    e = db.make_engine(url)
+    with e.connect() as c:
+        assert c.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 300
+        assert c.execute(sa.select(sa.func.count()).select_from(db.projects)).scalar_one() == 91
+        assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily)).scalar_one() == 91
+        assert c.execute(sa.select(sa.func.count()).select_from(db.digests)).scalar_one() == 1
+
+
+def test_cli_rejects_unknown_step_and_chain(tmp_path):
+    url = f"sqlite:///{tmp_path}/t.sqlite"
+    assert main(["run", "--steps", "nope", "--database-url", url]) == 2
+    assert main(["run", "--chains", "mars", "--database-url", url]) == 2

@@ -1,0 +1,24 @@
+.nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: transparent; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; flex: 0 0 auto; }
+.brand svg { display: block; }
+.tabs { display: flex; gap: 2px; padding: 4px; border-radius: 16px; background: var(--surface); border: 1px solid var(--border); }
+.tab { padding: 7px 14px; border-radius: 12px; font-weight: 600; color: var(--fg2); font-size: 14px; }
+.tab:hover { color: var(--fg); }
+.tab[aria-selected="true"] { background: var(--well); color: var(--fg); }
+.right { display: flex; gap: 8px; align-items: center; flex: 0 0 auto; }
+.pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px 6px 6px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); font-weight: 600; }
+.pill .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--well); display: inline-grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--fg2); }
+.pill svg { color: var(--fg2); }
+.sel { position: relative; }
+.menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 180px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 6px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 2px; z-index: 6; }
+.menu a { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; font-weight: 500; }
+.menu a:hover { background: var(--well); }
+.menu a[aria-current="true"] { background: var(--well); font-weight: 600; }
+.menu .dot { width: 18px; height: 18px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+.cta { padding: 8px 14px; border-radius: 999px; background: var(--pink-tint); color: var(--pink-tint-fg); font-weight: 600; white-space: nowrap; }
+.cta:hover { filter: brightness(.97); }
+@media (max-width: 560px) {
+  .nav { flex-wrap: wrap; }
+  .tabs { order: 3; width: 100%; justify-content: center; }
+  .right { margin-left: auto; }
+}

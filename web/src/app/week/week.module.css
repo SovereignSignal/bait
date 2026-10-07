@@ -1,0 +1,15 @@
+.list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.list li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 4px; border-radius: 12px; min-width: 0; }
+.list li:hover { background: var(--well); }
+.name { font-weight: 600; font-size: 15px; grid-column: 1; }
+.name:hover { color: var(--pink-tint-fg); }
+.rank { color: var(--fg2); font-weight: 600; font-size: 12px; margin-right: 2px; }
+.line { color: var(--fg2); font-size: 13px; grid-column: 1; }
+.vol { grid-column: 2; grid-row: 1 / span 2; align-self: center; font-weight: 500; font-size: 14px; }
+.pager { display: flex; justify-content: space-between; gap: 8px; padding: 0 4px; font-size: 13px; color: var(--fg2); }
+.pager a:hover { color: var(--fg); }
+.weeks { display: flex; flex-direction: column; gap: 4px; }
+.weeks a { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; border-radius: 14px; }
+.weeks a:hover { background: var(--well); }
+.weeks .t { font-weight: 600; font-size: 15px; }
+.weeks .i { color: var(--fg2); font-size: 13px; }

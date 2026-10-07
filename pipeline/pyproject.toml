@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hookfeed-pipeline"
+version = "0.1.0"
+description = "Nightly pipeline for hookfeed: ingest Uniswap v4 hooks, snapshot pools, group, score, enrich."
+requires-python = ">=3.12"
+dependencies = [
+  "sqlalchemy>=2",
+  "psycopg[binary]",
+  "httpx",
+  "anthropic",
+  "pydantic",
+  "tenacity",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["hookfeed*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

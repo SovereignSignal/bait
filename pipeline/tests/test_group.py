@@ -1,0 +1,81 @@
+import sqlalchemy as sa
+
+from hookfeed import db
+from hookfeed.clients.blockscout import CodeInfo
+from hookfeed.steps import group, ingest
+from tests.conftest import insert_hook
+
+
+def test_group_by_name_and_factories(conn, ctx):
+    ingest.run(conn, ctx)
+    out = group.run(conn, ctx)
+    assert out["by_name"] == 300 and out["created"] == 91 and out["unassigned"] == 0
+    assert out["factories"] == 3   # EulerSwap 51, OrketHook 47, StrategyFeeHook 34 (> 20)
+    rows = conn.execute(sa.select(db.projects.c.name, db.projects.c.is_factory, db.projects.c.slug, db.projects.c.what_line)).all()
+    by = {r.name: r for r in rows}
+    assert by["EulerSwap"].is_factory and not by["BunniHook"].is_factory
+    assert by["BunniHook"].slug == "bunnihook" and by["BunniHook"].what_line  # placeholder from description
+    n = conn.execute(sa.select(sa.func.count()).select_from(db.hooks).join(db.projects).where(db.projects.c.name == "EulerSwap")).scalar_one()
+    assert n == 51
+    # idempotent
+    out2 = group.run(conn, ctx)
+    assert out2["created"] == 0 and out2["by_name"] == 0 and out2["factories"] == 3
+
+
+def test_group_same_normalized_name_merges(conn, ctx):
+    insert_hook(conn, "0x01", 1, name="BunniHook")
+    insert_hook(conn, "0x02", 8453, name="Bunni Hooks")
+    insert_hook(conn, "0x03", 8453, name="bunni")
+    out = group.run(conn, ctx)
+    assert out["created"] == 1 and out["by_name"] == 3
+    assert conn.execute(sa.select(sa.func.count(sa.distinct(db.hooks.c.project_id)))).scalar_one() == 1
+
+
+class FakeBlockscout:
+    def __init__(self, table):
+        self.table, self.calls = table, []
+
+    def fetch_code(self, chain_id, address):
+        self.calls.append(address)
+        h = self.table.get(address)
+        return CodeInfo(code_hash=h) if h else None
+
+
+def test_group_by_code_hash_joins_unnamed_to_existing(conn, ctx):
+    insert_hook(conn, "0xaa", 1, name="Saturn")
+    insert_hook(conn, "0xbb", 1, name=None)   # same bytecode as Saturn, no name
+    insert_hook(conn, "0xcc", 1, name=None)   # different bytecode, nothing to join -> long tail
+    ctx.clients["blockscout"] = FakeBlockscout({"0xaa": "0xhash1", "0xbb": "0xhash1", "0xcc": "0xhash2"})
+    ctx.max_code_fetch = 10
+    out = group.run(conn, ctx)
+    assert out["by_name"] == 1 and out["by_code"] == 1 and out["code_fetched"] == 3
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert pid["0xaa"] == pid["0xbb"]
+    # no Claude key: the leftover becomes its own address-named project
+    assert pid["0xcc"] not in (None, pid["0xaa"]) and out["created"] == 2 and out["unassigned"] == 0
+
+
+class FakeClaude:
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
+
+    def classify_hook(self, name, description, address, known_projects):
+        self.calls.append((name, address, list(known_projects)))
+        return self.answers[address]
+
+
+def test_group_long_tail_with_claude(conn, ctx):
+    insert_hook(conn, "0xaa", 1, name="Saturn")
+    insert_hook(conn, "0xdd", 1, name=None)
+    insert_hook(conn, "0xee", 1, name=None)
+    ctx.clients["claude"] = FakeClaude({
+        "0xdd": {"project": "Saturn", "category": "orders", "reason": "same team"},
+        "0xee": {"project": "Fresh Thing", "category": "launchpad", "reason": "new"},
+    })
+    out = group.run(conn, ctx)
+    assert out["by_claude"] == 2 and out["created"] == 2
+    rows = {r.name: r for r in conn.execute(sa.select(db.projects))}
+    assert rows["Fresh Thing"].category == "launchpad" and rows["Fresh Thing"].slug == "fresh-thing"
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert pid["0xdd"] == pid["0xaa"] == rows["Saturn"].id and pid["0xee"] == rows["Fresh Thing"].id
+    assert "Saturn" in ctx.clients["claude"].calls[0][2]
