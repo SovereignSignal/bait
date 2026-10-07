@@ -1,0 +1,26 @@
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+*.sqlite
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/

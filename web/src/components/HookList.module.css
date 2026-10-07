@@ -1,0 +1,14 @@
+.list { display: flex; flex-direction: column; gap: 8px; }
+.hook { background: var(--well); border-radius: 16px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.name { font-weight: 600; }
+.chain { display: inline-flex; align-items: center; gap: 5px; color: var(--fg2); font-size: 12px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--fg2); overflow-wrap: anywhere; }
+.addr a:hover { color: var(--pink-tint-fg); }
+.flags { display: flex; gap: 4px; flex-wrap: wrap; }
+.flag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); color: var(--fg2); }
+.flag.warn { color: var(--amber); background: var(--amber-tint); border-color: transparent; }
+.meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--fg2); }
+.meta a { color: var(--pink-tint-fg); font-weight: 500; }
+.desc { font-size: 13px; color: var(--fg2); line-height: 1.5; }
