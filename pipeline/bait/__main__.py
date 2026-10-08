@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import logging
 import sys
 import time
@@ -22,7 +23,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the nightly pipeline for one day (idempotent)")
     r.add_argument("--day", type=date.fromisoformat, default=None, help="YYYY-MM-DD, default: today UTC")
-    r.add_argument("--steps", default=",".join(STEP_ORDER), help="comma list, subset of " + ",".join(STEP_ORDER))
+    r.add_argument("--steps", default=os.environ.get("BAIT_STEPS") or ",".join(STEP_ORDER),
+                   help="comma list, subset of " + ",".join(STEP_ORDER) + " (env BAIT_STEPS overrides the default)")
     r.add_argument("--chains", default=None, help="comma list of chain slugs, e.g. base,ethereum (default all)")
     r.add_argument("--hooklist-file", default=None, help="local hooklist.json instead of GitHub")
     r.add_argument("--force-digest", action="store_true", help="write the digest even if --day is not a Monday")

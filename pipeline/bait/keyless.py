@@ -295,12 +295,19 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
     for key, p in pools.items():
         if not p.get("key") and p["attrs"].get("pool_created_at") and key[0] in LOGS:
             pending[key[0]].append(key)
+    budget = float(os.environ.get("KEYLESS_FALLBACK_BUDGET", "150"))  # seconds per chain; public endpoints throttle
     for net, keys in pending.items():
         pm, url, win = LOGS[net]
         bs = BLOCKSCOUT_LOGS.get(net)
         model: dict = {}
         found = 0
+        # biggest pools first, so a budget cut drops the long tail, not the flagships
+        keys = sorted(keys, key=lambda k: -float(pools[k]["attrs"]["volume_usd"]["h24"] or 0))
+        started = time.time()
         for key in keys:
+            if time.time() - started > budget:
+                log(f"{CHAINS[net][1]}: Initialize-log fallback hit its {budget:.0f}s budget; rest skipped this run")
+                break
             logs = None
             if bs:
                 q = (f"{bs}/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address={pm}"
@@ -313,7 +320,7 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
                         break
                     except urllib.error.HTTPError as e:
                         if e.code == 429:
-                            time.sleep(10 * (attempt + 1))
+                            time.sleep(4 * (attempt + 1))
                             continue
                         log(f"Blockscout {bs} HTTP {e.code}")
                         break
