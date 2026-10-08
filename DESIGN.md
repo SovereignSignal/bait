@@ -193,8 +193,8 @@ Nightly step `activity`, right after `snapshot`: who actually uses each hook.
   volume, GeckoTerminal's last ~300 trades are rolled up per wallet (USD volume, trades, buys, sells, last trade).
   Top 20 wallets per pool per day; 14 days retained.
 - **wallet_labels** `(address, chain_id)`: Nansen labels (JSON list of strings), `smart_money` flag, `source`, `as_of`.
-  An empty list means "asked, nothing", so the wallet is not re-queried for `NANSEN_RELABEL_DAYS` (14).
-- **Credit cap:** at most `NANSEN_MAX_ADDRESSES` (60) Nansen calls per run, highest-volume wallets first; Unichain and
+  An empty list means "asked, nothing", so the wallet is not re-queried for `NANSEN_RELABEL_DAYS` (30, minimum 30).
+- **Credit cap:** at most `NANSEN_MAX_ADDRESSES` (10) Nansen calls per run and a rolling 30-day budget of `NANSEN_MONTHLY_CREDITS` (10,000 estimated credits: about 100 per labeled answer, 500 with premium labels, empty answers free) shared by every step that calls Nansen, highest-volume wallets first; Unichain and
   Ink are skipped (no Nansen coverage). The signals step reads the same table first, so a wallet is paid for once per
   window across both steps. Without `NANSEN_API_KEY` the trades layer still runs (keyless) and labels are skipped.
 - All addresses lowercase. The web app reads these three tables directly (project page "who trades it", smart-money

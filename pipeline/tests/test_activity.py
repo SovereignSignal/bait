@@ -108,7 +108,7 @@ def test_nansen_labels_cap_window_chains_and_flags(conn, ctx, monkeypatch):
     conn.execute(sa.insert(db.wallet_labels).values(address=_w(24), chain_id=BASE, labels=["Old"], smart_money=False,
                                                     source="nansen-labels", as_of=NOW - timedelta(days=2)))
     conn.execute(sa.insert(db.wallet_labels).values(address=_w(23), chain_id=BASE, labels=[], smart_money=False,
-                                                    source="nansen-labels", as_of=NOW - timedelta(days=30)))
+                                                    source="nansen-labels", as_of=NOW - timedelta(days=40)))
     nansen = FakeNansen({_w(23): ["Smart Trader"], _w(22): ["Binance: Hot Wallet"]})
     ctx.clients["nansen"] = nansen
     out = activity.run(conn, ctx)
@@ -144,8 +144,8 @@ def test_nansen_errors_are_counted_not_raised(conn, ctx):
     nansen = Boom({})
     ctx.clients["nansen"] = nansen
     out = activity.run(conn, ctx)
-    assert out["errors"] == 1 and out["nansen_queried"] == 20
-    assert conn.execute(sa.select(sa.func.count()).select_from(db.wallet_labels)).scalar_one() == 19
+    assert out["errors"] == 1 and out["nansen_queried"] == 10   # default per-run cap
+    assert conn.execute(sa.select(sa.func.count()).select_from(db.wallet_labels)).scalar_one() == 9   # 10 queried, 1 failed
 
 
 def test_additive_migration_on_sqlite_is_idempotent(tmp_path):
@@ -188,3 +188,18 @@ def test_signals_reuses_fresh_wallet_labels(conn, ctx):
     assert signals._labels_cached(conn, ctx, nansen, _w(2), BASE, out) == ["Fund"]
     assert nansen.calls == [(_w(2), BASE)] and out["nansen_cached"] == 1
     assert conn.execute(sa.select(db.wallet_labels.c.smart_money).where(db.wallet_labels.c.address == _w(2))).scalar_one()
+
+
+
+def test_nansen_monthly_budget_stops_lookups(conn, ctx, monkeypatch):
+    """Rolling 30-day budget: labeled answers in wallet_labels count 100 credits each."""
+    from bait.clients import nansen as N
+    monkeypatch.setenv("NANSEN_MONTHLY_CREDITS", "300")
+    for i in range(3):   # 3 labeled answers this month = 300 credits = budget exhausted
+        conn.execute(sa.insert(db.wallet_labels).values(address=f"0x{i:040x}", chain_id=BASE, labels=["Fund"], smart_money=True,
+                                                        source="nansen-labels", as_of=NOW - timedelta(days=3)))
+    conn.execute(sa.insert(db.wallet_labels).values(address="0x" + "9" * 40, chain_id=BASE, labels=[], smart_money=False,
+                                                    source="nansen-labels", as_of=NOW - timedelta(days=3)))   # empty = free
+    assert N.credits_spent_30d(conn, NOW) == 300 and N.budget_left(conn, NOW) == 0
+    monkeypatch.setenv("NANSEN_MONTHLY_CREDITS", "10000")
+    assert N.budget_left(conn, NOW) == 9700

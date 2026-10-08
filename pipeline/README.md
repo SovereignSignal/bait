@@ -105,7 +105,7 @@ for Smart Money tags), `GITHUB_TOKEN`, `BLOCKSCOUT_API_KEY` (optional). `BLOCKWO
 unused by the pipeline.
 
 Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30),
-`NANSEN_MAX_ADDRESSES` (Nansen label calls per run, default 60), `NANSEN_RELABEL_DAYS` (days before a
+`NANSEN_MAX_ADDRESSES` (Nansen label calls per run, default 10), `NANSEN_MONTHLY_CREDITS` (rolling 30-day budget in estimated credits, default 10000; enforced before every call), `NANSEN_RELABEL_DAYS` (days before a
 labeled wallet is queried again, default 14; signals uses the same window). Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP`.
