@@ -68,6 +68,8 @@ def test_group_long_tail_with_claude(conn, ctx):
     insert_hook(conn, "0xaa", 1, name="Saturn")
     insert_hook(conn, "0xdd", 1, name=None)
     insert_hook(conn, "0xee", 1, name=None)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xdd").values(description="Saturn omnichain hook, second deployment"))
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xee").values(description="A brand new launchpad hook"))
     ctx.clients["claude"] = FakeClaude({
         "0xdd": {"project": "Saturn", "category": "orders", "reason": "same team"},
         "0xee": {"project": "Fresh Thing", "category": "launchpad", "reason": "new"},
@@ -94,3 +96,15 @@ def test_unlisted_bytecode_family_becomes_one_project(conn, ctx):
     assert len(fam) == 1 and lone not in fam
     name = conn.execute(sa.select(db.projects.c.name).where(db.projects.c.id == fam.pop())).scalar_one()
     assert name.startswith("Unlisted hook family")
+
+
+
+def test_bare_address_hooks_never_reach_claude(conn, ctx):
+    insert_hook(conn, "0xb1", 8453, name=None)
+    insert_hook(conn, "0xb2", 8453, name=None)
+    fc = FakeClaude({})
+    ctx.clients["claude"] = fc
+    out = group.run(conn, ctx)
+    assert fc.calls == [] and out["by_claude"] == 0 and out["unlisted_named"] == 2
+    names = sorted(r.name for r in conn.execute(sa.select(db.projects)))
+    assert all(n.startswith("Unlisted hook 0x") for n in names)

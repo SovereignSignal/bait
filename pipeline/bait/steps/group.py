@@ -73,10 +73,27 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 out["created"] += 1
             unassigned = []
         else:
+            from ..costs import BudgetExceeded
             names = {r.id: r.name for r in conn.execute(sa.select(projects.c.id, projects.c.name))}
-            for h in unassigned:
+            # A hook with no name and no description is only an address: Claude would be guessing, so it is never
+            # paid for. Those get an address-named project (bytecode families were already merged above for free).
+            bare = [h for h in unassigned if not (h.name or "").strip() and not (h.description or "").strip()]
+            for h in bare:
+                pid = _create_project(conn, ctx, f"Unlisted hook {h.address[:6]}…{h.address[-4:]}", None, None, category=None)
+                _assign(conn, h, pid)
+                out["created"] += 1
+                out["unlisted_named"] = out.get("unlisted_named", 0) + 1
+            unassigned = [h for h in unassigned if h not in bare]
+            cap = claude_cap()
+            if len(unassigned) > cap:
+                log.info("group: %d hooks need Claude, classifying %d this run (GROUP_CLAUDE_MAX); the rest wait", len(unassigned), cap)
+            for h in unassigned[:cap]:
                 try:
-                    res = claude.classify_hook(h.name or "", h.description or "", h.address, sorted(set(names.values())))
+                    res = claude.classify_hook(h.name or "", h.description or "", h.address,
+                                               shortlist(h.name or "", h.description or "", list(set(names.values()))))
+                except BudgetExceeded:
+                    out["budget_stop"] = 1
+                    break
                 except Exception as e:
                     log.warning("group claude classify failed for %s: %s", h.address, e)
                     continue
@@ -147,3 +164,43 @@ def _fetch_code_hashes(conn, ctx, unassigned) -> int:
                 vals["verified_source"] = True
             conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == h.address, hooks.c.chain_id == h.chain_id))
     return n
+
+
+# --- Claude classification cost controls -------------------------------------------------------------
+SHORTLIST_N = 25            # candidate project names sent per call (was every name, up to 400)
+PROMPT_CHARS_MAX = 2500     # worst-case prompt size with the shortlist, used by the cost preview
+
+
+def claude_cap() -> int:
+    """Max Claude classifications per run (GROUP_CLAUDE_MAX, default 100); the rest wait for later runs."""
+    import os
+    try:
+        return max(0, int(os.environ.get("GROUP_CLAUDE_MAX", "") or 100))
+    except ValueError:
+        return 100
+
+
+def shortlist(name: str, description: str, known: list[str], n: int = SHORTLIST_N) -> list[str]:
+    """The n known project names closest to this hook's name/description; empty when nothing is close.
+    Unnamed hooks with no description have nothing to match on, so they get an empty list (Claude names them)."""
+    import difflib
+    probe = f"{name} {description}".strip().lower()
+    if not probe or not known:
+        return []
+    scored = []
+    for k in known:
+        kl = k.lower()
+        r = difflib.SequenceMatcher(None, probe[:120], kl).ratio()
+        if kl and (kl in probe or probe.split()[0] in kl):
+            r += 1.0
+        scored.append((r, k))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [k for r, k in scored[:n] if r >= 0.35]
+
+
+def claude_candidates_count(conn) -> int:
+    """Upper bound on hooks that would reach Claude now: unassigned, unnamed, but with a description to work from.
+    (Named hooks are grouped by name for free; hooks with neither name nor description are never sent.)"""
+    return conn.execute(sa.select(sa.func.count()).select_from(hooks).where(
+        hooks.c.project_id.is_(None), sa.or_(hooks.c.name.is_(None), hooks.c.name == ""),
+        hooks.c.description.is_not(None), hooks.c.description != "")).scalar_one()

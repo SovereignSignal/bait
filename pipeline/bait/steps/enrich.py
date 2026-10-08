@@ -16,15 +16,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         return out
     par = ctx.client("parallel")
     bs = ctx.client("blockscout")
-    # Only projects with live pools, busiest first, capped per run: Parallel and Claude cost money per call and
-    # ~95% of registry hooks have no pools. The rest wait until they show activity.
-    cap = _env_int("ENRICH_MAX", 40)
-    busy = (sa.select(hooks.c.project_id, sa.func.coalesce(sa.func.sum(pool_stats.c.vol_24h), 0.0).label("vol"))
-            .select_from(hooks.join(pools, sa.and_(pools.c.hook_address == hooks.c.address, pools.c.chain_id == hooks.c.chain_id))
-                         .outerjoin(pool_stats, sa.and_(pool_stats.c.pool_id == pools.c.pool_id, pool_stats.c.chain_id == pools.c.chain_id)))
-            .where(hooks.c.project_id.is_not(None)).group_by(hooks.c.project_id).subquery())
-    todo = conn.execute(sa.select(projects).join(busy, busy.c.project_id == projects.c.id)
-                        .where(projects.c.enriched_at.is_(None)).order_by(busy.c.vol.desc(), projects.c.id).limit(cap)).all()
+    from ..costs import BudgetExceeded
+    todo = select_candidates(conn)
     out["candidates"] = len(todo)
     for p in todo:
         hs = conn.execute(sa.select(hooks).where(hooks.c.project_id == p.id).order_by(hooks.c.verified_source.desc(), hooks.c.first_seen_at)).all()
@@ -50,6 +43,11 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                     out["source"] += 1
             ctxd["enrichment"] = enrichment
             res = claude.what_line(ctxd)
+        except BudgetExceeded:
+            out["budget_stop"] = 1
+            if enrichment != dict(p.enrichment or {}):   # keep what was already paid for
+                conn.execute(sa.update(projects).values(enrichment=enrichment).where(projects.c.id == p.id))
+            break
         except Exception as e:
             out["errors"] += 1
             log.warning("enrich project=%s failed: %s", p.slug, e)
@@ -65,6 +63,18 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         conn.execute(sa.update(projects).values(**vals).where(projects.c.id == p.id))
         out["enriched"] += 1
     return out
+
+
+def select_candidates(conn) -> list:
+    """Projects with live pools, busiest first, never enriched, ENRICH_MAX (40) per run. Parallel and Claude bill per
+    call and ~95% of registry hooks have no pools; the rest wait until they show activity. The cost preview uses this."""
+    cap = _env_int("ENRICH_MAX", 40)
+    busy = (sa.select(hooks.c.project_id, sa.func.coalesce(sa.func.sum(pool_stats.c.vol_24h), 0.0).label("vol"))
+            .select_from(hooks.join(pools, sa.and_(pools.c.hook_address == hooks.c.address, pools.c.chain_id == hooks.c.chain_id))
+                         .outerjoin(pool_stats, sa.and_(pool_stats.c.pool_id == pools.c.pool_id, pool_stats.c.chain_id == pools.c.chain_id)))
+            .where(hooks.c.project_id.is_not(None)).group_by(hooks.c.project_id).subquery())
+    return conn.execute(sa.select(projects).join(busy, busy.c.project_id == projects.c.id)
+                        .where(projects.c.enriched_at.is_(None)).order_by(busy.c.vol.desc(), projects.c.id).limit(cap)).all()
 
 
 def _verified_source(bs, hs) -> dict | None:

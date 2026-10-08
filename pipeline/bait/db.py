@@ -164,6 +164,21 @@ digests = sa.Table(
     sa.Column("body", JSONType, nullable=False),
 )
 
+# --- spend ---
+# One row per paid API call (Anthropic, Parallel, Exa; Nansen with usd=0). Written on its own connection by
+# costs.Meter so it survives step rollbacks. Budgets in costs.py read it.
+api_spend = sa.Table(
+    "api_spend", metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("ts", TS, nullable=False, index=True),
+    sa.Column("provider", sa.Text, nullable=False),
+    sa.Column("step", sa.Text),
+    sa.Column("units", sa.Integer),
+    sa.Column("usd", sa.Float, nullable=False),
+    sa.Column("detail", sa.Text),
+)
+# --- /spend ---
+
 # --- radar ---
 # Dev radar (step "radar", db/migrations/0005_radar.sql): what is being built before it has volume. One row per URL.
 # kind: registry_submission | repo | hackathon | incubator | audit | launch_post. score is the Claude relevance (0-1)

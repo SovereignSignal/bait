@@ -206,3 +206,22 @@ Avalanche have no Blockscout instance, so code_hash lookups there return None.
 ## Docker
 `Dockerfile`: python:3.12-slim, `pip install -r requirements.txt`, `CMD python -m bait run`
 (day = today UTC). Railway cron service, ~06:00 UTC.
+
+## Paid API costs
+
+Every paid call goes through `bait/costs.py`: a price table (checked 2026-10-08), a durable ledger (`api_spend`,
+written on its own connection so it survives a rolled-back step), and hard budgets checked **before** each call.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SPEND_DAILY_USD` | 3.00 | All providers, UTC day. `0` = hold: paid calls skipped, free steps still run. |
+| `SPEND_MONTHLY_USD` | 40.00 | All providers, rolling 30 days. |
+| `SPEND_DAILY_USD_<PROVIDER>` / `SPEND_MONTHLY_USD_<PROVIDER>` | unset | Optional per provider (`ANTHROPIC`, `PARALLEL`, `EXA`). |
+| `ENRICH_MAX` | 40 | Projects enriched (Parallel core + Sonnet) per run; live-pool projects only. |
+| `GROUP_CLAUDE_MAX` | 100 | Haiku classifications per run; bare-address hooks are never sent. |
+| `RADAR_EXA_QUERIES` / `RADAR_CLASSIFY_MAX` | 6 / 30 | Radar Exa searches and Haiku classifications per run. |
+| `NANSEN_MONTHLY_CREDITS` / `NANSEN_MAX_ADDRESSES` | 10000 / 10 | Nansen credit budget (separate, in credits). |
+
+`python -m bait cost-preview` prints, without calling anything paid, how many paid calls each step would make against
+the current database and the worst-case USD for one full run, plus spend today and in the last 30 days.
+Every run logs `run spend $X` at the end.

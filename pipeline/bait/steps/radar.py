@@ -81,6 +81,14 @@ def _cap(name: str, default: int) -> int:
         return default
 
 
+def exa_query_cap() -> int:
+    return min(_cap("RADAR_EXA_QUERIES", 6), len(EXA_QUERIES))
+
+
+def classify_cap() -> int:
+    return _cap("RADAR_CLASSIFY_MAX", 30)
+
+
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"registry": 0, "repos": 0, "exa_new": 0, "classified": 0, "dropped": 0, "bumped": 0, "github_calls": 0,
            "exa_calls": 0, "linked": 0, "pruned": 0, "source_errors": 0}
@@ -397,12 +405,16 @@ def _exa(conn, ctx: RunContext, _gh, out: dict) -> None:
     if claude is None:
         log.info("radar exa skipped: no ANTHROPIC_API_KEY to classify results")
         return
-    n_queries = _cap("RADAR_EXA_QUERIES", 6)
-    max_classify = _cap("RADAR_CLASSIFY_MAX", 30)
+    from ..costs import BudgetExceeded
+    n_queries = exa_query_cap()
+    max_classify = classify_cap()
     cands: dict[str, dict] = {}
     for q, hint in EXA_QUERIES[:n_queries]:
         try:
             hits = exa.search_recent(q, days=EXA_DAYS, n=10, now=ctx.now)
+        except BudgetExceeded:
+            out["budget_stop"] = 1
+            break
         except Exception as e:
             out["source_errors"] += 1
             log.warning("radar exa query failed q=%r: %s", q, e)
@@ -423,6 +435,9 @@ def _exa(conn, ctx: RunContext, _gh, out: dict) -> None:
             res = claude.classify_radar({"title": c.get("title"), "url": c["url"], "source": c.get("source"),
                                          "published": c.get("published_at"), "highlights": c.get("highlights") or [],
                                          "query_hint": c["hint"]})
+        except BudgetExceeded:
+            out["budget_stop"] = 1
+            break
         except Exception as e:
             out["source_errors"] += 1
             log.warning("radar classify failed url=%s: %s", c["url"], e)

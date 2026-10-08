@@ -29,6 +29,8 @@ class Parallel:
         self.c = http_client or http.client(timeout=120.0)
         self.headers = {"x-api-key": api_key}
         self.processor, self.poll_s, self.max_wait_s = processor, poll_s, max_wait_s
+        from ..costs import NullMeter
+        self.meter = NullMeter()
 
     @classmethod
     def from_env(cls, http_client=None):
@@ -36,12 +38,16 @@ class Parallel:
         return cls(key, http_client) if key else None
 
     def enrich(self, project_name: str, hints: str) -> dict | None:
+        from ..costs import parallel_usd
+        price = parallel_usd(self.processor)
+        self.meter.check("parallel", price)
         run = http.post_json(self.c, "https://api.parallel.ai/v1/tasks/runs", headers=self.headers, json={
             "input": f"Uniswap v4 hook project '{project_name}'. Known facts: {hints}",
             "task_spec": {"output_schema": OUTPUT_SCHEMA},
             "processor": self.processor,
         })
         run_id = run["run_id"]
+        self.meter.record("parallel", price, detail=f"{self.processor} {project_name[:80]}")
         deadline = time.monotonic() + self.max_wait_s
         while time.monotonic() < deadline:
             r = self.c.get(f"https://api.parallel.ai/v1/tasks/runs/{run_id}/result", headers=self.headers)

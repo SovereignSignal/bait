@@ -66,6 +66,8 @@ SYSTEM = (
 
 class Claude:
     def __init__(self, api_key: str | None = None, client: anthropic.Anthropic | None = None):
+        from ..costs import NullMeter
+        self.meter = NullMeter()
         self.client = client or anthropic.Anthropic(api_key=api_key, max_retries=3)
 
     @classmethod
@@ -75,6 +77,8 @@ class Claude:
 
     # --- transport -------------------------------------------------------------------------
     def _json(self, model: str, user: str, schema: dict, max_tokens: int) -> dict:
+        from ..costs import anthropic_estimate, anthropic_usd
+        self.meter.check("anthropic", anthropic_estimate(model, len(user) + len(SYSTEM), max_tokens))
         fmt = {"type": "json_schema", "schema": schema}
         if model == CLAUDE_CLASSIFY_MODEL:
             resp = self.client.messages.create(
@@ -89,6 +93,13 @@ class Claude:
                 output_config={"effort": "low", "format": fmt},
                 betas=["server-side-fallback-2026-07-01"], fallbacks="default",
             )
+        u = getattr(resp, "usage", None)
+        if u is not None:
+            served = getattr(resp, "model", None) or model
+            self.meter.record("anthropic", anthropic_usd(served, getattr(u, "input_tokens", 0) or 0, getattr(u, "output_tokens", 0) or 0,
+                                                         getattr(u, "cache_creation_input_tokens", 0) or 0,
+                                                         getattr(u, "cache_read_input_tokens", 0) or 0),
+                              units=(getattr(u, "input_tokens", 0) or 0) + (getattr(u, "output_tokens", 0) or 0), detail=served)
         if resp.stop_reason == "refusal":
             cat = getattr(getattr(resp, "stop_details", None), "category", None)
             raise RuntimeError(f"claude refusal ({cat})")

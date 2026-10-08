@@ -21,12 +21,19 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out["projects"] = len(targets)
     if not targets:
         return out
+    from ..costs import BudgetExceeded
     exa, gh, nansen, graph, claude = (ctx.client(n) for n in ("exa", "github", "nansen", "graph", "claude"))
     for p, daily in targets:
         changed = False
         try:
             if exa is not None:
-                hits = exa.search_recent(f'"{p.name}" Uniswap v4 hook', now=ctx.now)
+                try:
+                    hits = exa.search_recent(f'"{p.name}" Uniswap v4 hook', now=ctx.now)
+                except BudgetExceeded:
+                    out["budget_stop"] = 1
+                    exa = None            # no more paid searches this run; free signals continue
+                    hits = None
+            if exa is not None and hits is not None:
                 out["exa"] += 1
                 rows = [{"project_id": p.id, "url": h["url"], "title": h["title"], "source": h["source"], "published_at": h["published_at"]} for h in hits]
                 out["receipts"] += upsert(conn, receipts, rows, keys=["project_id", "url"])
@@ -51,6 +58,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 blurb = claude.why_blurb(_blurb_ctx(conn, p, daily))
                 conn.execute(sa.update(projects).values(why_blurb=blurb.strip()[:400], blurb_at=ctx.now).where(projects.c.id == p.id))
                 out["blurbs"] += 1
+            except BudgetExceeded:
+                out["budget_stop"] = 1
+                claude = None
             except Exception as e:
                 out["errors"] += 1
                 log.warning("signals blurb project=%s failed: %s", p.slug, e)
