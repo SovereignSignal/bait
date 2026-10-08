@@ -246,3 +246,18 @@ search with highlights), Nansen (credits). All metered through one ledger with d
 enforced before each call; `cost-preview` reports worst case per run from live data (first preview: $2.89, under the
 daily budget). Grouping never sends bare-address hooks to Claude (they carry nothing to classify) and sends a 25-name
 shortlist instead of up to 400 names.
+
+## Data issues backlog (from a UF backtest on Bait data, 2026-10-08)
+
+- HyperSync token is free tier (~15 requests per window); the indexer needs all of it. One-off scans need a second token.
+- Swap history keeps 14 days; add a per-pool per-month aggregate kept forever for all-time / monthly views.
+- Swap.fee is decoded but not stored; store fee_usd per pool-day (real LP fees incl. dynamic fees).
+- Dormant wash: Labs' Dune hook explorer (query 5685626) attributes ~$225B of $272B all-time volume to a few dead
+  ...888 pools (1-4 pools, $0 in 7 days). Before showing all-time totals, exclude all-time > $1B with <= 4 pools and
+  $0 7d. Bunni (761 pools) and EulerSwap (1,241 pools) show ~$0 in 7 days: never rank by all-time.
+- Labels: "project" is ambiguous between hook author and integrator (Dune puts Doppler's
+  DecayMulticurveInitializerHook 0xbb7784a4... under Bankr). If Dune labels are ingested, keep both, never overwrite.
+  Bait already names hooks Dune leaves unlabeled (StablePairHook, FablesRamp/ETH, HookrModularHookV6, LaunchHook).
+  Labs' own hooks and "Unknown Deployer" buckets need their own category.
+- To check: optimism 0x69afa...7fff ($642M in 7 days, all of its history, 3 pools: wash check); robinhood
+  0xe5e70...e044 (10,082 pools, $231M in 7 days, launchpad pattern, unlabeled everywhere).
