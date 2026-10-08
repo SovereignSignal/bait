@@ -1,4 +1,4 @@
-"""Step 3: hooks -> projects. Rule 1 normalized name, rule 2 code_hash, rule 3 Claude for the long tail.
+"""Step 4 (group): hooks -> projects. Rule 1 normalized name, rule 2 code_hash, rule 3 Claude for the long tail.
 is_factory when a project has > 20 hooks."""
 from __future__ import annotations
 

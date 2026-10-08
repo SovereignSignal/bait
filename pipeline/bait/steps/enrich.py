@@ -1,4 +1,4 @@
-"""Step 4: projects with enriched_at null -> Parallel (optional) -> Blockscout verified source -> Claude what_line + category."""
+"""Step 5 (enrich): projects with enriched_at null -> Parallel (optional) -> Blockscout verified source -> Claude what_line + category."""
 from __future__ import annotations
 
 import sqlalchemy as sa

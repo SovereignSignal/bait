@@ -34,6 +34,8 @@ def test_keyless_rows_feed_scoring_and_wash_is_excluded(conn, ctx, monkeypatch):
     assert hooks["0x" + "b" * 40].name is None          # unlisted: grouping names it (bytecode family or address)
     p = conn.execute(sa.select(db.pools).where(db.pools.c.pool_id == real["attrs"]["address"])).one()
     assert p.token0["symbol"] == "ETH" and p.token1["symbol"] == "USDC" and p.fee == 3000
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == real["attrs"]["address"])).one()
+    assert (st.buys_24h, st.sells_24h, st.buyers_24h, st.sellers_24h, st.traders_24h) == (300, 200, 400, 0, 400)
 
     # one project per hook, then score
     for i, addr in enumerate(["0x" + "b" * 40, "0x" + "d" * 40]):

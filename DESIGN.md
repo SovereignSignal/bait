@@ -181,3 +181,21 @@ Rules
   shown in All with a red badge. First real run found a Base pool doing $160M/day from 5 wallets.
 - **Demo:** `demo/build.py` bakes a snapshot into `demo/template.html` (same tokens and card anatomy as the web app)
   for review as a single page. The Next.js app on Railway remains the product.
+
+## Activity and wallet labels (added 2026-10-08)
+
+Nightly step `activity`, right after `snapshot`: who actually uses each hook.
+
+- **pool_stats** gains `buys_24h`, `sells_24h`, `buyers_24h`, `sellers_24h` (GeckoTerminal `transactions.h24`,
+  keyless path). Existing databases get the columns from `db.add_missing_columns()` on the next run;
+  DDL in `db/migrations/0003_activity.sql`.
+- **pool_top_wallets** `(pool_id, chain_id, day, address)`: for the top `ACTIVITY_POOLS` (30) non-wash pools by 24h
+  volume, GeckoTerminal's last ~300 trades are rolled up per wallet (USD volume, trades, buys, sells, last trade).
+  Top 20 wallets per pool per day; 14 days retained.
+- **wallet_labels** `(address, chain_id)`: Nansen labels (JSON list of strings), `smart_money` flag, `source`, `as_of`.
+  An empty list means "asked, nothing", so the wallet is not re-queried for `NANSEN_RELABEL_DAYS` (14).
+- **Credit cap:** at most `NANSEN_MAX_ADDRESSES` (60) Nansen calls per run, highest-volume wallets first; Unichain and
+  Ink are skipped (no Nansen coverage). The signals step reads the same table first, so a wallet is paid for once per
+  window across both steps. Without `NANSEN_API_KEY` the trades layer still runs (keyless) and labels are skipped.
+- All addresses lowercase. The web app reads these three tables directly (project page "who trades it", smart-money
+  signal); the pipeline never reads them back except for the relabel window.

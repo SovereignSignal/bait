@@ -1,15 +1,16 @@
-"""Step 6: for New ∪ Trending (top N): Exa receipts, GitHub activity, Nansen labels on top-pool LPs/swappers,
+"""Step 7 (signals): for New ∪ Trending (top N): Exa receipts, GitHub activity, Nansen labels on top-pool LPs/swappers,
 then Claude why_blurb when signals changed since blurb_at."""
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 
 from ..clients.nansen import is_smart_money
 from ..config import CHAIN_BY_ID
-from ..db import as_utc, hooks, pool_snapshots, pools, project_daily, projects, receipts, signals, upsert, utcnow
+from ..db import as_utc, hooks, pool_snapshots, pools, project_daily, projects, receipts, signals, upsert, utcnow, wallet_labels
 from ..rules import is_alive
 from . import RunContext, log
 
@@ -38,7 +39,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                     out["github"] += 1
                     changed |= _set_signal(conn, p.id, "github", act, ctx.now)
             if nansen is not None:
-                res = _nansen(conn, p, nansen, graph, out)
+                res = _nansen(conn, ctx, p, nansen, graph, out)
                 if res is not None:
                     changed |= _set_signal(conn, p.id, "nansen", res, ctx.now)
             changed |= _set_signal(conn, p.id, "alive", {"alive": _alive(conn, p.id, ctx.now)}, ctx.now)
@@ -83,7 +84,7 @@ def _set_signal(conn, pid: int, kind: str, value: dict, now: datetime) -> bool:
     return True
 
 
-def _nansen(conn, p, nansen, graph, out) -> dict | None:
+def _nansen(conn, ctx, p, nansen, graph, out) -> dict | None:
     if graph is None:
         return None
     top = conn.execute(
@@ -105,12 +106,30 @@ def _nansen(conn, p, nansen, graph, out) -> dict | None:
         return None
     labeled = []
     for a, cid in list(addrs.items())[:10]:   # credit cap per project
-        labs = nansen.labels(a, cid)
+        labs = _labels_cached(conn, ctx, nansen, a, cid, out)
         if labs:
             labeled.append({"address": a, "chain_id": cid, "labels": labs})
     out["nansen"] += 1
     return {"addresses_checked": min(len(addrs), 10), "labeled": labeled,
             "smart_money": any(is_smart_money(x["labels"]) for x in labeled)}
+
+
+def _labels_cached(conn, ctx, nansen, address: str, chain_id: int, out) -> list[str]:
+    """wallet_labels is the shared cache with the activity step: a fresh row costs no credits; a paid answer is stored."""
+    address = address.lower()
+    try:
+        days = int(os.environ.get("NANSEN_RELABEL_DAYS", "") or 14)
+    except ValueError:
+        days = 14
+    row = conn.execute(sa.select(wallet_labels.c.labels, wallet_labels.c.as_of)
+                       .where(wallet_labels.c.address == address, wallet_labels.c.chain_id == chain_id)).first()
+    if row is not None and as_utc(row.as_of) >= ctx.now - timedelta(days=days):
+        out["nansen_cached"] = out.get("nansen_cached", 0) + 1
+        return list(row.labels or [])
+    labs = list(nansen.labels(address, chain_id) or [])
+    upsert(conn, wallet_labels, [{"address": address, "chain_id": chain_id, "labels": labs, "smart_money": is_smart_money(labs),
+                                  "source": getattr(nansen, "source", "nansen"), "as_of": ctx.now}], keys=["address", "chain_id"])
+    return labs
 
 
 def _alive(conn, pid: int, now: datetime) -> bool:

@@ -375,6 +375,15 @@ def fetch_ohlcv(http: Http, hooked: list[dict], cap: int) -> None:
         p["daily"] = sorted([(int(r[0]), float(r[5] or 0)) for r in lst])
 
 
+def fetch_trades(http: Http, net: str, pool_id: str) -> list[dict] | None:
+    """Recent trades for one pool (GeckoTerminal returns up to 300 from the last 24h), as attribute dicts with
+    tx_from_address, kind (buy|sell), volume_in_usd, block_timestamp, tx_hash. None when the call failed."""
+    res = http.gt(f"/networks/{net}/pools/{pool_id}/trades")
+    if res is None:
+        return None
+    return [t.get("attributes") or {} for t in (res.get("data") or []) if isinstance(t, dict)]
+
+
 def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None = None) -> dict:
     reg = {}
     for h in hooklist:

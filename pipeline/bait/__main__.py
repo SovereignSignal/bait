@@ -12,9 +12,9 @@ from datetime import date, datetime, timezone
 from . import db
 from .config import CHAIN_BY_SLUG
 from .steps import STEP_ORDER, RunContext, log
-from .steps import digest, enrich, group, ingest, score, signals, snapshot
+from .steps import activity, digest, enrich, group, ingest, score, signals, snapshot
 
-STEPS = {"ingest": ingest.run, "snapshot": snapshot.run, "group": group.run, "enrich": enrich.run,
+STEPS = {"ingest": ingest.run, "snapshot": snapshot.run, "activity": activity.run, "group": group.run, "enrich": enrich.run,
          "score": score.run, "signals": signals.run, "digest": digest.run}
 
 
@@ -43,9 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     engine = db.make_engine(args.database_url)
     if args.cmd == "init-db":
         db.create_all(engine)
+        db.add_missing_columns(engine)
         log.info("init-db ok url=%s", engine.url.render_as_string(hide_password=True))
         return 0
     db.create_all(engine)  # idempotent (checkfirst); a fresh Railway Postgres needs no manual migration
+    db.add_missing_columns(engine)  # create_all never alters existing tables; additive columns go here
 
     steps = [s.strip() for s in args.steps.split(",") if s.strip()]
     bad = [s for s in steps if s not in STEPS]

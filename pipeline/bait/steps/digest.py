@@ -1,4 +1,4 @@
-"""Step 7: Monday (or --force-digest) -> digests(week_of=day) row with the week's New + Trending."""
+"""Step 8 (digest): Monday (or --force-digest) -> digests(week_of=day) row with the week's New + Trending."""
 from __future__ import annotations
 
 import sqlalchemy as sa

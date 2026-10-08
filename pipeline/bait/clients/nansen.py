@@ -27,17 +27,42 @@ class Nansen:
 
     def labels(self, address: str, chain_id: int) -> list[str]:
         ch = CHAIN_BY_ID[chain_id]
-        path = "premium-labels" if self.premium else "labels"
-        d = http.post_json(self.c, f"https://api.nansen.ai/api/v1/profiler/address/{path}", headers=self.headers,
-                           json={"address": address, "chain": ch.slug, "pagination": {"page": 1, "per_page": 50}})
-        items = d.get("data") or d.get("labels") or []
-        out = []
-        for it in items:
-            if isinstance(it, str):
-                out.append(it)
-            elif isinstance(it, dict):
-                out.append(str(it.get("label") or it.get("name") or ""))
-        return [x for x in out if x]
+        d = http.post_json(self.c, f"https://api.nansen.ai/api/v1/profiler/address/{self.path}", headers=self.headers,
+                           json={"address": address, "chain": ch.slug, "pagination": {"page": 1, "per_page": 100}})
+        return parse_labels(d)
+
+    @property
+    def path(self) -> str:
+        return "premium-labels" if self.premium else "labels"
+
+    @property
+    def source(self) -> str:
+        return "nansen-" + self.path
+
+
+def parse_labels(d) -> list[str]:
+    """Labels may sit under data or labels (or data.labels); each item is a string or an object with label/name."""
+    items = d
+    if isinstance(d, dict):
+        items = d.get("data")
+        if isinstance(items, dict):
+            items = items.get("labels") or items.get("data") or []
+        if not items:
+            items = d.get("labels") or []
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    for it in items:
+        if isinstance(it, str):
+            v = it
+        elif isinstance(it, dict):
+            v = it.get("label") or it.get("name") or ""
+        else:
+            continue
+        v = str(v).strip()
+        if v and v not in out:
+            out.append(v)
+    return out
 
 
 def is_smart_money(labels: list[str]) -> bool:

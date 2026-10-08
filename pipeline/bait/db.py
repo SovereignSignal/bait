@@ -95,6 +95,35 @@ pool_stats = sa.Table(
     sa.Column("day", sa.Date, primary_key=True),
     sa.Column("vol_24h", sa.Float),
     sa.Column("traders_24h", sa.Integer),
+    sa.Column("buys_24h", sa.Integer),
+    sa.Column("sells_24h", sa.Integer),
+    sa.Column("buyers_24h", sa.Integer),
+    sa.Column("sellers_24h", sa.Integer),
+)
+
+# Who trades each hooked pool: top wallets by volume from the last ~300 trades (step "activity"). Kept 14 days.
+pool_top_wallets = sa.Table(
+    "pool_top_wallets", metadata,
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("chain_id", sa.Integer, primary_key=True),
+    sa.Column("day", sa.Date, primary_key=True),
+    sa.Column("address", sa.Text, primary_key=True),
+    sa.Column("volume_usd", sa.Float),
+    sa.Column("trades", sa.Integer),
+    sa.Column("buys", sa.Integer),
+    sa.Column("sells", sa.Integer),
+    sa.Column("last_trade_at", TS),
+)
+
+# Nansen labels per wallet; an empty list is a real answer ("no labels") and suppresses re-queries until stale.
+wallet_labels = sa.Table(
+    "wallet_labels", metadata,
+    sa.Column("address", sa.Text, primary_key=True),
+    sa.Column("chain_id", sa.Integer, primary_key=True),
+    sa.Column("labels", JSONType),
+    sa.Column("smart_money", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("source", sa.Text),
+    sa.Column("as_of", TS, nullable=False),
 )
 
 project_daily = sa.Table(
@@ -148,6 +177,37 @@ def make_engine(url: str | None = None) -> sa.Engine:
 
 def create_all(engine: sa.Engine) -> None:
     metadata.create_all(engine)
+
+
+# Columns added to tables that already exist in production. create_all never alters an existing table, so each new
+# column is listed here and added by add_missing_columns() right after create_all. (table, column, SQL type).
+ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
+    ("pool_stats", "buys_24h", "integer"),
+    ("pool_stats", "sells_24h", "integer"),
+    ("pool_stats", "buyers_24h", "integer"),
+    ("pool_stats", "sellers_24h", "integer"),
+]
+
+
+def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS) -> list[str]:
+    """Idempotent additive migration. Postgres: ADD COLUMN IF NOT EXISTS. SQLite: PRAGMA table_info, then ALTER only
+    the missing ones. Tables that do not exist are skipped (create_all owns them). Returns "table.column" added
+    (on Postgres: attempted)."""
+    added: list[str] = []
+    with engine.begin() as conn:
+        insp = sa.inspect(conn)
+        for table, column, sqltype in columns:
+            if not insp.has_table(table):
+                continue
+            if conn.dialect.name == "postgresql":
+                conn.execute(sa.text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {sqltype}'))
+                added.append(f"{table}.{column}")
+                continue
+            have = {r[1] for r in conn.execute(sa.text(f'PRAGMA table_info("{table}")'))}
+            if column not in have:
+                conn.execute(sa.text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {sqltype}'))
+                added.append(f"{table}.{column}")
+    return added
 
 
 def upsert(conn: sa.Connection, table: sa.Table, rows: Sequence[dict], keys: Iterable[str],
