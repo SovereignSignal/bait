@@ -48,7 +48,7 @@ CHAINS = {
 # Used for pools never touched by PositionManager (hook-managed liquidity such as Bunni or EulerSwap): the hook is read
 # from the pool's Initialize event, located by GeckoTerminal's pool_created_at -> block estimate -> narrow window.
 LOGS = {
-    "eth":         ("0x000000000004444c5dc75cB358380D2e3dE08A90", "https://eth.drpc.org", 40),
+    "eth":         ("0x000000000004444c5dc75cB358380D2e3dE08A90", "https://eth.drpc.org", 4),
     "base":        ("0x498581ff718922c3f8e6a244956af099b2652b2b", "https://mainnet.base.org", 120),
     "unichain":    ("0x1f98400000000000000000000000000000000004", "https://mainnet.unichain.org", 200),
     "robinhood":   ("0x8366a39cc670b4001a1121b8f6a443a643e40951", "https://rpc.mainnet.chain.robinhood.com", 200),
@@ -60,6 +60,9 @@ LOGS = {
     "optimism":    ("0x9a13f98cb987694c9f086b1f5eb990eea8264ec3", "https://mainnet.optimism.io", 120),
 }
 INITIALIZE = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438"
+# Blockscout instances that answer a full-range topic lookup keylessly from a server (others bot-challenge).
+BLOCKSCOUT_LOGS = {"eth": "https://eth.blockscout.com", "unichain": "https://unichain.blockscout.com",
+                   "ink": "https://explorer.inkonchain.com"}
 
 # Wash heuristic: big volume from a handful of wallets. Excluded from Trending, flagged on the card.
 WASH_MIN_VOL_24H = 250_000
@@ -136,16 +139,21 @@ class Http:
 
     def rpc_batch(self, url: str, calls: list[dict]) -> list[dict]:
         out: list[dict] = []
-        for i in range(0, len(calls), 50):
-            chunk = calls[i:i + 50]
-            for attempt in range(3):
+        for i in range(0, len(calls), 10):  # some public RPCs (Unichain) reject batches over 10
+            chunk = calls[i:i + 10]
+            for attempt in range(2):
                 try:
                     res = self._open(url, json.dumps(chunk).encode())
                     out.extend(res if isinstance(res, list) else [res])
                     break
+                except urllib.error.HTTPError as e:
+                    log(f"RPC {url} HTTP {e.code}")
+                    if e.code in (400, 403, 413):
+                        break  # request-shape or plan limit: retrying will not help
+                    time.sleep(2)
                 except Exception as e:
                     log(f"RPC {url} error {e!r}")
-                    time.sleep(3 * (attempt + 1))
+                    time.sleep(2)
         return out
 
 
@@ -279,19 +287,30 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
             pending[key[0]].append(key)
     for net, keys in pending.items():
         pm, url, win = LOGS[net]
+        bs = BLOCKSCOUT_LOGS.get(net)
         model: dict = {}
         found = 0
         for key in keys:
-            ts = int(datetime.fromisoformat(pools[key]["attrs"]["pool_created_at"].replace("Z", "+00:00")).timestamp())
-            blk = _block_at(http, url, ts, model)
-            if blk is None:
-                continue
             logs = None
-            for w in (win, win * 3):
-                logs = _rpc1(http, url, "eth_getLogs", [{"address": pm, "topics": [INITIALIZE, key[1]],
-                                                          "fromBlock": hex(max(0, blk - w)), "toBlock": hex(blk + w)}])
-                if logs:
-                    break
+            if bs:
+                try:
+                    q = (f"{bs}/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address={pm}"
+                         f"&topic0={INITIALIZE}&topic1={key[1]}&topic0_1_opr=and")
+                    res = http._open(q)
+                    logs = res.get("result") if isinstance(res, dict) and isinstance(res.get("result"), list) else None
+                    time.sleep(0.3)
+                except Exception as e:
+                    log(f"Blockscout {bs} error {e!r}")
+            if not logs:
+                ts = int(datetime.fromisoformat(pools[key]["attrs"]["pool_created_at"].replace("Z", "+00:00")).timestamp())
+                blk = _block_at(http, url, ts, model)
+                if blk is None:
+                    continue
+                for w in (win, win * 3):
+                    logs = _rpc1(http, url, "eth_getLogs", [{"address": pm, "topics": [INITIALIZE, key[1]],
+                                                              "fromBlock": hex(max(0, blk - w)), "toBlock": hex(blk + w)}])
+                    if logs:
+                        break
             if not logs:
                 continue
             lg = logs[0]
