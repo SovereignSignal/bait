@@ -2,8 +2,8 @@ from datetime import timedelta
 
 import sqlalchemy as sa
 
-from hookfeed import db
-from hookfeed.steps import digest, signals
+from bait import db
+from bait.steps import digest, signals
 from tests.conftest import DAY, NOW, insert_hook, insert_project
 
 

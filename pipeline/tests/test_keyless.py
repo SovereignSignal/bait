@@ -1,4 +1,4 @@
-from hookfeed.keyless import categorize, decode_pool_key
+from bait.keyless import categorize, decode_pool_key
 
 
 def _word(hex_no_prefix: str) -> str:

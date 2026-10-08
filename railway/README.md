@@ -1,8 +1,8 @@
-# Deploying Bait (repo: hookfeed) on Railway
+# Deploying Bait on Railway
 
 ## Quick path from the GitHub repo
 
-1. New project, then **Deploy from GitHub repo** and pick `hookfeed`. Railway creates one service; rename it `web`.
+1. New project, then **Deploy from GitHub repo** and pick `bait`. Railway creates one service; rename it `web`.
 2. **+ New, Database, PostgreSQL.** Keep the service name `Postgres`.
 3. **+ New, GitHub repo** again for the same repo; rename it `pipeline`.
 4. For each code service: **Settings, Source, Root Directory** = `/web` or `/pipeline`, and **Settings, Config-as-code,
@@ -29,7 +29,7 @@ One Railway project, one environment (`production`), three services:
 | Service | What | Source | Config |
 |---|---|---|---|
 | `Postgres` | Railway Postgres database. Exposes `DATABASE_URL` (private network) and, if you enable Public Access, `DATABASE_PUBLIC_URL`. | Railway database template | none |
-| `pipeline` | Nightly cron job. Root directory `/pipeline`, Dockerfile build, `cronSchedule` `0 6 * * *` (06:00 UTC). Runs `python -m hookfeed run` (the Dockerfile `CMD`) and exits. | this repo | `pipeline/railway.json` |
+| `pipeline` | Nightly cron job. Root directory `/pipeline`, Dockerfile build, `cronSchedule` `0 6 * * *` (06:00 UTC). Runs `python -m bait run` (the Dockerfile `CMD`) and exits. | this repo | `pipeline/railway.json` |
 | `web` | Next.js site. Root directory `/web`, Dockerfile build, public domain, healthcheck on `/`, restart on failure. | this repo | `web/railway.json` |
 
 Service names matter: `${{Postgres.DATABASE_URL}}` below assumes the database service is literally named `Postgres` (Railway's default for the template). If you rename it, change the reference.
@@ -44,7 +44,7 @@ Service names matter: `${{Postgres.DATABASE_URL}}` below assumes the database se
 - web: `deploy.healthcheckPath: "/"`, `deploy.healthcheckTimeout: 120`, `deploy.restartPolicyType: "ON_FAILURE"`, `deploy.restartPolicyMaxRetries: 5`, `deploy.numReplicas: 1`, `deploy.overlapSeconds`
 
 Neither file sets `startCommand`; the Dockerfile `CMD` is the start command
-(`python -m hookfeed run` and `node server.js`). Config-as-code values override the same
+(`python -m bait run` and `node server.js`). Config-as-code values override the same
 settings in the dashboard, so change them in the file, not in the UI.
 
 Important: Railway does not look for the config file inside the service's Root Directory.
@@ -61,7 +61,7 @@ from the repo root:
 
 ```sh
 railway login
-railway init                       # new project, name it hookfeed
+railway init                       # new project, name it bait
 railway add --database postgres    # service "Postgres"; injects DATABASE_URL, PG* vars on itself
 
 railway add --service pipeline
@@ -70,7 +70,7 @@ railway add --service web
 
 Connect both code services to the GitHub repo and set their root directories. The repo
 connection is a dashboard step (service > Settings > Source > Connect Repo), or create the
-service from the repo directly with `railway add --repo <owner>/hookfeed` and rename it.
+service from the repo directly with `railway add --repo <owner>/bait` and rename it.
 The root directory, cron schedule and healthcheck can be set from the CLI with
 `railway environment edit --service-config <service> <dot.path> <value>`:
 
@@ -86,7 +86,7 @@ Then in the dashboard, for each code service: Settings > Config-as-code > Railwa
 = `/pipeline/railway.json` resp. `/web/railway.json`.
 
 Equivalent clicks for everything above: `+ New` (or cmd/ctrl+K) > Database > PostgreSQL;
-`+ New` > GitHub Repo > hookfeed, twice; each service > Settings > Source > Root Directory;
+`+ New` > GitHub Repo > bait, twice; each service > Settings > Source > Root Directory;
 pipeline > Settings > Cron Schedule `0 6 * * *`; web > Settings > Networking > Generate Domain;
 web > Settings > Healthcheck Path `/`.
 

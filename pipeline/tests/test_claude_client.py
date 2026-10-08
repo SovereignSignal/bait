@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from hookfeed.clients.claude import Claude
-from hookfeed.config import CLAUDE_BLURB_MODEL, CLAUDE_CLASSIFY_MODEL
+from bait.clients.claude import Claude
+from bait.config import CLAUDE_BLURB_MODEL, CLAUDE_CLASSIFY_MODEL
 
 
 class FakeMessages:

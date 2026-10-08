@@ -1,4 +1,4 @@
--- hookfeed schema v1. Mirrors pipeline/hookfeed/db.py (SQLAlchemy Core metadata); keep both in sync.
+-- bait schema v1. Mirrors pipeline/bait/db.py (SQLAlchemy Core metadata); keep both in sync.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS projects (

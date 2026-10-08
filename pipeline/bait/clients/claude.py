@@ -42,7 +42,7 @@ WHY_SCHEMA = {
 }
 
 SYSTEM = (
-    "You write for hookfeed, a feed of Uniswap v4 hooks. Be concrete and plain. No hype, no emojis, "
+    "You write for Bait, a feed of Uniswap v4 hooks. Be concrete and plain. No hype, no emojis, "
     "no marketing adjectives. Only state facts present in the input. Never claim an audit or security "
     "property that is not in the input."
 )

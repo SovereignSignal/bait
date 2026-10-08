@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the pipeline locally against the bundled hooklist fixture.
-# Loads ./.env (if present), then: python -m hookfeed run --hooklist-file fixtures/hooklist.sample.json [extra args]
-# With DATABASE_URL unset the pipeline uses sqlite:///./hookfeed.sqlite inside pipeline/ and creates tables itself.
+# Loads ./.env (if present), then: python -m bait run --hooklist-file fixtures/hooklist.sample.json [extra args]
+# With DATABASE_URL unset the pipeline uses sqlite:///./bait.sqlite inside pipeline/ and creates tables itself.
 # Examples:
 #   scripts/run-pipeline-local.sh                                   # all steps, today UTC
 #   scripts/run-pipeline-local.sh --steps ingest,snapshot --day 2026-10-06
@@ -21,4 +21,4 @@ if [ ! -x "$PY" ]; then
 fi
 
 cd pipeline
-exec "../$PY" -m hookfeed run --hooklist-file fixtures/hooklist.sample.json "$@"
+exec "../$PY" -m bait run --hooklist-file fixtures/hooklist.sample.json "$@"

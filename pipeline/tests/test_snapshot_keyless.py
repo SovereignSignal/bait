@@ -2,8 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from hookfeed import db, keyless as K
-from hookfeed.steps import score, snapshot
+from bait import db, keyless as K
+from bait.steps import score, snapshot
 
 
 def _pool(addr, hook, vol24, buyers, created, daily):

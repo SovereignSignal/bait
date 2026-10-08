@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 import sqlalchemy as sa
 
-from hookfeed import db
-from hookfeed.steps import RunContext
+from bait import db
+from bait.steps import RunContext
 
 FIXTURE = str(Path(__file__).resolve().parents[1] / "fixtures" / "hooklist.sample.json")
 DAY = date(2026, 10, 6)                      # a Tuesday

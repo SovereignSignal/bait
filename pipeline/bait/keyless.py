@@ -8,7 +8,7 @@ hooklist registry and grouped with the same rules as the nightly pipeline.
 Covers Robinhood chain and Ink, which have no public v4 subgraph.
 
 Usage:
-    python -m hookfeed.keyless --out snapshot.json [--pages 10] [--ohlcv-cap 160]
+    python -m bait.keyless --out snapshot.json [--pages 10] [--ohlcv-cap 160]
 """
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ class Http:
 
     def _open(self, url: str, data: bytes | None = None) -> object:
         req = urllib.request.Request(url, data=data, headers={
-            "Accept": "application/json", "User-Agent": "bait-hookfeed/0.1", "Content-Type": "application/json"})
+            "Accept": "application/json", "User-Agent": "bait/0.1", "Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=40) as r:
             return json.load(r)
 

@@ -1,6 +1,6 @@
 # Hook feed — design v1
 
-Working name: hookfeed. Personal project (Sov). Hosted on Railway. Not part of UF ops.
+Working name: bait. Personal project (Sov). Hosted on Railway. Not part of UF ops.
 
 ## What it is
 
@@ -107,7 +107,7 @@ Mobile-first. OG image route per project. RSS at /feed.xml. No client-side data 
 ## Repo layout
 
 ```
-hookfeed/
+bait/
   pipeline/   python, uv, railway cron service
   web/        next.js service
   db/         sql migrations
@@ -170,8 +170,8 @@ Rules
 
 ## Update 2026-10-08: name, keyless source, wash rule
 
-- Product name is **Bait**. Repo and package names stay `hookfeed`.
-- **Keyless source** (`pipeline/hookfeed/keyless.py`): GeckoTerminal v4 pools per chain (top by 24h volume, top by
+- Product name is **Bait**, and so are the repo (`SovereignSignal/bait`) and packages (renamed from bait 2026-10-08).
+- **Keyless source** (`pipeline/bait/keyless.py`): GeckoTerminal v4 pools per chain (top by 24h volume, top by
   24h swaps, newest) give poolId, volume, reserve, unique wallets and creation time. The hook is resolved on-chain
   with `PositionManager.poolKeys(bytes25)` over public RPCs (addresses from developers.uniswap.org v4 deployments).
   Covers Robinhood chain and Ink, which have no public v4 subgraph, so it is also the planned fallback for those two.

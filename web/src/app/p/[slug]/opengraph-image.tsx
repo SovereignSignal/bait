@@ -38,7 +38,7 @@ async function loadInter(): Promise<ArrayBuffer | null> {
     interCache = (async () => {
       try {
         const css = await fetch("https://fonts.googleapis.com/css2?family=Inter:wght@600&display=swap", {
-          headers: { "User-Agent": "hookfeed-og/1.0 (+satori)" },
+          headers: { "User-Agent": "bait-og/1.0 (+satori)" },
         }).then((r) => r.text());
         const m = css.match(/src: url\(([^)]+\.ttf)\) format\('truetype'\)/);
         if (!m) return null;

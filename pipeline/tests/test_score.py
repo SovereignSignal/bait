@@ -4,8 +4,8 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 import sqlalchemy as sa
 
-from hookfeed import db
-from hookfeed.steps import score
+from bait import db
+from bait.steps import score
 from tests.conftest import DAY, NOW, insert_hook, insert_pool, insert_project, insert_snap
 
 
