@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Footer } from "@/components/Footer";
-import { Nav } from "@/components/Nav";
 import { getDigest, listDigests } from "@/db/queries";
 import { longDate, usd } from "@/lib/format";
 import s from "../week.module.css";
@@ -35,7 +34,6 @@ export default async function WeekPage({ params }: { params: Promise<{ date: str
 
   return (
     <>
-      <Nav />
       <main className="col">
         <div className="lead">
           <h1>{d.title}</h1>

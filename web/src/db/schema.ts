@@ -1,4 +1,4 @@
-// Mirrors db/migrations/0001_init.sql (and pipeline/bait/db.py). Column
+// Mirrors db/migrations/0001_init.sql + 0002_pool_stats.sql (and pipeline/bait/db.py). Column
 // names are snake_case in Postgres, camelCase here. Keep the three in sync.
 import { pgTable, serial, text, integer, bigint, boolean, jsonb, timestamp, date, doublePrecision, primaryKey, index } from "drizzle-orm/pg-core";
 
@@ -96,6 +96,54 @@ export const projectDaily = pgTable(
     isSpam: boolean("is_spam").notNull().default(false),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.day] }), index("project_daily_day_score_idx").on(t.day, t.scoreTrending)],
+);
+
+/** Per-pool 24h activity (GeckoTerminal). buys/sells/buyers/sellers can be null on rows written before they existed. */
+export const poolStats = pgTable(
+  "pool_stats",
+  {
+    poolId: text("pool_id").notNull(),
+    chainId: integer("chain_id").notNull(),
+    day: date("day").notNull(),
+    vol24h: doublePrecision("vol_24h"),
+    traders24h: integer("traders_24h"),
+    buys24h: integer("buys_24h"),
+    sells24h: integer("sells_24h"),
+    buyers24h: integer("buyers_24h"),
+    sellers24h: integer("sellers_24h"),
+  },
+  (t) => [primaryKey({ columns: [t.poolId, t.chainId, t.day] })],
+);
+
+/** Top wallets per pool per day by volume (pipeline step "activity"). Addresses lowercase. */
+export const poolTopWallets = pgTable(
+  "pool_top_wallets",
+  {
+    poolId: text("pool_id").notNull(),
+    chainId: integer("chain_id").notNull(),
+    day: date("day").notNull(),
+    address: text("address").notNull(),
+    volumeUsd: doublePrecision("volume_usd"),
+    trades: integer("trades"),
+    buys: integer("buys"),
+    sells: integer("sells"),
+    lastTradeAt: timestamp("last_trade_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.poolId, t.chainId, t.day, t.address] })],
+);
+
+/** Nansen labels per wallet. An empty list is a real answer ("no labels"). */
+export const walletLabels = pgTable(
+  "wallet_labels",
+  {
+    address: text("address").notNull(),
+    chainId: integer("chain_id").notNull(),
+    labels: jsonb("labels").$type<string[]>(),
+    smartMoney: boolean("smart_money"),
+    source: text("source"),
+    asOf: timestamp("as_of", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.address, t.chainId] })],
 );
 
 /**
