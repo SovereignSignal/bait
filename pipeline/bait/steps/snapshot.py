@@ -45,7 +45,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     from .. import keyless as K
     nets = [net for net, (cid, *_rest) in K.CHAINS.items() if cid in chain_ids]
     log.info("snapshot keyless chains=%s", ",".join(K.CHAINS[n][1] for n in nets))
-    http = K.Http(gt_spacing=float(os.environ.get("KEYLESS_SPACING", "10")), cache_dir=os.environ.get("KEYLESS_CACHE_DIR") or None)
+    http = keyless_http(ctx)
     found = K.collect(http, int(os.environ.get("KEYLESS_PAGES", "4")), int(os.environ.get("KEYLESS_NEW_PAGES", "2")), nets=nets)
     K.resolve_hooks(http, found)
     K.resolve_via_logs(http, found)
@@ -55,6 +55,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     known = {(r.address, r.chain_id) for r in conn.execute(sa.select(hooks.c.address, hooks.c.chain_id))}
     new_hooks, pool_rows, snap_rows = {}, [], []
     stats = ctx.extras.setdefault("keyless_pool_stats", {})
+    tx_counts: dict[tuple[str, int], dict] = {}
     for p in hooked:
         a, k = p["attrs"], p["key"]
         cid = K.CHAINS[p["net"]][0]
@@ -73,7 +74,8 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
         txs24 = int(tx.get("buys", 0)) + int(tx.get("sells", 0))
         vol24 = float(a["volume_usd"]["h24"] or 0)
         stats[(pid, cid)] = (vol24, int(tx.get("buyers", 0)) + int(tx.get("sellers", 0)))
-        # Daily candles become a cumulative-volume series so step 5 computes 7d/prev-7d exactly as it does for subgraphs.
+        tx_counts[(pid, cid)] = {f"{k}_24h": _int(tx.get(k)) for k in ("buys", "sells", "buyers", "sellers")}
+        # Daily candles become a cumulative-volume series so the score step computes 7d/prev-7d exactly as it does for subgraphs.
         series = [(datetime.fromtimestamp(t, tz=timezone.utc).date(), v) for t, v in (p.get("daily") or [])]
         if not series:
             series = [(ctx.day - timedelta(days=1), 0.0), (ctx.day, vol24)]
@@ -103,7 +105,9 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
         upsert(conn, pools, pool_rows[i:i + 500], keys=["pool_id", "chain_id"])
     for i in range(0, len(snap_rows), 500):
         upsert(conn, pool_snapshots, snap_rows[i:i + 500], keys=["pool_id", "chain_id", "day"])
-    stat_rows = [{"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": n}
+    blank = {"buys_24h": None, "sells_24h": None, "buyers_24h": None, "sellers_24h": None}
+    stat_rows = [{"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": n,
+                  **tx_counts.get((pid, cid), blank)}
                  for (pid, cid), (v, n) in stats.items()]
     for i in range(0, len(stat_rows), 500):
         upsert(conn, pool_stats, stat_rows[i:i + 500], keys=["pool_id", "chain_id", "day"])
@@ -111,6 +115,18 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     out["keyless_pools"] = len(pool_rows)
     out["pools"] += len(pool_rows)
     log.info("snapshot keyless hooked_pools=%d unlisted_hooks=%d gt_calls=%d", len(pool_rows), len(new_hooks), http.gt_calls)
+
+
+def keyless_http(ctx: RunContext):
+    """One GeckoTerminal client per run (shared by snapshot and activity) so call spacing stays in one place.
+    Tests inject a fake via ctx.extras["keyless_http"]."""
+    from .. import keyless as K
+    http = ctx.extras.get("keyless_http")
+    if http is None:
+        http = K.Http(gt_spacing=float(os.environ.get("KEYLESS_SPACING", "10")),
+                      cache_dir=os.environ.get("KEYLESS_CACHE_DIR") or None)
+        ctx.extras["keyless_http"] = http
+    return http
 
 
 def _symbols(name: str) -> tuple[str | None, str | None]:

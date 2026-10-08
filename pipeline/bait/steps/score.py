@@ -1,4 +1,4 @@
-"""Step 5: project_daily rollup from pool_snapshots for ctx.day.
+"""Step 6 (score): project_daily rollup from pool_snapshots for ctx.day.
 
 Window math per pool: value(day) - baseline(day-7). baseline = latest snapshot on/before day-7; if none and
 the pool was created after day-7 -> 0; if none and the pool predates the window (cold start) -> the earliest

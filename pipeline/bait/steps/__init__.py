@@ -9,7 +9,7 @@ from ..db import utcnow
 
 log = logging.getLogger("bait")
 
-STEP_ORDER = ["ingest", "snapshot", "group", "enrich", "score", "signals", "digest"]
+STEP_ORDER = ["ingest", "snapshot", "activity", "group", "enrich", "score", "signals", "digest"]
 
 
 @dataclass
@@ -18,8 +18,8 @@ class RunContext:
     chains: list[int] | None = None          # chain ids; None = all
     hooklist_file: str | None = None
     force_digest: bool = False
-    max_code_fetch: int = 300                # Blockscout code lookups per run (step 3)
-    signals_limit: int = 50                  # New ∪ Trending projects per night (step 6)
+    max_code_fetch: int = 300                # Blockscout code lookups per run (group)
+    signals_limit: int = 50                  # New ∪ Trending projects per night (signals)
     now: datetime = field(default_factory=utcnow)
     clients: dict = field(default_factory=dict)   # name -> client instance or None (injected in tests)
     extras: dict = field(default_factory=dict)    # step-to-step hand-offs within one run (e.g. keyless pool stats)
