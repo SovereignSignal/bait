@@ -248,8 +248,18 @@ def resolve_hooks(http: Http, pools: dict) -> None:
 
 
 def _rpc1(http: Http, url: str, method: str, params: list):
-    res = http.rpc_batch(url, [{"jsonrpc": "2.0", "id": 1, "method": method, "params": params}])
-    return res[0].get("result") if res and "result" in res[0] else None
+    """One call, paced; backs off when a public endpoint says its request limit is reached."""
+    for attempt in range(4):
+        time.sleep(0.25)
+        res = http.rpc_batch(url, [{"jsonrpc": "2.0", "id": 1, "method": method, "params": params}])
+        if res and "result" in res[0]:
+            return res[0]["result"]
+        err = (res[0].get("error") or {}) if res else {}
+        if "limit" in str(err.get("message", "")).lower() and "range" not in str(err.get("message", "")).lower():
+            time.sleep(8 * (attempt + 1))
+            continue
+        return None
+    return None
 
 
 def _block_at(http: Http, url: str, ts: int, model: dict) -> int | None:
@@ -293,14 +303,23 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
         for key in keys:
             logs = None
             if bs:
-                try:
-                    q = (f"{bs}/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address={pm}"
-                         f"&topic0={INITIALIZE}&topic1={key[1]}&topic0_1_opr=and")
-                    res = http._open(q)
-                    logs = res.get("result") if isinstance(res, dict) and isinstance(res.get("result"), list) else None
-                    time.sleep(0.3)
-                except Exception as e:
-                    log(f"Blockscout {bs} error {e!r}")
+                q = (f"{bs}/api?module=logs&action=getLogs&fromBlock=0&toBlock=latest&address={pm}"
+                     f"&topic0={INITIALIZE}&topic1={key[1]}&topic0_1_opr=and")
+                for attempt in range(4):
+                    time.sleep(1.0)  # Blockscout free API throttles bursts
+                    try:
+                        res = http._open(q)
+                        logs = res.get("result") if isinstance(res, dict) and isinstance(res.get("result"), list) else None
+                        break
+                    except urllib.error.HTTPError as e:
+                        if e.code == 429:
+                            time.sleep(10 * (attempt + 1))
+                            continue
+                        log(f"Blockscout {bs} HTTP {e.code}")
+                        break
+                    except Exception as e:
+                        log(f"Blockscout {bs} error {e!r}")
+                        break
             if not logs:
                 ts = int(datetime.fromisoformat(pools[key]["attrs"]["pool_created_at"].replace("Z", "+00:00")).timestamp())
                 blk = _block_at(http, url, ts, model)
