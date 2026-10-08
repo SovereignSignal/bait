@@ -448,7 +448,8 @@ def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None =
         has_series = any(x["vol7d"] is not None for x in pools_)
         tvl = sum(x["tvl"] for x in pools_)
         traders = sum(x["traders24h"] for x in pools_)
-        wash = is_wash(vol24, traders)
+        washed = sum(x["vol24h"] for x in pools_ if is_wash(x["vol24h"], x["traders24h"]))
+        wash = vol24 > 0 and washed / vol24 >= 0.5
         created = [datetime.fromisoformat(x["createdAt"].replace("Z", "+00:00")) for x in pools_ if x.get("createdAt")]
         first_seen = min(created) if created else None
         young = bool(first_seen and first_seen >= now - timedelta(days=7))

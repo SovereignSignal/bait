@@ -7,7 +7,7 @@ import { getDb, type Db } from "./client";
 import * as t from "./schema";
 import { SAMPLE_CONTEXT, SAMPLE_DIGESTS, SAMPLE_PROJECTS } from "@/fixtures/sample";
 import { flagLabels, projectRoutable } from "@/lib/routable";
-import { nansenCovers } from "@/lib/chains";
+import { CHAINS, nansenCovers } from "@/lib/chains";
 import { longDate, usd } from "@/lib/format";
 import type {
   Category,
@@ -281,7 +281,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
   for (const p of projectRows) {
     const d = dailyBy.get(p.id);
     const hs = (hooksBy.get(p.id) ?? []).map(toHook);
-    const chains = [...new Set(hs.map((h) => h.chainId))];
+    // Registry hooks span ~22 chains; the feed covers the ten in CHAINS. Unknown ids would crash chain pills.
+    const chains = [...new Set(hs.map((h) => h.chainId))].filter((c) => c in CHAINS);
     const nansen = sigBy.get(`${p.id}:nansen`) as NansenValue | undefined;
     const gh = sigBy.get(`${p.id}:github`) as GithubValue | undefined;
     const exa = sigBy.get(`${p.id}:exa`) as ExaValue | undefined;

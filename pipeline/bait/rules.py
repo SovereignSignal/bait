@@ -57,8 +57,8 @@ def slugify(name: str) -> str:
 
 def score_trending(vol_7d: float, vol_7d_prev: float) -> float:
     """DESIGN.md: Trending needs vol_7d >= $10k; score = log1p(vol_7d) * clamp(vol_7d / max(prev, 1000), 0.5, 10)."""
-    if vol_7d < 10_000:
-        return 0.0
+    if vol_7d < 10_000 or vol_7d_prev < 1_000:
+        return 0.0  # growth needs a real prior week; a zero baseline would max out the ratio
     ratio = vol_7d / max(vol_7d_prev, 1000.0)
     return math.log1p(vol_7d) * min(max(ratio, 0.5), 10.0)
 

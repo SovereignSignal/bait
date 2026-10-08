@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 
 from ..config import CHAINS
-from ..db import hooks, pool_snapshots, pools, upsert
+from ..db import hooks, pool_snapshots, pool_stats, pools, upsert
 from . import RunContext, log
 
 
@@ -103,6 +103,10 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
         upsert(conn, pools, pool_rows[i:i + 500], keys=["pool_id", "chain_id"])
     for i in range(0, len(snap_rows), 500):
         upsert(conn, pool_snapshots, snap_rows[i:i + 500], keys=["pool_id", "chain_id", "day"])
+    stat_rows = [{"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": n}
+                 for (pid, cid), (v, n) in stats.items()]
+    for i in range(0, len(stat_rows), 500):
+        upsert(conn, pool_stats, stat_rows[i:i + 500], keys=["pool_id", "chain_id", "day"])
     out["keyless_chains"] = len(nets)
     out["keyless_pools"] = len(pool_rows)
     out["pools"] += len(pool_rows)

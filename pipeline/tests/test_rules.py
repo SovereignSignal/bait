@@ -62,8 +62,9 @@ def test_score_trending_hand_computed():
 
 def test_score_trending_clamps_and_floor():
     assert score_trending(9_999, 0) == 0.0                                         # below $10k: not trending
-    assert score_trending(10_000, 0) == pytest.approx(math.log1p(10_000) * 10.0)   # prev floored at 1000 -> ratio 10
-    assert score_trending(1_000_000, 10) == pytest.approx(math.log1p(1_000_000) * 10.0)   # clamp high
+    assert score_trending(10_000, 0) == 0.0                                         # no prior week: growth undefined
+    assert score_trending(1_000_000, 10) == 0.0                                     # prior week under $1k: same
+    assert score_trending(1_000_000, 1_000) == pytest.approx(math.log1p(1_000_000) * 10.0)   # clamp high
     assert score_trending(20_000, 1_000_000) == pytest.approx(math.log1p(20_000) * 0.5)   # clamp low
 
 

@@ -56,7 +56,7 @@ def test_score_cold_start_uses_earliest_snapshot_not_all_time(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, p)
     assert d.vol_7d == 20_000 and d.vol_7d_prev == 0 and d.swaps_7d == 100
-    assert d.score_trending == pytest.approx(math.log1p(20_000) * 10.0)
+    assert d.score_trending == 0.0     # only two nights of history: no prior week to grow from
 
 
 def test_score_spam_and_no_pools(conn, ctx):
@@ -85,3 +85,19 @@ def test_young_launch_is_new_not_trending(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, p)
     assert d.is_new is True and d.score_trending == 0.0 and d.vol_7d == 500_000
+
+
+
+def test_wash_rule_reads_persisted_pool_stats(conn, ctx):
+    """A run without the snapshot step still excludes wash projects, from pool_stats."""
+    from bait.db import pool_stats
+    p = insert_project(conn, "Washy", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xw", 8453, project_id=p, name="Washy")
+    insert_pool(conn, "0xwp", 8453, "0xw", created=NOW - timedelta(days=60))
+    insert_snap(conn, "0xwp", 8453, DAY - timedelta(days=14), 0, 0, 0)
+    insert_snap(conn, "0xwp", 8453, DAY - timedelta(days=7), 0, 1_000_000, 0)
+    insert_snap(conn, "0xwp", 8453, DAY, 0, 9_000_000, 0)
+    conn.execute(sa.insert(pool_stats).values(pool_id="0xwp", chain_id=8453, day=DAY, vol_24h=5_000_000, traders_24h=6))
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_spam and d.score_trending == 0.0 and out["wash"] == 1
