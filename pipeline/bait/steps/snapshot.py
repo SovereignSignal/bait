@@ -60,7 +60,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
         cid = K.CHAINS[p["net"]][0]
         pid, hook = a["address"].lower(), k["hooks"].lower()
         if (hook, cid) not in known and (hook, cid) not in new_hooks:
-            new_hooks[(hook, cid)] = {"address": hook, "chain_id": cid, "name": f"Unlisted hook {hook[:6]}…{hook[-4:]}",
+            new_hooks[(hook, cid)] = {"address": hook, "chain_id": cid, "name": None, "net": p["net"],
                                       "description": "", "flags": {}, "properties": {}, "verified_source": None,
                                       "audit_url": None, "deployer": None, "first_seen_at": ctx.now}
         sym0, sym1 = _symbols(a.get("name", ""))
@@ -90,7 +90,15 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
             snap_rows.append({"pool_id": pid, "chain_id": cid, "day": d, "tvl_usd": tvl, "volume_usd_cum": c,
                               "tx_count_cum": txs24 if d == ctx.day else 0})
     if new_hooks:
-        upsert(conn, hooks, list(new_hooks.values()), keys=["address", "chain_id"], update=[])
+        by_net: dict[str, set[str]] = {}
+        for h in new_hooks.values():
+            by_net.setdefault(h["net"], set()).add(h["address"])
+        codes = K.code_hashes(http, by_net)
+        rows = []
+        for h in new_hooks.values():
+            net = h.pop("net")
+            rows.append({**h, "code_hash": codes.get((net, h["address"]))})
+        upsert(conn, hooks, rows, keys=["address", "chain_id"], update=[])
     for i in range(0, len(pool_rows), 500):
         upsert(conn, pools, pool_rows[i:i + 500], keys=["pool_id", "chain_id"])
     for i in range(0, len(snap_rows), 500):

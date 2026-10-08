@@ -79,3 +79,18 @@ def test_group_long_tail_with_claude(conn, ctx):
     pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
     assert pid["0xdd"] == pid["0xaa"] == rows["Saturn"].id and pid["0xee"] == rows["Fresh Thing"].id
     assert "Saturn" in ctx.clients["claude"].calls[0][2]
+
+
+def test_unlisted_bytecode_family_becomes_one_project(conn, ctx):
+    from tests.conftest import insert_hook
+    ctx.clients.update(claude=None, blockscout=None)
+    for i in range(3):
+        insert_hook(conn, f"0xfam{i}", 4663, name=None, code_hash="same")
+    insert_hook(conn, "0xlone", 4663, name=None, code_hash="other")
+    group.run(conn, ctx)
+    rows = conn.execute(sa.select(db.hooks.c.address, db.hooks.c.project_id)).all()
+    fam = {r.project_id for r in rows if r.address.startswith("0xfam")}
+    lone = next(r.project_id for r in rows if r.address == "0xlone")
+    assert len(fam) == 1 and lone not in fam
+    name = conn.execute(sa.select(db.projects.c.name).where(db.projects.c.id == fam.pop())).scalar_one()
+    assert name.startswith("Unlisted hook family")

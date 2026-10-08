@@ -45,6 +45,21 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 out["by_code"] += 1
             else:
                 still.append(h)
+        # Unassigned hooks that share bytecode with each other (one launchpad, many clones) become one project.
+        fam: dict[str, list] = {}
+        for h in still:
+            if h.code_hash:
+                fam.setdefault(h.code_hash, []).append(h)
+        still = [h for h in still if not h.code_hash or len(fam[h.code_hash]) == 1]
+        for members in fam.values():
+            if len(members) < 2:
+                continue
+            first = sorted(m.address for m in members)[0]
+            pid = _create_project(conn, ctx, f"Unlisted hook family {first[:6]}…", None, None)
+            for m in members:
+                _assign(conn, m, pid)
+            out["created"] += 1
+            out["by_code"] += len(members)
         unassigned = still
 
     # Rule 3: Claude classification for the long tail (nameless hooks or names that matched nothing).
@@ -53,7 +68,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if claude is None:
             # No key: every unnamed hook becomes its own project keyed by address so the feed still renders.
             for h in unassigned:
-                pid = _create_project(conn, ctx, h.name or f"hook {h.address[:10]}", None, h.description, category=None)
+                pid = _create_project(conn, ctx, h.name or f"Unlisted hook {h.address[:6]}…{h.address[-4:]}", None, h.description, category=None)
                 _assign(conn, h, pid)
                 out["created"] += 1
             unassigned = []
