@@ -6,6 +6,7 @@
 // Every read goes through safe(): a missing table or a bad query renders empty, never 500.
 // The activity tables (pool_stats, pool_top_wallets, wallet_labels) are newer than the rest
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
+import { resolveSymbols } from "@/lib/symbols";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
@@ -524,7 +525,7 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
     ),
   ]);
   const statBy = new Map(rowsOf<PoolStatRow>(stats).map((r) => [`${r.chain_id}:${r.pool_id}`, r]));
-  return rowsOf<PoolRow>(rows)
+  const out = rowsOf<PoolRow>(rows)
     .filter((r) => knownChain(Number(r.chain_id)))
     .map((r) => {
       const st = statBy.get(`${r.chain_id}:${r.pool_id}`);
@@ -547,6 +548,18 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         wallets24h: st ? num(st.traders_24h) : null,
       };
     });
+  // Pools found only by the indexer have no symbols: fill them (cached; never blocks the page on failure).
+  const sym = await resolveSymbols(
+    out.flatMap((p) => [
+      ...(p.token0Symbol || !p.token0 ? [] : [{ chainId: p.chainId, address: p.token0 }]),
+      ...(p.token1Symbol || !p.token1 ? [] : [{ chainId: p.chainId, address: p.token1 }]),
+    ]),
+  );
+  return out.map((p) => ({
+    ...p,
+    token0Symbol: p.token0Symbol ?? (p.token0 ? sym({ chainId: p.chainId, address: p.token0 }) : null),
+    token1Symbol: p.token1Symbol ?? (p.token1 ? sym({ chainId: p.chainId, address: p.token1 }) : null),
+  }));
 }
 
 /** Daily volume for the last 14 days from cumulative snapshots; zero-filled, oldest first. */
