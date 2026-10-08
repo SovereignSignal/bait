@@ -6,6 +6,7 @@
 // Every read goes through safe(): a missing table or a bad query renders empty, never 500.
 // The activity tables (pool_stats, pool_top_wallets, wallet_labels) are newer than the rest
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
+import { receiptRelevant } from "@/lib/relevance";
 import { resolveSymbols } from "@/lib/symbols";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
@@ -389,7 +390,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
     const exa = sigBy.get(`${p.id}:exa`) as ExaValue | undefined;
     const enrichment = (p.enrichment ?? {}) as Enrichment;
     const top = topBy.get(p.id);
-    const recs = (receiptsBy.get(p.id) ?? []).map(toReceipt);
+    const recs = (receiptsBy.get(p.id) ?? []).filter((r) => receiptRelevant(p.name, r.title ?? "", r.source ?? "")).map(toReceipt);
     const auditUrls = new Set(hs.map((h) => h.auditUrl).filter(Boolean));
     if (enrichment.parallel?.audit_url) auditUrls.add(enrichment.parallel.audit_url);
     const du = dayBy?.get(p.id);

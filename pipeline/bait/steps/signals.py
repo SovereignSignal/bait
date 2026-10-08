@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 
 from ..clients.nansen import is_smart_money
+from ..rules import receipt_relevant
 from ..config import CHAIN_BY_ID
 from ..db import as_utc, hooks, pool_snapshots, pools, project_daily, projects, receipts, signals, upsert, utcnow, wallet_labels
 from ..rules import is_alive
@@ -35,6 +36,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                     hits = None
             if exa is not None and hits is not None:
                 out["exa"] += 1
+                hits = [h for h in hits if receipt_relevant(p.name, h["title"], h["source"])]
                 rows = [{"project_id": p.id, "url": h["url"], "title": h["title"], "source": h["source"], "published_at": h["published_at"]} for h in hits]
                 out["receipts"] += upsert(conn, receipts, rows, keys=["project_id", "url"])
                 latest = max((h["published_at"] for h in hits if h["published_at"]), default=None)

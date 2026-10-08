@@ -54,7 +54,9 @@ def test_signals_targets_receipts_alive_and_blurb_only_on_change(conn, ctx):
 
     hit = {"url": "https://blog.example.com/post", "title": "Hot hook ships", "source": "blog.example.com",
            "published_at": NOW - timedelta(days=3), "highlights": []}
-    exa, claude = FakeExa([hit]), FakeClaude()
+    fresh_hit = {"url": "https://blog.example.com/fresh", "title": "Fresh v4 hook launches", "source": "blog.example.com",
+                 "published_at": NOW - timedelta(days=2), "highlights": []}
+    exa, claude = FakeExa([hit, fresh_hit]), FakeClaude()   # each project keeps only the title that names it
     ctx.clients.update(exa=exa, github=FakeGitHub(), claude=claude)
     out = signals.run(conn, ctx)
     assert out["projects"] == 2 and out["exa"] == 2 and out["receipts"] == 2 and out["github"] == 1
