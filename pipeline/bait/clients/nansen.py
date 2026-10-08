@@ -67,3 +67,48 @@ def parse_labels(d) -> list[str]:
 
 def is_smart_money(labels: list[str]) -> bool:
     return any(m in lab.lower() for lab in labels for m in SMART_MONEY_MARKERS)
+
+
+# ---- credit budget -------------------------------------------------------------------------------------------
+# Nansen bills per lookup that returns labels (about 100 credits on /labels, about 500 on /premium-labels; empty
+# answers are free). Every lookup is stored in wallet_labels and an address is re-queried at most once per
+# NANSEN_RELABEL_DAYS (default 30), so rows with as_of in the last 30 days are an exact ledger of recent spend.
+DEFAULT_MAX_ADDRESSES = 10        # per run
+DEFAULT_RELABEL_DAYS = 30
+DEFAULT_MONTHLY_CREDITS = 10_000  # rolling 30 days, across every step that calls Nansen
+
+
+def _env_int(name: str, default: int) -> int:
+    import os
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+def max_addresses() -> int:
+    return _env_int("NANSEN_MAX_ADDRESSES", DEFAULT_MAX_ADDRESSES)
+
+
+def relabel_days() -> int:
+    return max(30, _env_int("NANSEN_RELABEL_DAYS", DEFAULT_RELABEL_DAYS))  # >= 30 keeps the ledger exact
+
+
+def cost_per_hit() -> int:
+    import os
+    return 500 if os.environ.get("NANSEN_PREMIUM_LABELS") == "1" else 100
+
+
+def credits_spent_30d(conn, now) -> int:
+    """Estimated credits spent in the last 30 days: labeled answers x cost per hit."""
+    from datetime import timedelta
+
+    import sqlalchemy as sa
+
+    from ..db import wallet_labels
+    rows = conn.execute(sa.select(wallet_labels.c.labels).where(wallet_labels.c.as_of >= now - timedelta(days=30))).all()
+    return sum(cost_per_hit() for r in rows if r.labels)
+
+
+def budget_left(conn, now) -> int:
+    return _env_int("NANSEN_MONTHLY_CREDITS", DEFAULT_MONTHLY_CREDITS) - credits_spent_30d(conn, now)

@@ -117,15 +117,16 @@ def _nansen(conn, ctx, p, nansen, graph, out) -> dict | None:
 def _labels_cached(conn, ctx, nansen, address: str, chain_id: int, out) -> list[str]:
     """wallet_labels is the shared cache with the activity step: a fresh row costs no credits; a paid answer is stored."""
     address = address.lower()
-    try:
-        days = int(os.environ.get("NANSEN_RELABEL_DAYS", "") or 14)
-    except ValueError:
-        days = 14
+    from ..clients import nansen as N
+    days = N.relabel_days()
     row = conn.execute(sa.select(wallet_labels.c.labels, wallet_labels.c.as_of)
                        .where(wallet_labels.c.address == address, wallet_labels.c.chain_id == chain_id)).first()
     if row is not None and as_utc(row.as_of) >= ctx.now - timedelta(days=days):
         out["nansen_cached"] = out.get("nansen_cached", 0) + 1
         return list(row.labels or [])
+    if N.budget_left(conn, ctx.now) < N.cost_per_hit():
+        out["nansen_budget_stop"] = 1
+        return []
     labs = list(nansen.labels(address, chain_id) or [])
     upsert(conn, wallet_labels, [{"address": address, "chain_id": chain_id, "labels": labs, "smart_money": is_smart_money(labs),
                                   "source": getattr(nansen, "source", "nansen"), "as_of": ctx.now}], keys=["address", "chain_id"])

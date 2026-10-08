@@ -115,8 +115,11 @@ def aggregate(trades: list[dict], pool_id: str, chain_id: int, day) -> list[dict
 
 
 def label_wallets(conn, ctx: RunContext, nansen, selected: list[tuple[str, int]], out: dict) -> None:
-    cap = _env_int("NANSEN_MAX_ADDRESSES", 60)
-    fresh_after = ctx.now - timedelta(days=_env_int("NANSEN_RELABEL_DAYS", 14))
+    from ..clients import nansen as N
+    cap = N.max_addresses()
+    fresh_after = ctx.now - timedelta(days=N.relabel_days())
+    left = N.budget_left(conn, ctx.now)
+    out["nansen_budget_left"] = left
     sel = set(selected)
     totals: dict[tuple[str, int], float] = {}
     for r in conn.execute(sa.select(pool_top_wallets).where(pool_top_wallets.c.day == ctx.day)):
@@ -138,6 +141,10 @@ def label_wallets(conn, ctx: RunContext, nansen, selected: list[tuple[str, int]]
             continue
         if out["nansen_queried"] >= cap:
             break
+        if left < N.cost_per_hit():
+            log.info("activity nansen: monthly credit budget reached (NANSEN_MONTHLY_CREDITS); no more lookups this run")
+            out["nansen_budget_stop"] = 1
+            break
         out["nansen_queried"] += 1
         try:
             labs = list(nansen.labels(addr, cid) or [])
@@ -154,6 +161,8 @@ def label_wallets(conn, ctx: RunContext, nansen, selected: list[tuple[str, int]]
                                       "source": source, "as_of": ctx.now}], keys=["address", "chain_id"])
         out["nansen_labeled"] += bool(labs)
         out["nansen_smart_money"] += smart
+        if labs:
+            left -= N.cost_per_hit()
 
 
 def _ts(v) -> datetime | None:
