@@ -1,11 +1,9 @@
 import Link from "next/link";
 import { Footer } from "@/components/Footer";
-import { Nav } from "@/components/Nav";
 
 export default function NotFound() {
   return (
     <>
-      <Nav />
       <main className="col">
         <div className="lead">
           <h1>Not found</h1>

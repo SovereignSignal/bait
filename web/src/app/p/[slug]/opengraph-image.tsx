@@ -2,29 +2,30 @@ import { ImageResponse } from "next/og";
 import { getProject } from "@/db/queries";
 import { CHAINS } from "@/lib/chains";
 import { int, pctDelta, usd } from "@/lib/format";
-import { categoryLine, sourceLine } from "@/components/ProjectCard";
+import { categoryLine, sourceLine } from "@/lib/present";
 
 export const revalidate = 3600;
 export const alt = "Bait project card";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-// Light tokens from mock.html, inlined because satori has no CSS variables.
+// Night tokens from the terminal mock, inlined because satori has no CSS variables.
 const T = {
-  bg: "#ffffff",
-  surface: "#ffffff",
-  well: "#f5f6fc",
-  border: "#d2d9ee",
-  fg: "#0d111c",
-  fg2: "#7780a0",
-  fg3: "#98a1c0",
+  bg: "#0a0a13",
+  surface: "#12121d",
+  well: "#181826",
+  border: "#24243a",
+  fg: "#f5f6fc",
+  fg2: "#9a9bb2",
+  fg3: "#676880",
   pink: "#ff007a",
-  pinkTint: "#fdeaf1",
-  pinkTintFg: "#d50066",
-  green: "#27ae60",
-  greenTint: "#e6f7ed",
-  amber: "#b8860b",
-  amberTint: "#fff6d6",
+  pinkTint: "rgba(255,0,122,.15)",
+  pinkTintFg: "#ff3393",
+  green: "#2fd27a",
+  red: "#ff6a52",
+  greenTint: "rgba(47,210,122,.14)",
+  amber: "#ffbd5c",
+  amberTint: "rgba(255,189,92,.14)",
 };
 
 let interCache: Promise<ArrayBuffer | null> | null = null;
@@ -90,7 +91,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
 
   return new ImageResponse(
     <div style={{ width: "100%", height: "100%", display: "flex", background: T.bg, fontFamily: font, position: "relative" }}>
-      <div style={{ position: "absolute", left: 300, top: -300, width: 600, height: 600, borderRadius: 300, background: "rgba(255,0,122,.14)", filter: "blur(80px)" }} />
+      <div style={{ position: "absolute", left: 300, top: -300, width: 600, height: 600, borderRadius: 300, background: "rgba(255,0,122,.22)", filter: "blur(80px)" }} />
       <div style={{ display: "flex", flexDirection: "column", margin: 40, width: 1120, height: 550, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 36, padding: 24, gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 12px 8px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
@@ -114,9 +115,9 @@ export default async function Image({ params }: { params: Promise<{ slug: string
           <div style={{ fontSize: 20, color: T.fg2 }}>What it does</div>
           <div style={{ fontSize: 34, lineHeight: 1.25, color: T.fg, letterSpacing: -0.5 }}>{p.whatLine}</div>
           <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-            {p.chains.slice(0, 4).map((id) => (
+            {p.chains.filter((id) => CHAINS[id]).slice(0, 4).map((id) => (
               <div key={id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px 6px 6px", borderRadius: 999, background: T.surface, border: `1px solid ${T.border}`, fontSize: 20, color: T.fg }}>
-                <div style={{ width: 24, height: 24, borderRadius: 12, background: CHAINS[id].color, ...(CHAINS[id].lightDot ? { border: `1px solid ${T.border}` } : {}) }} />
+                <div style={{ width: 24, height: 24, borderRadius: 12, background: CHAINS[id].color }} />
                 {CHAINS[id].name}
               </div>
             ))}
@@ -132,7 +133,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px 0", fontSize: 24, color: T.fg2 }}>
           <div style={{ display: "flex", gap: 10 }}>
-            7d volume <span style={{ color: T.fg }}>{usd(p.metrics.vol7d)}</span> <span style={{ color: T.green }}>{delta.text}</span>
+            7d volume <span style={{ color: T.fg }}>{usd(p.metrics.vol7d)}</span> <span style={{ color: delta.dir === "down" ? T.red : T.green }}>{delta.text}</span>
           </div>
           <div style={{ display: "flex", gap: 24 }}>
             <span style={{ display: "flex", gap: 8 }}>

@@ -15,7 +15,14 @@ export type Category =
   | "gaming-nft"
   | "other";
 
-export type Tab = "new" | "trending" | "all";
+export type Tab = "trending" | "new" | "verified" | "all";
+
+export const TABS: Array<[Tab, string]> = [
+  ["trending", "Trending"],
+  ["new", "New"],
+  ["verified", "Verified"],
+  ["all", "All"],
+];
 
 export interface HookFlags {
   beforeInitialize: boolean;
@@ -69,12 +76,53 @@ export interface PoolView {
   tvlUsd: number;
   vol7d: number;
   tx7d: number;
+  /** null until two daily snapshots (or a pool_stats row) exist */
+  vol24h: number | null;
+  /** pool_stats.traders_24h, latest day */
+  wallets24h: number | null;
 }
 
-export interface DayPoint {
-  day: string; // YYYY-MM-DD
-  tvlUsd: number;
-  vol7d: number;
+/** 24h usage per project. null = no data yet (table empty, missing, or not backfilled). */
+export interface Usage {
+  vol24h: number | null;
+  /** tx_count_cum delta over the last day (swaps + liquidity mods) */
+  tx24h: number | null;
+  /** sum of pool_stats.traders_24h over the project's pools, latest day */
+  wallets24h: number | null;
+  buys24h: number | null;
+  sells24h: number | null;
+  buyers24h: number | null;
+  sellers24h: number | null;
+  /** distinct smart_money wallets among pool_top_wallets, latest day */
+  smartWallets: number | null;
+}
+
+export interface WalletView {
+  address: string; // lowercase
+  chainId: ChainId;
+  volumeUsd: number;
+  trades: number;
+  buys: number | null;
+  sells: number | null;
+  lastTradeAt: string | null; // ISO
+  labels: string[];
+  smartMoney: boolean;
+}
+
+export interface WalletLabel {
+  labels: string[];
+  smartMoney: boolean;
+}
+
+/** One trade from /api/trades/[chain]/[pool]. */
+export interface TradeView {
+  ts: string; // ISO
+  kind: "buy" | "sell";
+  usd: number;
+  wallet: string; // lowercase
+  tx: string;
+  labels?: string[];
+  smartMoney?: boolean;
 }
 
 export interface ReceiptView {
@@ -125,7 +173,8 @@ export interface ProjectSummary {
   metrics: Metrics;
   signals: SignalsView;
   receipts: ReceiptView[];
-  topPool: { poolId: string; chainId: ChainId; token0Symbol: string | null; token1Symbol: string | null } | null;
+  topPool: { poolId: string; chainId: ChainId; token0Symbol: string | null; token1Symbol: string | null; hookAddress: string | null } | null;
+  usage: Usage;
   isNew: boolean;
   /** DESIGN.md spam filter: no pools, or all pools under $100 TVL and < 10 txs lifetime. Hidden from All. */
   isSpam: boolean;
@@ -139,16 +188,45 @@ export interface ProjectSummary {
 export interface ProjectDetail extends ProjectSummary {
   hooks: HookView[];
   pools: PoolView[];
-  history: DayPoint[]; // last 30 days, ascending
+  /** daily volume, oldest first (last ~14 days); filled on the project page only */
+  series: number[];
+  /** top wallets across the project's pools, latest pool_top_wallets day; project page only */
+  topWallets: WalletView[];
 }
 
-export interface ContextStats {
-  hooksTracked: number;
-  hooksDelta7d: number;
-  projects: number;
-  projectsNew7d: number;
+/** The light row the terminal list, movers and client search work from. */
+export interface RowView {
+  slug: string;
+  name: string;
+  color: string;
+  category: Category;
+  secondaryCategories: Category[];
+  chains: ChainId[];
+  firstSeenAt: string;
+  isNew: boolean;
+  scoreTrending: number;
+  vol7d: number;
+  vol7dPrev: number;
+  vol24h: number | null;
   tvlUsd: number;
-  tvlDelta7dPct: number;
+  routable: boolean;
+  audited: boolean;
+  /** hook addresses (lowercase, capped) for address-prefix search */
+  hooks: string[];
+  rank?: number;
+}
+
+export interface LeaderEntry {
+  row: RowView;
+  value: number;
+}
+
+export interface LeadersView {
+  totals: { vol7d: number; wallets24h: number | null; projects: number; chains: number };
+  wallets: LeaderEntry[];
+  volume: LeaderEntry[];
+  tvl: LeaderEntry[];
+  smartMoney: LeaderEntry[];
 }
 
 export interface DigestItem {
@@ -172,6 +250,20 @@ export interface FeedQuery {
   chain?: ChainId;
   category?: Category;
 }
+
+/** Short chip labels, as in the terminal mock. */
+export const CATEGORY_SHORT: Record<Category, string> = {
+  "dynamic-fee": "Dynamic fee",
+  launchpad: "Launchpad",
+  orders: "Orders",
+  "lp-management": "LP mgmt",
+  compliance: "Compliance",
+  oracle: "Oracle",
+  "mev-lvr": "MEV / LVR",
+  lending: "Lending",
+  "gaming-nft": "Gaming / NFT",
+  other: "Other",
+};
 
 export const CATEGORY_LABEL: Record<Category, string> = {
   "dynamic-fee": "Dynamic fee",

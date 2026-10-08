@@ -1,17 +1,15 @@
 import type { Metadata } from "next";
 import { Footer } from "@/components/Footer";
-import { Nav } from "@/components/Nav";
 
 export const metadata: Metadata = { title: "About", description: "How Bait finds, groups, scores and labels Uniswap v4 hooks." };
 
 export default function AboutPage() {
   return (
     <>
-      <Nav />
       <main className="col">
         <div className="lead">
           <h1>How this works</h1>
-          <p>One feed for Uniswap v4 hooks. Cards are grouped by project, not by hook address. Refreshed nightly.</p>
+          <p>A terminal for Uniswap v4 hooks. Projects, not hook addresses. Figures refreshed nightly; trades live.</p>
         </div>
 
         <section className="block">
@@ -23,6 +21,13 @@ export default function AboutPage() {
             LPs and swappers of each project&apos;s top pools, and only on chains Nansen covers (not Unichain or Ink). Links come from Exa,
             last 30 days. Team, site and audit details for new projects come from Parallel. The one-line &quot;what it does&quot; and the
             two-sentence &quot;why people care&quot; are written by Claude from those sources and regenerated when the signals change.
+          </p>
+          <h3>Activity</h3>
+          <p>
+            Wallet counts, buys and sells per pool come from GeckoTerminal once a day. The live trade feed on a project page reads
+            GeckoTerminal&apos;s recent trades for the project&apos;s busiest pool, hides trades under $10, and refreshes every minute while
+            you watch. Top wallets are the biggest traders in those pools on the latest day. Wallet labels and the &quot;Smart money&quot; pill are
+            Nansen labels on those addresses, on chains Nansen covers.
           </p>
           <h3>Grouping</h3>
           <p>
@@ -43,6 +48,9 @@ export default function AboutPage() {
             <li>
               <b>Trending</b>: 7-day volume of at least $10K. Score is <code>log1p(vol_7d) × clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)</code>, tie-break on TVL.
               Top 20.
+            </li>
+            <li>
+              <b>Verified</b>: a published audit link, or the hook routes in the Uniswap app by the rule below.
             </li>
             <li>
               <b>Alive</b>: a GitHub commit or a web mention in the last 30 days.

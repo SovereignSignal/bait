@@ -9,8 +9,8 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-# DATABASE_URL is intentionally absent at build time: pages render from fixtures
-# during prerender and from Postgres at runtime (ISR, 1h).
+# DATABASE_URL and BAIT_FIXTURES are intentionally absent at build time: pages
+# prerender empty and fill from Postgres at runtime (ISR, 1h).
 RUN npm run build
 
 FROM node:20-alpine AS run

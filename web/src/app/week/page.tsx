@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Footer } from "@/components/Footer";
-import { Nav } from "@/components/Nav";
 import { listDigests } from "@/db/queries";
 import s from "./week.module.css";
 
@@ -12,7 +11,6 @@ export default async function WeeksPage() {
   const all = await listDigests(26);
   return (
     <>
-      <Nav />
       <main className="col">
         <div className="lead">
           <h1>Weekly digest</h1>

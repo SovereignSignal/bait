@@ -86,3 +86,27 @@ export function sourceLabel(url: string, source?: string | null): string {
     return "link";
   }
 }
+
+/** "12s", "4m", "3h", "2d" for live trades. */
+export function since(iso: string, now = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86_400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86_400)}d`;
+}
+
+/** Deterministic avatar color from a wallet address or name. */
+export function addrColor(a: string): string {
+  let x = 0;
+  for (let i = 0; i < a.length; i++) x = (x * 31 + a.charCodeAt(i)) | 0;
+  return `hsl(${Math.abs(x) % 360} 62% 52%)`;
+}
+
+const PALETTE = ["#5b2fff", "#ff007a", "#1b8a5a", "#ff6a00", "#2563eb", "#0ea5e9", "#c2410c", "#7c3aed", "#0f766e", "#b45309"];
+/** Mock's token / project palette pick by string hash. */
+export function paletteColor(s: string): string {
+  let x = 0;
+  for (let i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) | 0;
+  return PALETTE[Math.abs(x) % PALETTE.length];
+}

@@ -1,62 +1,42 @@
 import type { Metadata } from "next";
-import { ContextTiles } from "@/components/ContextTiles";
-import { Filters } from "@/components/Filters";
-import { Footer } from "@/components/Footer";
-import { Nav } from "@/components/Nav";
-import { ProjectCard } from "@/components/ProjectCard";
-import { getContext, getFeed, usingFixtures } from "@/db/queries";
-import { parseChainParam } from "@/lib/chains";
-import { CATEGORIES, isCategory, type Tab } from "@/lib/types";
+import { Terminal } from "@/components/Terminal";
+import { getProject, getRows, usingFixtures } from "@/db/queries";
 import { SAMPLE_NOW } from "@/fixtures/sample";
+import { applyTab, movers, parseFeedQuery } from "@/lib/feed";
+import type { Tab } from "@/lib/types";
 
 export const revalidate = 3600;
 
-const TAB_COPY: Record<Tab, { h1: string; p: string }> = {
-  trending: { h1: "What's moving in v4 hooks this week", p: "Grouped by project. Ranked by 7-day volume growth. Refreshed nightly." },
-  new: { h1: "New hooks worth a look", p: "First seen in the last 7 days with at least $1K in a pool or 10 swaps. Refreshed nightly." },
-  all: { h1: "Every hook project with real usage", p: "Grouped by project. Sorted by 7-day volume. Spam and empty hooks hidden." },
+const TAB_COPY: Record<Tab, { title: string; description: string }> = {
+  trending: { title: "Bait", description: "What's moving in Uniswap v4 hooks this week, grouped by project and ranked by 7-day volume growth." },
+  new: { title: "New hooks", description: "Uniswap v4 hook projects first seen in the last 7 days with real usage." },
+  verified: { title: "Verified hooks", description: "Uniswap v4 hook projects with a published audit link or that route in the Uniswap app." },
+  all: { title: "All hooks", description: "Every Uniswap v4 hook project with real usage, sorted by 7-day volume." },
 };
 
-type Search = { tab?: string; chain?: string; category?: string };
+type Search = Record<string, string | string[] | undefined>;
 
 export async function generateMetadata({ searchParams }: { searchParams: Promise<Search> }): Promise<Metadata> {
-  const sp = await searchParams;
-  const tab = parseTab(sp.tab);
-  return { title: tab === "trending" ? "Bait" : `${TAB_COPY[tab].h1}`, description: TAB_COPY[tab].p };
+  const q = parseFeedQuery(await searchParams);
+  const c = TAB_COPY[q.tab];
+  return { title: q.tab === "trending" ? { absolute: "Bait · v4 hook terminal" } : c.title, description: c.description };
 }
 
-function parseTab(s: string | undefined): Tab {
-  return s === "new" || s === "all" ? s : "trending";
-}
-
-export default async function FeedPage({ searchParams }: { searchParams: Promise<Search> }) {
-  const sp = await searchParams;
-  const tab = parseTab(sp.tab);
-  const chain = parseChainParam(sp.chain);
-  const category = isCategory(sp.category) ? sp.category : undefined;
-  const [rows, ctx] = await Promise.all([getFeed({ tab, chain, category }), getContext()]);
-  const fixtures = usingFixtures();
-  const now = fixtures ? SAMPLE_NOW : Date.now();
-  const unfiltered = chain || category ? await getFeed({ tab }) : rows;
-  const available = CATEGORIES.filter((c) => unfiltered.some((p) => p.category === c || p.secondaryCategories.includes(c)));
-  const copy = TAB_COPY[tab];
-
+export default async function TerminalPage({ searchParams }: { searchParams: Promise<Search> }) {
+  const q = parseFeedQuery(await searchParams);
+  const rows = await getRows();
+  const first = applyTab(rows, q)[0];
+  const project = first ? await getProject(first.slug) : null;
+  const sample = usingFixtures();
   return (
-    <>
-      <Nav tab={tab} chain={chain} category={category} />
-      <main className="col">
-        <div className="lead">
-          <h1>{copy.h1}</h1>
-          <p>{copy.p}</p>
-        </div>
-        <ContextTiles c={ctx} />
-        <Filters tab={tab} chain={chain} category={category} available={available} note={fixtures ? "Sample figures" : undefined} />
-        {rows.length === 0 && <p className="empty">Nothing here yet for this filter.</p>}
-        {rows.map((p) => (
-          <ProjectCard key={p.id} p={p} now={now} />
-        ))}
-        <Footer />
-      </main>
-    </>
+    <Terminal
+      rows={rows}
+      moverRows={movers(rows)}
+      project={project}
+      view="list"
+      now={sample ? SAMPLE_NOW : Date.now()}
+      sample={sample}
+      emptyText={rows.length ? "Nothing matches this filter." : "Nothing indexed yet. The first pipeline run fills this in."}
+    />
   );
 }
