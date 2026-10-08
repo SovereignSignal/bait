@@ -54,3 +54,9 @@ def insert_pool(conn, pool_id, chain_id, hook, created):
 
 def insert_snap(conn, pool_id, chain_id, day, tvl, vol, tx):
     conn.execute(sa.insert(db.pool_snapshots).values(pool_id=pool_id, chain_id=chain_id, day=day, tvl_usd=tvl, volume_usd_cum=vol, tx_count_cum=tx))
+
+
+@pytest.fixture(autouse=True)
+def _no_keyless_network(monkeypatch):
+    """The snapshot step falls back to GeckoTerminal + public RPC; tests must never hit the network."""
+    monkeypatch.setenv("KEYLESS", "0")

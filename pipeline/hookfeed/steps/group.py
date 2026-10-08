@@ -105,6 +105,9 @@ def _create_project(conn, ctx, name: str, norm: str | None, description: str | N
     while slug in taken:
         slug, i = f"{base}-{i}", i + 1
     what = (description or "").strip().split(". ")[0][:160] or None  # placeholder until step 4 runs Claude
+    if category is None:
+        from ..keyless import categorize
+        category = categorize(f"{description or ''} {name}", {}, {})
     r = conn.execute(sa.insert(projects).values(
         slug=slug, name=name, norm_name=norm, category=category, what_line=what, first_seen_at=ctx.now))
     return r.inserted_primary_key[0]
