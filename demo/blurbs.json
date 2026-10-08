@@ -1,0 +1,21 @@
+{
+  "StablePairHook": {"why": "Uniswap Labs' own stablecoin hook, live since September 10. Swaps that push price away from 1:1 pay no fee and corrective swaps go through a decaying auction, so value a flat fee would leak to arbitrage bots stays with LPs.",
+    "receipts": [{"title": "StablePair Hook: A Fee That Moves with the Market", "url": "https://blog.uniswap.org/stablepair-hook-a-fee-that-moves-with-the-market", "source": "blog.uniswap.org · 28d"},
+                 {"title": "Keeping Value in the Pool: How StablePair Hook Works", "url": "https://blog.uniswap.org/keeping-value-in-the-pool-how-stablepair-hook-works", "source": "blog.uniswap.org · 22d"}]},
+  "FablesRampETH": {"why": "Fables runs the deepest ETH/USDG pool on Robinhood Chain through this hook. The team says it paid LPs more than twice the fees per dollar of any comparable ETH/USDG pool in mid-September.",
+    "receipts": [{"title": "Fables: Chapter 4, The Road to TGE", "url": "https://x.com/i/article/2105275170998874472", "source": "x.com · 8d"},
+                 {"title": "Fables on Robinhood Chain", "url": "https://hoodscan.co/project/fables", "source": "hoodscan.co"}]},
+  "FablesRamp": {"why": "Fables, a ve(3,3)-style exchange live on Robinhood Chain since August 18, uses it for markets where a keeper can override the flat fee for a short, bounded window. Each pool sets its own fee instead of picking a fixed tier.",
+    "receipts": [{"title": "Fables docs: Overview", "url": "https://www.fables.fi/docs", "source": "fables.fi"},
+                 {"title": "Meme token swaps boost Robinhood Chain LP fees", "url": "https://www.toobit.com/news/meme-token-swaps-boost-robinhood-chain-lp-fees", "source": "toobit.com · 36d"}]},
+  "Angstrom": {"why": "A per-block auction sells the right to arbitrage the pool and pays the proceeds to LPs, and a batch auction clears every swap at one price so there is nothing to sandwich. LPs keep value when prices move instead of losing it to arbitrage.",
+    "receipts": [{"title": "Angstrom docs: Overview", "url": "https://docs.angstrom.xyz/", "source": "docs.angstrom.xyz"},
+                 {"title": "Angstrom makes LPs profitable, but at what cost?", "url": "https://research.auditless.com/p/angstrom-and-the-arrival-of-application", "source": "research.auditless.com"}]},
+  "HookrModularHookV6": {"why": "The earlier root hook of Hookr, a Robinhood Chain launchpad where creators assemble a pool's hook from blocks like anti-snipe, surge fees and auto-burn, frozen at launch with liquidity locked. New launches use Hookr's newer root, so this is the previous generation still trading.",
+    "receipts": [{"title": "Hookr contracts and addresses", "url": "https://hookr.fun/docs/reference/contracts-and-addresses", "source": "hookr.fun"},
+                 {"title": "Introducing Hookr.fun: launchpad with custom Uniswap hooks", "url": "https://defitutorials.substack.com/p/introducing-hookrfun-launchpad-with", "source": "substack.com · 58d"}]},
+  "Claus": {"why": "An agent-run token whose upgradeable hook changes nearly every day: buyback-and-burn, auto-liquidity, NFT rewards, even a switch tied to Heathrow weather. People are watching a pool that rewrites its own rules in public.",
+    "receipts": [{"title": "Claus: Journal", "url": "https://claus.si/Home", "source": "claus.si · 1d"}]},
+  "Clanker Dynamic Fee Hook v2 (Base)": {"why": "Clanker launches a token straight into a v4 pool when someone tags its bot on Farcaster, with no bonding curve. This hook raises the LP fee when price moves fast, between 0.5% and 5%.",
+    "receipts": [{"title": "ClankerHookDynamicFee", "url": "https://clanker.gitbook.io/documentation/references/core-contracts/v4/clankerhook/clankerhookdynamicfee", "source": "clanker.gitbook.io"}]}
+}
