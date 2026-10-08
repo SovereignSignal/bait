@@ -21,8 +21,10 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out["candidates"] = len(todo)
     # Parallel tasks take ~1-2 minutes each; run them side by side (PARALLEL_CONCURRENCY, default 8) before the
     # per-project loop. The whole batch is budget-checked up front, so concurrency cannot overshoot the budget.
-    par_results = _parallel_batch(conn, par, todo, out) if par is not None else {}
+    par_results, waiting = _parallel_batch(conn, par, todo, out) if par is not None else ({}, set())
     for p in todo:
+        if p.id in waiting:
+            continue        # paid Parallel run still in progress: collect it next run, then write what_line once
         hs = conn.execute(sa.select(hooks).where(hooks.c.project_id == p.id).order_by(hooks.c.verified_source.desc(), hooks.c.first_seen_at)).all()
         ctxd = {
             "name": p.name, "hooks_n": len(hs), "is_factory": p.is_factory,
@@ -105,18 +107,22 @@ def _parallel_batch(conn, par, todo, out) -> dict:
     from ..costs import BudgetExceeded, parallel_usd
     need = [p for p in todo if "parallel" not in (p.enrichment or {})]
     if not need:
-        return {}
+        return {}, set()
     price = parallel_usd(getattr(par, "processor", "core"))
     meter = getattr(par, "meter", None)
-    while need and meter is not None:          # shrink the batch until the whole of it fits the budget
+    pending = [p for p in need if (p.enrichment or {}).get("parallel_run_id")]   # already paid: free to collect
+    fresh = [p for p in need if p not in pending]
+    while fresh and meter is not None:         # shrink the paid batch until the whole of it fits the budget
         try:
-            meter.check("parallel", price * len(need))
+            meter.check("parallel", price * len(fresh))
             break
         except BudgetExceeded:
             out["budget_stop"] = 1
-            need = need[: len(need) // 2] if len(need) > 1 else []
+            fresh = fresh[: len(fresh) // 2] if len(fresh) > 1 else []
+    need = pending + fresh
     if not need:
-        return {}
+        return {}, set()
+    submitted: dict[int, str] = {}
     hints = {}
     for p in need:
         descs = sorted({r.description for r in conn.execute(sa.select(hooks.c.description).where(
@@ -124,8 +130,15 @@ def _parallel_batch(conn, par, todo, out) -> dict:
         hints[p.id] = "; ".join(descs)[:800]
 
     def one(p):
+        # A run submitted earlier (paid) but not yet collected is fetched for free instead of resubmitted.
+        run_id = (p.enrichment or {}).get("parallel_run_id")
         try:
-            return p.id, par.enrich(p.name, hints[p.id])
+            if not run_id:
+                run_id = par.submit(p.name, hints[p.id])
+                submitted[p.id] = run_id
+            return p.id, par.result(run_id)
+        except BudgetExceeded:
+            return p.id, None
         except Exception as e:  # one task failing must not lose the others
             log.warning("enrich parallel project=%s failed: %s", p.slug, e)
             return p.id, None
@@ -135,4 +148,14 @@ def _parallel_batch(conn, par, todo, out) -> dict:
     except ValueError:
         workers = 8
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        return {pid: res for pid, res in ex.map(one, need) if res}
+        results = {pid: res for pid, res in ex.map(one, need) if res}
+    # Remember paid runs whose output did not arrive in time, so the next run collects them instead of paying again.
+    waiting: set[int] = set()
+    for p in need:
+        rid = submitted.get(p.id) or (p.enrichment or {}).get("parallel_run_id")
+        if rid and p.id not in results:
+            enr = dict(p.enrichment or {}) | {"parallel_run_id": rid}
+            conn.execute(sa.update(projects).values(enrichment=enr).where(projects.c.id == p.id))
+            waiting.add(p.id)
+    out["parallel_pending"] = len(waiting)
+    return results, waiting
