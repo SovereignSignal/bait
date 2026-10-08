@@ -16,7 +16,6 @@ bait/
   pipeline/            Python nightly job, Railway cron service: python -m bait run
   web/                 Next.js App Router site, Railway web service (Drizzle -> Postgres, ISR 1h)
   railway/README.md    how the three Railway services are created and configured
-  pipeline/railway.json, web/railway.json   Railway config-as-code per service
   scripts/             apply-migrations.sh, run-pipeline-local.sh
   .env.example         every env var, one comment each, no values
 ```

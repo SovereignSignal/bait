@@ -1,7 +1,7 @@
 """Bake a keyless snapshot (plus optional hand-checked blurbs) into a single demo page.
 
     python demo/build.py SNAPSHOT.json [--blurbs demo/blurbs.json] --out demo/bait.html
-blurbs.json: {"<slug>": {"why": "...", "receipts": [{"title","url","source"}]}}
+blurbs.json: {"<slug or registry name>": {"why": "...", "receipts": [{"title","url","source"}]}}
 """
 import argparse
 import json
@@ -17,7 +17,7 @@ if a.blurbs:
     blurbs = json.load(open(a.blurbs))
     hit = 0
     for p in snap["projects"]:
-        b = blurbs.get(p["slug"])
+        b = blurbs.get(p["slug"]) or blurbs.get(p["name"])
         if b:
             hit += 1
             p["whyBlurb"] = b.get("why", "") or p.get("whyBlurb", "")
