@@ -1,3 +1,4 @@
+import pytest
 from datetime import timedelta
 
 import sqlalchemy as sa
@@ -52,15 +53,18 @@ def test_parallel_runs_side_by_side_and_respects_budget(conn, ctx, monkeypatch, 
         def __init__(self, meter):
             self.meter, self.active, self.peak, self.lock = meter, 0, 0, threading.Lock()
 
-        def enrich(self, name, hints):
+        def submit(self, name, hints):
+            self.meter.record("parallel", 0.025)
+            return f"run-{name}"
+
+        def result(self, run_id, max_wait_s=None):
             with self.lock:
                 self.active += 1
                 self.peak = max(self.peak, self.active)
             time.sleep(0.05)
             with self.lock:
                 self.active -= 1
-            self.meter.record("parallel", 0.025)
-            return {"team": name}
+            return {"team": run_id}
 
     # budget fits only 4 of 6 tasks: the batch is cut before anything is submitted
     meter = Meter(None, budgets=Budgets(0.10, 10.0, {}))
@@ -70,3 +74,62 @@ def test_parallel_runs_side_by_side_and_respects_budget(conn, ctx, monkeypatch, 
     assert par.peak > 1                                   # ran side by side
     assert out["parallel"] == 3 and out["budget_stop"] == 1   # 6 -> 3 (halved until 3 x 0.025 <= 0.10)
     assert meter.run_usd <= 0.10 + 1e-9
+
+
+def test_parallel_timeouts_are_not_failures_and_paid_runs_are_collected_not_repaid(conn, ctx, monkeypatch):
+    import httpx
+
+    from bait.clients.parallel import Parallel
+    from bait.costs import Budgets, Meter
+    monkeypatch.setenv("ENRICH_MAX", "1")
+    pid = insert_project(conn, "Slow", first_seen=NOW - timedelta(days=30), slug="slow")
+    insert_hook(conn, "0x" + "5" * 40, 8453, project_id=pid, name="Slow")
+    insert_pool(conn, "0xpslow", 8453, "0x" + "5" * 40, NOW - timedelta(days=30))
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xpslow", chain_id=8453, day=DAY, vol_24h=5000.0, traders_24h=50))
+
+    class Resp:
+        def __init__(self, status, data=None):
+            self.status_code, self._d = status, data or {}
+
+        def json(self):
+            return self._d
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+    class Http:
+        def __init__(self, ready_after):
+            self.posts, self.gets, self.ready_after = 0, 0, ready_after
+
+        def post(self, url, **kw):
+            self.posts += 1
+            return Resp(200, {"run_id": "trun_1"})
+
+        def get(self, url, **kw):
+            self.gets += 1
+            if self.gets == 1:
+                raise httpx.ReadTimeout("still running")      # the failure mode seen in production
+            if self.gets < self.ready_after:
+                return Resp(408)                               # server-side "still running"
+            return Resp(200, {"output": {"content": {"team": "Slow Labs"}}})
+
+    meter = Meter(None, budgets=Budgets(5.0, 50.0, {}))
+    # run 1: never ready within the wait -> paid once, run_id kept, project NOT marked enriched
+    h1 = Http(ready_after=10**9)
+    par = Parallel("k", http_client=h1, poll_s=0, max_wait_s=0.05); par.meter = meter
+    claude = FakeClaude()
+    ctx.clients.update(claude=claude, parallel=par, blockscout=None)
+    out = enrich.run(conn, ctx)
+    row = conn.execute(sa.select(db.projects).where(db.projects.c.id == pid)).one()
+    assert h1.posts == 1 and out["parallel_pending"] == 1 and out["errors"] == 0
+    assert row.enriched_at is None and row.enrichment["parallel_run_id"] == "trun_1" and claude.calls == []
+    # run 2: same run_id collected for free (no new submission), then what_line written once
+    h2 = Http(ready_after=2)
+    par2 = Parallel("k", http_client=h2, poll_s=0, max_wait_s=5); par2.meter = meter
+    ctx.clients.update(parallel=par2)
+    out2 = enrich.run(conn, ctx)
+    row = conn.execute(sa.select(db.projects).where(db.projects.c.id == pid)).one()
+    assert h2.posts == 0 and out2["parallel"] == 1 and row.enriched_at is not None
+    assert row.enrichment["parallel"]["team"] == "Slow Labs" and len(claude.calls) == 1
+    assert meter.run_usd == pytest.approx(0.025)               # paid exactly once across both runs

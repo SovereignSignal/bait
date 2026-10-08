@@ -37,7 +37,12 @@ class Parallel:
         key = env("PARALLEL_API_KEY")
         return cls(key, http_client) if key else None
 
-    def enrich(self, project_name: str, hints: str) -> dict | None:
+    # GET .../result blocks until the run completes (server default timeout=600 s). We ask the server to give up
+    # after RESULT_WAIT_S so it answers 408 "still running" well before the client read timeout, then ask again.
+    RESULT_WAIT_S = 60
+
+    def submit(self, project_name: str, hints: str) -> str:
+        """Start a run (this is the billed step) and return its run_id. Budget-checked and recorded."""
         from ..costs import parallel_usd
         price = parallel_usd(self.processor)
         self.meter.check("parallel", price)
@@ -47,10 +52,19 @@ class Parallel:
             "processor": self.processor,
         })
         run_id = run["run_id"]
-        self.meter.record("parallel", price, detail=f"{self.processor} {project_name[:80]}")
-        deadline = time.monotonic() + self.max_wait_s
+        self.meter.record("parallel", price, detail=f"{self.processor} run={run_id} {project_name[:60]}")
+        return run_id
+
+    def result(self, run_id: str, max_wait_s: float | None = None) -> dict | None:
+        """Fetch a run's output (free). None if it is still running at the deadline; the caller keeps run_id."""
+        import httpx
+        deadline = time.monotonic() + (self.max_wait_s if max_wait_s is None else max_wait_s)
         while time.monotonic() < deadline:
-            r = self.c.get(f"https://api.parallel.ai/v1/tasks/runs/{run_id}/result", headers=self.headers)
+            try:
+                r = self.c.get(f"https://api.parallel.ai/v1/tasks/runs/{run_id}/result",
+                               params={"timeout": self.RESULT_WAIT_S}, headers=self.headers)
+            except httpx.TimeoutException:
+                continue                       # still running; never a failure
             if r.status_code == 200:
                 d = r.json()
                 out = (d.get("output") or {}).get("content") or {}
@@ -59,3 +73,6 @@ class Parallel:
                 r.raise_for_status()
             time.sleep(self.poll_s)
         return None
+
+    def enrich(self, project_name: str, hints: str) -> dict | None:
+        return self.result(self.submit(project_name, hints))
