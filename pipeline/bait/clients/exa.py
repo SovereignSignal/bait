@@ -12,6 +12,8 @@ class Exa:
     def __init__(self, api_key: str, http_client=None):
         self.c = http_client or http.client(timeout=60.0)
         self.headers = {"x-api-key": api_key}
+        from ..costs import NullMeter
+        self.meter = NullMeter()
 
     @classmethod
     def from_env(cls, http_client=None):
@@ -25,7 +27,11 @@ class Exa:
             "startPublishedDate": (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "contents": {"highlights": True},
         }
+        from ..costs import exa_usd
+        price = exa_usd(n, highlights=True)
+        self.meter.check("exa", price)
         d = http.post_json(self.c, "https://api.exa.ai/search", json=body, headers=self.headers)
+        self.meter.record("exa", price, detail=query[:120])
         out = []
         for r in d.get("results", []):
             url = r.get("url")

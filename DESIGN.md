@@ -238,3 +238,11 @@ v4 pool on every chain it covers shows up as soon as it is initialized, with exa
 - **Without the token:** the indexer degrades to following new Initialize logs over the public RPCs on 10 chains (no
   history, no swaps) and says so in its startup log.
 
+
+## Cost controls (2026-10-08)
+
+Paid providers: Anthropic (Sonnet 5.5 blurbs, Haiku 4.5 classification), Parallel (core, $0.025/run), Exa ($0.017 per
+search with highlights), Nansen (credits). All metered through one ledger with daily ($3) and 30-day ($40) budgets
+enforced before each call; `cost-preview` reports worst case per run from live data (first preview: $2.89, under the
+daily budget). Grouping never sends bare-address hooks to Claude (they carry nothing to classify) and sends a 25-name
+shortlist instead of up to 400 names.
