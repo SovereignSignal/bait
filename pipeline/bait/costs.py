@@ -205,9 +205,12 @@ def preview(conn: sa.Connection, ctx, meter: Meter) -> list[dict]:
     rows.append({"step": "enrich", "provider": "anthropic", "what": f"{CLAUDE_BLURB_MODEL} what_line",
                  "calls": n_enrich, "unit_usd": sonnet_call, "note": ""})
 
-    n_sig = len(signals.select_targets(conn, ctx))
+    from .rules import name_tokens
+    sig_targets = signals.select_targets(conn, ctx)
+    n_sig = len(sig_targets)
+    n_named = sum(1 for p, _ in sig_targets if name_tokens(p.name))
     rows.append({"step": "signals", "provider": "exa", "what": "Exa receipts search",
-                 "calls": n_sig if have["exa"] else 0, "unit_usd": exa_call, "note": "one search per New/Trending project"})
+                 "calls": n_named if have["exa"] else 0, "unit_usd": exa_call, "note": "one search per named New/Trending project"})
     rows.append({"step": "signals", "provider": "anthropic", "what": f"{CLAUDE_BLURB_MODEL} why_blurb",
                  "calls": n_sig if have["anthropic"] else 0, "unit_usd": sonnet_call, "note": "upper bound: only when signals changed"})
 

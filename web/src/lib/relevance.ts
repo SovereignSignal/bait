@@ -23,7 +23,8 @@ export function receiptRelevant(projectName: string, title: string, source: stri
   if (BLOCKED_HOSTS.some((b) => host === b || host.endsWith("." + b))) return false;
   const flat = (title || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const words = (title || "").toLowerCase();
-  const named = toks.some((t) => flat.includes(t));
+  // short tokens must start a word ("Hookr" must not match "hook research"); long ones may sit inside run-together text
+  const named = toks.some((t) => new RegExp(`(^|[^a-z0-9])${t}`).test(words) || (t.length >= 8 && flat.includes(t)));
   const defi = DOMAIN_WORDS.some((w) => new RegExp(`(^|[^a-z0-9])${w}([^a-z0-9]|$)`).test(words));
   return named && defi;
 }

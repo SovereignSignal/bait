@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 
 from ..clients.nansen import is_smart_money
-from ..rules import receipt_relevant
+from ..rules import name_tokens, receipt_relevant
 from ..config import CHAIN_BY_ID
 from ..db import as_utc, hooks, pool_snapshots, pools, project_daily, projects, receipts, signals, upsert, utcnow, wallet_labels
 from ..rules import is_alive
@@ -27,7 +27,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     for p, daily in targets:
         changed = False
         try:
-            if exa is not None:
+            if exa is not None and name_tokens(p.name):   # unnamed projects can never keep a receipt: don't pay to search
                 try:
                     hits = exa.search_recent(f'"{p.name}" Uniswap v4 hook', now=ctx.now)
                 except BudgetExceeded:
