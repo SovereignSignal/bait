@@ -1,6 +1,7 @@
 // Reads for the dev radar (/building) and the "Just launched" feed (v4_pools from the on-chain indexer).
 // Both tables are newer than the rest and may be missing or empty: every read goes through safe() and renders empty.
 // Small in-process caches (single replica): launches 30s, radar 5 min (it changes nightly).
+import { resolveSymbols } from "@/lib/symbols";
 import { and, desc, eq, gte, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb } from "./client";
 import { safe, usingFixtures } from "./queries";
@@ -62,7 +63,7 @@ export async function getLaunches(n = 20): Promise<LaunchView[]> {
           .leftJoin(t.pools, and(eq(t.pools.poolId, t.v4Pools.poolId), eq(t.pools.chainId, t.v4Pools.chainId)))
           .orderBy(sql`${t.v4Pools.blockTime} desc nulls last`, desc(t.v4Pools.blockNumber))
           .limit(n);
-        return rows.map(
+        const views = rows.map(
           (r): LaunchView => ({
             chainId: r.chainId,
             poolId: r.poolId,
@@ -78,6 +79,18 @@ export async function getLaunches(n = 20): Promise<LaunchView[]> {
             txHash: r.txHash,
           }),
         );
+        // Indexer-only pools carry addresses, not symbols: resolve via DefiLlama, then ERC-20 symbol() on-chain.
+        const sym = await resolveSymbols(
+          views.flatMap((v) => [
+            ...(v.symbol0 ? [] : [{ chainId: v.chainId, address: v.currency0 }]),
+            ...(v.symbol1 ? [] : [{ chainId: v.chainId, address: v.currency1 }]),
+          ]),
+        );
+        return views.map((v) => ({
+          ...v,
+          symbol0: v.symbol0 ?? sym({ chainId: v.chainId, address: v.currency0 }),
+          symbol1: v.symbol1 ?? sym({ chainId: v.chainId, address: v.currency1 }),
+        }));
       }),
     [],
   );
