@@ -164,6 +164,87 @@ digests = sa.Table(
     sa.Column("body", JSONType, nullable=False),
 )
 
+# --- radar ---
+# Dev radar (step "radar", db/migrations/0005_radar.sql): what is being built before it has volume. One row per URL.
+# kind: registry_submission | repo | hackathon | incubator | audit | launch_post. score is the Claude relevance (0-1)
+# for web results; rows under 0.5 are kept only so the URL is not re-classified and the web app hides them.
+# GitHub rows have score null. Rows not seen for 90 days are deleted.
+RADAR_KINDS = ("registry_submission", "repo", "hackathon", "incubator", "audit", "launch_post")
+
+radar_items = sa.Table(
+    "radar_items", metadata,
+    sa.Column("url", sa.Text, primary_key=True),
+    sa.Column("kind", sa.Text, nullable=False),
+    sa.Column("title", sa.Text),
+    sa.Column("summary", sa.Text),
+    sa.Column("source", sa.Text),
+    sa.Column("repo", sa.Text),
+    sa.Column("stars", sa.Integer),
+    sa.Column("chain_id", sa.Integer),
+    sa.Column("hook_address", sa.Text),
+    sa.Column("project_slug", sa.Text),
+    sa.Column("published_at", TS),
+    sa.Column("first_seen", TS, nullable=False),
+    sa.Column("last_seen", TS, nullable=False),
+    sa.Column("score", sa.Float),
+    sa.Index("radar_items_kind_published_idx", "kind", "published_at"),
+)
+# --- /radar ---
+
+# --- indexer ---
+# On-chain v4 indexer (python -m bait.indexer, db/migrations/0004_indexer.sql). Hooked pools from PoolManager Initialize
+# logs, per-pool daily swaps/wallets/volume from Swap logs (wallet = tx.from). All hex lowercase. pool_wallet_day is kept
+# 30 days; pool_daily_onchain.wallets = count of its pool_wallet_day rows. Cursors in indexer_state are the NEXT block to
+# scan (exclusive end of what is done). The nightly "onchain" step copies these into hooks/pools/pool_snapshots/pool_stats.
+v4_pools = sa.Table(
+    "v4_pools", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True),
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("hook_address", sa.Text, nullable=False),
+    sa.Column("currency0", sa.Text, nullable=False),
+    sa.Column("currency1", sa.Text, nullable=False),
+    sa.Column("fee", sa.Integer),
+    sa.Column("tick_spacing", sa.Integer),
+    sa.Column("sqrt_price_x96", sa.Text),
+    sa.Column("tick", sa.Integer),
+    sa.Column("block_number", sa.BigInteger),
+    sa.Column("block_time", TS),
+    sa.Column("tx_hash", sa.Text),
+    sa.Index("v4_pools_hook_idx", "chain_id", "hook_address"),
+)
+
+pool_daily_onchain = sa.Table(
+    "pool_daily_onchain", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True),
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("day", sa.Date, primary_key=True),
+    sa.Column("swaps", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("wallets", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("volume_usd", sa.Float, nullable=False, server_default="0"),
+    sa.Index("pool_daily_onchain_day_idx", "day"),
+)
+
+pool_wallet_day = sa.Table(
+    "pool_wallet_day", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True),
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("day", sa.Date, primary_key=True),
+    sa.Column("address", sa.Text, primary_key=True),
+    sa.Column("swaps", sa.Integer, nullable=False, server_default="0"),
+    sa.Index("pool_wallet_day_day_idx", "day"),
+)
+
+indexer_state = sa.Table(
+    "indexer_state", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("initialize_block", sa.BigInteger),
+    sa.Column("swap_block", sa.BigInteger),
+    sa.Column("head_block", sa.BigInteger),
+    sa.Column("backfilled", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("updated_at", TS),
+)
+# --- /indexer ---
+
 
 def make_engine(url: str | None = None) -> sa.Engine:
     url = url or database_url()

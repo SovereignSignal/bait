@@ -1,4 +1,4 @@
-// Mirrors db/migrations/0001_init.sql + 0002_pool_stats.sql (and pipeline/bait/db.py). Column
+// Mirrors db/migrations/0001..0005 (and pipeline/bait/db.py). Column
 // names are snake_case in Postgres, camelCase here. Keep the three in sync.
 import { pgTable, serial, text, integer, bigint, boolean, jsonb, timestamp, date, doublePrecision, primaryKey, index } from "drizzle-orm/pg-core";
 
@@ -206,3 +206,64 @@ export const digests = pgTable("digests", {
   weekOf: date("week_of").primaryKey(), // the Monday
   body: jsonb("body").$type<DigestBody>().notNull(),
 });
+
+// ---------- on-chain indexer (db/migrations/0004_indexer.sql) ----------
+
+/** Hooked pools from PoolManager Initialize logs. Any chain id (not only the ten). Hex lowercase. */
+export const v4Pools = pgTable(
+  "v4_pools",
+  {
+    chainId: integer("chain_id").notNull(),
+    poolId: text("pool_id").notNull(),
+    hookAddress: text("hook_address").notNull(),
+    currency0: text("currency0").notNull(), // 0x0 = native
+    currency1: text("currency1").notNull(),
+    fee: integer("fee"), // bit 0x800000 = dynamic
+    tickSpacing: integer("tick_spacing"),
+    sqrtPriceX96: text("sqrt_price_x96"),
+    tick: integer("tick"),
+    blockNumber: bigint("block_number", { mode: "number" }),
+    blockTime: timestamp("block_time", { withTimezone: true }),
+    txHash: text("tx_hash"),
+  },
+  (t) => [primaryKey({ columns: [t.chainId, t.poolId] }), index("v4_pools_hook_idx").on(t.chainId, t.hookAddress)],
+);
+
+/** Per pool per UTC day from Swap logs; volume_usd is approximate (current prices). */
+export const poolDailyOnchain = pgTable(
+  "pool_daily_onchain",
+  {
+    chainId: integer("chain_id").notNull(),
+    poolId: text("pool_id").notNull(),
+    day: date("day").notNull(),
+    swaps: integer("swaps").notNull().default(0),
+    wallets: integer("wallets").notNull().default(0),
+    volumeUsd: doublePrecision("volume_usd").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.chainId, t.poolId, t.day] }), index("pool_daily_onchain_day_idx").on(t.day)],
+);
+
+// ---------- dev radar (db/migrations/0005_radar.sql, pipeline step "radar") ----------
+
+/** One row per URL. kind: registry_submission | repo | hackathon | incubator | audit | launch_post.
+ *  score: Claude relevance for web results (rows < 0.5 are hidden); null for GitHub rows. */
+export const radarItems = pgTable(
+  "radar_items",
+  {
+    url: text("url").primaryKey(),
+    kind: text("kind").notNull(),
+    title: text("title"),
+    summary: text("summary"),
+    source: text("source"),
+    repo: text("repo"),
+    stars: integer("stars"),
+    chainId: integer("chain_id"),
+    hookAddress: text("hook_address"),
+    projectSlug: text("project_slug"),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    firstSeen: timestamp("first_seen", { withTimezone: true }).notNull(),
+    lastSeen: timestamp("last_seen", { withTimezone: true }).notNull(),
+    score: doublePrecision("score"),
+  },
+  (t) => [index("radar_items_kind_published_idx").on(t.kind, t.publishedAt)],
+);

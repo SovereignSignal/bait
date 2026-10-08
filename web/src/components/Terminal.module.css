@@ -62,7 +62,7 @@ select.pill option { background: var(--panel); color: var(--fg); }
 
 /* dock */
 .dock { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; justify-content: space-around; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: rgba(10,10,19,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
-.dock button, .dock a { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--fg3); font-weight: 600; min-width: 56px; }
+.dock button, .dock a { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--fg3); font-weight: 600; min-width: 52px; }
 .dock [aria-current="true"], .dock [aria-current="page"] { color: var(--fg); }
 
 /* tablet: trade panel moves under the detail */

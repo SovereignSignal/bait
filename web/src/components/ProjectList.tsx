@@ -7,9 +7,10 @@ import { CHAINS } from "@/lib/chains";
 import { applyTab, availableCategories, feedHref, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, usd } from "@/lib/format";
 import { categoryShort, chainNames, deltaText } from "@/lib/present";
-import { CATEGORY_SHORT, TABS, type FeedQuery, type RowView } from "@/lib/types";
+import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
 import { StarIcon } from "./Icons";
+import { JustLaunched } from "./JustLaunched";
 import { useTerminal } from "./TerminalProvider";
 import s from "./Terminal.module.css";
 
@@ -28,7 +29,9 @@ function Delta({ r }: { r: RowView }) {
 
 // ---------- list ----------
 
-export function ProjectList(props: { rows: RowView[]; selected?: string; now: number }) {
+type ListProps = { rows: RowView[]; selected?: string; now: number; launches?: LaunchView[]; launchesNow?: number };
+
+export function ProjectList(props: ListProps) {
   return <ProjectListView {...props} query={useFeedQuery()} />;
 }
 
@@ -37,7 +40,7 @@ export function ProjectListFallback(props: { rows: RowView[]; selected?: string;
   return <ProjectListView {...props} query={DEFAULT_QUERY} />;
 }
 
-function ProjectListView({ rows, selected, now, query }: { rows: RowView[]; selected?: string; now: number; query: FeedQuery }) {
+function ProjectListView({ rows, selected, now, query, launches, launchesNow }: ListProps & { query: FeedQuery }) {
   const t = useTerminal();
   const watching = t.watchOnly;
   const cats = availableCategories(rows);
@@ -96,6 +99,7 @@ function ProjectListView({ rows, selected, now, query }: { rows: RowView[]; sele
         </div>
       )}
       <div className={s.rows}>
+        {launches && query.tab === "new" && !watching && !searching && <JustLaunched initial={launches} now={launchesNow ?? now} chainId={query.chain} compact />}
         {list.length === 0 ? (
           <div className="empty">
             {watching ? "Star a project to keep it here. Saved on this device only." : rows.length ? "Nothing matches this filter." : "Nothing indexed yet."}

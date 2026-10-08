@@ -85,3 +85,55 @@ export function explorerTxUrl(chainId: ChainId, hash: string): string | null {
 export function knownChain(id: number): id is ChainId {
   return Object.prototype.hasOwnProperty.call(CHAINS, id);
 }
+
+// ---------- any chain id (launch feed, radar) ----------
+// The indexer and the registry see chains outside the ten above. Those get a name (when we know it), a neutral dot,
+// a native symbol for currency 0x0 and an explorer only where one is verified. Never index CHAINS with these ids.
+
+interface OtherChain {
+  name: string;
+  native: string;
+  explorer: string | null;
+}
+
+/** Hooklist chains Bait does not track (hook.chain -> chainId in hooklist.json, 2026-10). */
+export const OTHER_CHAINS: Record<number, OtherChain> = {
+  7777777: { name: "Zora", native: "ETH", explorer: "https://explorer.zora.energy" },
+  480: { name: "World Chain", native: "ETH", explorer: "https://worldscan.org" },
+  1868: { name: "Soneium", native: "ETH", explorer: "https://soneium.blockscout.com" },
+  42220: { name: "Celo", native: "CELO", explorer: "https://celoscan.io" },
+  143: { name: "Monad", native: "MON", explorer: null },
+  4326: { name: "MegaETH", native: "ETH", explorer: null },
+  196: { name: "X Layer", native: "OKB", explorer: null },
+  5042: { name: "Arc", native: "USDC", explorer: null },
+  4217: { name: "Tempo", native: "native", explorer: null },
+  59144: { name: "Linea", native: "ETH", explorer: "https://lineascan.build" },
+  81457: { name: "Blast", native: "ETH", explorer: "https://blastscan.io" },
+};
+
+const NATIVE: Record<number, string> = { 56: "BNB", 137: "POL", 43114: "AVAX" };
+
+export const NEUTRAL_DOT = "#676880";
+
+/** Name for any chain id: tracked, known-but-untracked, else "Chain 123". */
+export function anyChainName(id: number): string {
+  return (knownChain(id) ? CHAINS[id].name : OTHER_CHAINS[id]?.name) ?? `Chain ${id}`;
+}
+
+/** Chain dot color; neutral for chains Bait does not track. */
+export function anyChainColor(id: number): string {
+  return knownChain(id) ? CHAINS[id].color : NEUTRAL_DOT;
+}
+
+/** Symbol for currency 0x0 (the chain's native token). */
+export function nativeSymbol(id: number): string {
+  if (knownChain(id)) return NATIVE[id] ?? "ETH";
+  return OTHER_CHAINS[id]?.native ?? "native";
+}
+
+export function anyExplorerTxUrl(id: number, hash: string): string | null {
+  if (!hash) return null;
+  if (knownChain(id)) return explorerTxUrl(id, hash);
+  const base = OTHER_CHAINS[id]?.explorer;
+  return base ? `${base}/tx/${hash}` : null;
+}

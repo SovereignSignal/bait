@@ -79,3 +79,13 @@ export function LeadersIcon() {
     </svg>
   );
 }
+
+export function RadarIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.8" fill="none" />
+      <circle cx="10" cy="10" r="3.2" stroke="currentColor" strokeWidth="1.8" fill="none" />
+      <path d="M10 10l5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
