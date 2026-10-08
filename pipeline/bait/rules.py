@@ -111,6 +111,7 @@ def receipt_relevant(project_name: str, title: str, source: str) -> bool:
         return False
     flat = re.sub(r"[^a-z0-9]", "", (title or "").lower())
     words = (title or "").lower()
-    named = any(t in flat for t in toks)
+    # short tokens must start a word ("Hookr" must not match "hook research"); long ones may sit inside run-together text
+    named = any(re.search(rf"(^|[^a-z0-9]){re.escape(t)}", words) or (len(t) >= 8 and t in flat) for t in toks)
     defi = any(re.search(rf"(^|[^a-z0-9]){w}([^a-z0-9]|$)", words) for w in _DOMAIN_WORDS)
     return named and defi
