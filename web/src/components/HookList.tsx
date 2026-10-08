@@ -10,7 +10,7 @@ export function HookList({ hooks, total }: { hooks: HookView[]; total: number })
   const shown = hooks.slice(0, 12);
   return (
     <div className={s.list}>
-      {shown.map((h) => {
+      {shown.filter((h) => h.chainId in CHAINS).map((h) => {
         const c = CHAINS[h.chainId];
         const explorer = explorerAddressUrl(h.chainId, h.address);
         const flags = activeFlags(h.flags);

@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from ..db import as_utc, hooks, pool_snapshots, pools, project_daily, projects, upsert
+from ..db import as_utc, hooks, pool_snapshots, pool_stats, pools, project_daily, projects, upsert
 from ..rules import is_new, is_spam, score_trending
 from . import RunContext, log
 
@@ -59,16 +59,21 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
     # Keyless runs hand over per-pool (24h volume, unique wallets); wash-like projects are excluded like spam.
     wash: set[int] = set()
-    stats = ctx.extras.get("keyless_pool_stats") or {}
+    stats = ctx.extras.get("keyless_pool_stats") or {
+        (r.pool_id, r.chain_id): (r.vol_24h or 0.0, r.traders_24h or 0)
+        for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day))}
     if stats:
         from ..keyless import is_wash
+        # Judge each pool, then call a project wash-like when wash pools carry most of its 24h volume
+        # (summing wallets across a merged family would let two wash pools pass as one busy project).
         per: dict[int, list[float]] = {}
         for key, (vol24, traders) in stats.items():
             if key in pool_project:
-                t = per.setdefault(pool_project[key][0], [0.0, 0])
+                t = per.setdefault(pool_project[key][0], [0.0, 0.0])
                 t[0] += vol24
-                t[1] += traders
-        wash = {pid for pid, (v, n) in per.items() if is_wash(v, n)}
+                if is_wash(vol24, traders):
+                    t[1] += vol24
+        wash = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
     # A project's age is its earliest pool when known; on a first run every project was "first seen" today.

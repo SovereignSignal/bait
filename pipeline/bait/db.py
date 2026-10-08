@@ -87,6 +87,16 @@ pool_snapshots = sa.Table(
     sa.Index("pool_snapshots_day_idx", "day"),
 )
 
+# Per-pool 24h activity from the keyless source; scoring reads it for the wash rule.
+pool_stats = sa.Table(
+    "pool_stats", metadata,
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("chain_id", sa.Integer, primary_key=True),
+    sa.Column("day", sa.Date, primary_key=True),
+    sa.Column("vol_24h", sa.Float),
+    sa.Column("traders_24h", sa.Integer),
+)
+
 project_daily = sa.Table(
     "project_daily", metadata,
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), primary_key=True),
