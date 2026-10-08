@@ -26,9 +26,9 @@ def test_score_hand_computed(conn, ctx):
     assert d.vol_7d == 100_000 and d.vol_7d_prev == 50_000 and d.swaps_7d == 300
     assert d.tvl_usd == 5000 and d.pools_n == 1
     assert d.score_trending == pytest.approx(math.log1p(100_000) * 2.0)
-    assert d.is_new is True            # first_seen 3d ago and max pool TVL 5000 > $1k
+    assert d.is_new is False           # pipeline first saw it 3d ago, but its pool is 60d old: not new
     assert d.is_spam is False
-    assert out == {"projects": 1, "with_pools": 1, "new": 1, "trending": 1, "spam": 0, "wash": 0}
+    assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):
@@ -73,3 +73,15 @@ def test_score_spam_and_no_pools(conn, ctx):
     # idempotent: re-run replaces, no duplicate rows
     score.run(conn, ctx)
     assert conn.execute(sa.select(sa.func.count()).select_from(db.project_daily)).scalar_one() == 2
+
+
+
+def test_young_launch_is_new_not_trending(conn, ctx):
+    p = insert_project(conn, "L", first_seen=NOW - timedelta(days=1))
+    insert_hook(conn, "0xl", 8453, project_id=p, name="L")
+    insert_pool(conn, "0xlp", 8453, "0xl", created=NOW - timedelta(days=3))
+    insert_snap(conn, "0xlp", 8453, DAY - timedelta(days=1), 2000, 0, 0)
+    insert_snap(conn, "0xlp", 8453, DAY, 5000, 500_000, 900)
+    score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_new is True and d.score_trending == 0.0 and d.vol_7d == 500_000

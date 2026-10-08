@@ -26,11 +26,12 @@ def test_keyless_rows_feed_scoring_and_wash_is_excluded(conn, ctx, monkeypatch):
     monkeypatch.setattr(K, "resolve_hooks", lambda *a, **k: None)
     monkeypatch.setattr(K, "resolve_via_logs", lambda *a, **k: None)
     monkeypatch.setattr(K, "fetch_ohlcv", lambda *a, **k: None)
+    monkeypatch.setattr(K, "code_hashes", lambda *a, **k: {})
 
     out = snapshot.run(conn, ctx)
     assert out["keyless_pools"] == 2 and out["errors"] == 0
     hooks = {r.address: r for r in conn.execute(sa.select(db.hooks))}
-    assert hooks["0x" + "b" * 40].name.startswith("Unlisted hook")
+    assert hooks["0x" + "b" * 40].name is None          # unlisted: grouping names it (bytecode family or address)
     p = conn.execute(sa.select(db.pools).where(db.pools.c.pool_id == real["attrs"]["address"])).one()
     assert p.token0["symbol"] == "ETH" and p.token1["symbol"] == "USDC" and p.fee == 3000
 

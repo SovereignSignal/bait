@@ -6,7 +6,7 @@ snapshot we have, so a partial window never inflates vol_7d with all-time volume
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
@@ -71,13 +71,20 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         wash = {pid for pid, (v, n) in per.items() if is_wash(v, n)}
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
+    # A project's age is its earliest pool when known; on a first run every project was "first seen" today.
+    for (pid, created) in pool_project.values():
+        if created is not None and pid in first_seen:
+            c = datetime.combine(created, datetime.min.time(), tzinfo=timezone.utc)
+            if c < first_seen[pid]:
+                first_seen[pid] = c
     rows = []
     for pid, fs in first_seen.items():
         a = agg.get(pid, {"tvl": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx7": 0, "pools": 0, "max_tvl": 0.0, "stats": []})
         rows.append({
             "project_id": pid, "day": day, "tvl_usd": a["tvl"], "vol_7d": a["vol7"], "vol_7d_prev": a["vol7p"],
             "swaps_7d": a["tx7"], "pools_n": a["pools"],
-            "score_trending": 0.0 if pid in wash else score_trending(a["vol7"], a["vol7p"]),
+            "score_trending": 0.0 if (pid in wash or fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc))
+                              else score_trending(a["vol7"], a["vol7p"]),
             "is_new": pid not in wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
             "is_spam": pid in wash or is_spam(a["stats"]),
         })

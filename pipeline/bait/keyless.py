@@ -342,6 +342,22 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
         log(f"{CHAINS[net][1]}: Initialize-log fallback resolved {found}/{len(keys)} remaining pools")
 
 
+def code_hashes(http: Http, addrs_by_net: dict[str, set[str]]) -> dict[tuple[str, str], str]:
+    """sha1 of deployed bytecode per (net, address); clones of one implementation share it."""
+    out: dict[tuple[str, str], str] = {}
+    for net, addrs in addrs_by_net.items():
+        addrs = sorted(addrs)
+        rpc = CHAINS[net][3]
+        calls = [{"jsonrpc": "2.0", "id": i, "method": "eth_getCode", "params": [a, "latest"]} for i, a in enumerate(addrs)]
+        res = {r.get("id"): r.get("result") for r in http.rpc_batch(rpc, calls)}
+        for i, a in enumerate(addrs):
+            code = res.get(i)
+            if code and code != "0x":
+                out[(net, a)] = hashlib.sha1(code.encode()).hexdigest()
+        log(f"{CHAINS[net][1]}: bytecode for {sum(1 for a in addrs if (net, a) in out)}/{len(addrs)} hooks")
+    return out
+
+
 def fetch_ohlcv(http: Http, hooked: list[dict], cap: int) -> None:
     ranked = sorted(hooked, key=lambda p: -float(p["attrs"]["volume_usd"]["h24"] or 0))
     if len(ranked) > cap:
@@ -352,7 +368,7 @@ def fetch_ohlcv(http: Http, hooked: list[dict], cap: int) -> None:
         p["daily"] = sorted([(int(r[0]), float(r[5] or 0)) for r in lst])
 
 
-def build(pools: dict, hooklist: list[dict], now: datetime) -> dict:
+def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None = None) -> dict:
     reg = {}
     for h in hooklist:
         hk = h["hook"]
@@ -360,6 +376,13 @@ def build(pools: dict, hooklist: list[dict], now: datetime) -> dict:
 
     projects: dict[str, dict] = {}
     unresolved = sum(1 for p in pools.values() if not p.get("key"))
+    codes = codes or {}
+    # bytecode -> registry project norm, so a clone of a registered hook joins that project
+    code_to_norm: dict[str, str] = {}
+    for (net, addr), h in codes.items():
+        e = reg.get((addr, CHAINS[net][0]))
+        if e:
+            code_to_norm.setdefault(h, normalize_name(e["hook"]["name"]))
     for p in pools.values():
         pk = p.get("key")
         if not pk or int(pk["hooks"], 16) == 0:
@@ -369,6 +392,12 @@ def build(pools: dict, hooklist: list[dict], now: datetime) -> dict:
         entry = reg.get((hook_addr, cid))
         name = (entry or {}).get("hook", {}).get("name") or f"Unlisted hook {hook_addr[:6]}…{hook_addr[-4:]}"
         norm = normalize_name(name) if entry else hook_addr
+        if not entry:
+            ch = codes.get((p["net"], hook_addr))
+            if ch and ch in code_to_norm:
+                norm = code_to_norm[ch]          # clone of a registered hook
+            elif ch:
+                norm = "code:" + ch              # unlisted family: same bytecode, one card
         proj = projects.setdefault(norm, {"name": name, "norm": norm, "hooks": {}, "pools": [], "inRegistry": bool(entry)})
         if entry and not proj["inRegistry"]:
             proj.update(name=name, inRegistry=True)
@@ -395,6 +424,10 @@ def build(pools: dict, hooklist: list[dict], now: datetime) -> dict:
             "daily": [{"t": t, "v": round(v, 2)} for t, v in (daily or [])],
         })
 
+    for norm, pr in projects.items():
+        if not pr["inRegistry"] and len(pr["hooks"]) > 1:
+            first = sorted(a for a, _ in pr["hooks"])[0]
+            pr["name"] = f"Unlisted hook family {first[:6]}…"
     out = []
     for norm, pr in projects.items():
         pools_ = sorted(pr["pools"], key=lambda x: -x["vol24h"])
@@ -411,15 +444,17 @@ def build(pools: dict, hooklist: list[dict], now: datetime) -> dict:
         wash = is_wash(vol24, traders)
         created = [datetime.fromisoformat(x["createdAt"].replace("Z", "+00:00")) for x in pools_ if x.get("createdAt")]
         first_seen = min(created) if created else None
-        is_new = bool(first_seen and first_seen >= now - timedelta(days=7) and (tvl > 1_000 or sum(x["txs24h"] for x in pools_) >= 10))
-        score = 0.0 if (wash or not has_series) else score_trending(vol7, prev7)
+        young = bool(first_seen and first_seen >= now - timedelta(days=7))
+        is_new = young and (tvl > 1_000 or sum(x["txs24h"] for x in pools_) >= 10)
+        # Trending is week-over-week growth, so it needs a prior week; launches under 7 days old belong in New.
+        score = 0.0 if (wash or not has_series or young) else score_trending(vol7, prev7)
         chains = sorted({x["chain"] for x in pools_})
         days: dict[int, float] = defaultdict(float)
         for x in pools_:
             for d in x["daily"]:
                 days[d["t"]] += d["v"]
         out.append({
-            "slug": slugify(pr["name"] if pr["inRegistry"] else norm[:12]),
+            "slug": slugify(pr["name"]) if pr["inRegistry"] else ("unlisted-" + norm.replace("code:", "")[:10].removeprefix("0x")),
             "name": pr["name"], "inRegistry": pr["inRegistry"],
             "category": categorize(desc + " " + pr["name"], primary.get("flags", {}), primary.get("properties", {})),
             "whatLine": desc, "whyBlurb": "",
@@ -474,7 +509,11 @@ def main(argv=None) -> int:
     resolve_via_logs(http, pools)
     hooked = [p for p in pools.values() if p.get("key") and int(p["key"]["hooks"], 16) != 0]
     fetch_ohlcv(http, hooked, args.ohlcv_cap)
-    snap = build(pools, hooklist, now)
+    by_net: dict[str, set[str]] = defaultdict(set)
+    for p in hooked:
+        by_net[p["net"]].add(p["key"]["hooks"].lower())
+    codes = code_hashes(http, by_net)
+    snap = build(pools, hooklist, now, codes)
     snap.update({
         "generatedAt": now.isoformat(),
         "source": "GeckoTerminal pools + PositionManager.poolKeys over public RPC + Uniswap hooklist",
