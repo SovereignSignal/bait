@@ -23,9 +23,9 @@ export function Nav({ tab, chain, category }: { tab?: Tab; chain?: ChainId; cate
   const current = chain ? CHAINS[chain] : null;
   return (
     <header className={s.nav}>
-      <Link className={s.brand} href="/" aria-label="Hook Feed home">
+      <Link className={s.brand} href="/" aria-label="Bait home">
         <Mark />
-        Hook Feed
+        Bait
       </Link>
       <nav className={s.tabs} role="tablist" aria-label="Feed">
         {TABS.map(([id, label]) => (

@@ -28,8 +28,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return {
     title: p.name,
     description: p.whatLine,
-    openGraph: { title: `${p.name} · Hook Feed`, description: p.whatLine, type: "article" },
-    twitter: { card: "summary_large_image", title: `${p.name} · Hook Feed`, description: p.whatLine },
+    openGraph: { title: `${p.name} · Bait`, description: p.whatLine, type: "article" },
+    twitter: { card: "summary_large_image", title: `${p.name} · Bait`, description: p.whatLine },
   };
 }
 

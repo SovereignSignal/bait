@@ -1,4 +1,4 @@
-# hookfeed
+# Bait (repo: hookfeed)
 
 One feed for Uniswap v4 hooks: discover new hooks, see what people are using, understand why it
 matters, try it. Cards grouped by project, not by hook address.

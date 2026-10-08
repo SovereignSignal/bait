@@ -8,10 +8,10 @@ export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:30
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: { default: "Hook Feed", template: "%s · Hook Feed" },
+  title: { default: "Bait", template: "%s · Bait" },
   description: "One feed for Uniswap v4 hooks. Discover new hooks, see what people are using, understand why it matters, try it.",
   alternates: { types: { "application/rss+xml": "/feed.xml" } },
-  openGraph: { siteName: "Hook Feed", type: "website" },
+  openGraph: { siteName: "Bait", type: "website" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
