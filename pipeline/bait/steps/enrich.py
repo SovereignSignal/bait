@@ -19,6 +19,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     from ..costs import BudgetExceeded
     todo = select_candidates(conn)
     out["candidates"] = len(todo)
+    # Parallel tasks take ~1-2 minutes each; run them side by side (PARALLEL_CONCURRENCY, default 8) before the
+    # per-project loop. The whole batch is budget-checked up front, so concurrency cannot overshoot the budget.
+    par_results = _parallel_batch(conn, par, todo, out) if par is not None else {}
     for p in todo:
         hs = conn.execute(sa.select(hooks).where(hooks.c.project_id == p.id).order_by(hooks.c.verified_source.desc(), hooks.c.first_seen_at)).all()
         ctxd = {
@@ -31,11 +34,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         }
         enrichment = dict(p.enrichment or {})
         try:
-            if par is not None and "parallel" not in enrichment:
-                res = par.enrich(p.name, "; ".join(ctxd["hooklist_descriptions"])[:800])
-                if res:
-                    enrichment["parallel"] = res
-                    out["parallel"] += 1
+            if "parallel" not in enrichment and par_results.get(p.id):
+                enrichment["parallel"] = par_results[p.id]
+                out["parallel"] += 1
             if bs is not None and "source" not in enrichment:
                 src = _verified_source(bs, hs)
                 if src:
@@ -94,3 +95,44 @@ def _env_int(name: str, default: int) -> int:
         return int(os.environ.get(name, "") or default)
     except ValueError:
         return default
+
+
+def _parallel_batch(conn, par, todo, out) -> dict:
+    """Submit Parallel enrichment for every candidate that lacks it, concurrently; returns {project_id: result}."""
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ..costs import BudgetExceeded, parallel_usd
+    need = [p for p in todo if "parallel" not in (p.enrichment or {})]
+    if not need:
+        return {}
+    price = parallel_usd(getattr(par, "processor", "core"))
+    meter = getattr(par, "meter", None)
+    while need and meter is not None:          # shrink the batch until the whole of it fits the budget
+        try:
+            meter.check("parallel", price * len(need))
+            break
+        except BudgetExceeded:
+            out["budget_stop"] = 1
+            need = need[: len(need) // 2] if len(need) > 1 else []
+    if not need:
+        return {}
+    hints = {}
+    for p in need:
+        descs = sorted({r.description for r in conn.execute(sa.select(hooks.c.description).where(
+            hooks.c.project_id == p.id, hooks.c.description.is_not(None))) if r.description})[:5]
+        hints[p.id] = "; ".join(descs)[:800]
+
+    def one(p):
+        try:
+            return p.id, par.enrich(p.name, hints[p.id])
+        except Exception as e:  # one task failing must not lose the others
+            log.warning("enrich parallel project=%s failed: %s", p.slug, e)
+            return p.id, None
+
+    try:
+        workers = max(1, int(os.environ.get("PARALLEL_CONCURRENCY", "") or 8))
+    except ValueError:
+        workers = 8
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return {pid: res for pid, res in ex.map(one, need) if res}
