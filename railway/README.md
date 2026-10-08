@@ -1,4 +1,28 @@
-# Deploying hookfeed on Railway
+# Deploying Bait (repo: hookfeed) on Railway
+
+## Quick path from the GitHub repo
+
+1. New project, then **Deploy from GitHub repo** and pick `hookfeed`. Railway creates one service; rename it `web`.
+2. **+ New, Database, PostgreSQL.** Keep the service name `Postgres`.
+3. **+ New, GitHub repo** again for the same repo; rename it `pipeline`.
+4. For each code service: **Settings, Source, Root Directory** = `/web` or `/pipeline`, and **Settings, Config-as-code,
+   Railway Config File** = `/web/railway.json` or `/pipeline/railway.json` (absolute path; Railway does not resolve it
+   from the root directory).
+5. Variables on both services: `DATABASE_URL` = `${{Postgres.DATABASE_URL}}`. On `web` also
+   `NEXT_PUBLIC_SITE_URL` = `https://${{RAILWAY_PUBLIC_DOMAIN}}`, then **Settings, Networking, Generate Domain**.
+6. On `pipeline`, open **Deployments** and run it once by hand (cron is 06:00 UTC). No API keys are required: chains
+   without `GRAPH_API_KEY` use the keyless source (GeckoTerminal + public RPC), about 35 minutes per run because of the
+   GeckoTerminal free-tier limit. Tables are created on first run; no manual migration.
+7. Reload the web domain once the pipeline run finishes.
+
+Optional keys, each one switches on a layer: `GRAPH_API_KEY` (subgraph usage, faster nightly run), `ANTHROPIC_API_KEY`
+(what-it-does and why-it-matters blurbs), `EXA_API_KEY` (receipt links), `NANSEN_API_KEY` (smart money),
+`GITHUB_TOKEN`, `PARALLEL_API_KEY`. Tuning: `KEYLESS_PAGES` (4), `KEYLESS_OHLCV_CAP` (70), `KEYLESS_SPACING` (10 s),
+`KEYLESS=0` to disable the keyless source.
+
+The detailed reference follows.
+
+## Reference
 
 One Railway project, one environment (`production`), three services:
 

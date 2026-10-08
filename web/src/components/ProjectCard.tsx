@@ -93,7 +93,7 @@ export function ProjectCard({ p, variant = "feed", now = Date.now() }: { p: Proj
 
       <div className={s.well}>
         <div className={s.label}>Why people care</div>
-        <div className={s.body}>{p.whyBlurb}</div>
+        <div className={s.body}>{p.whyBlurb || fallbackWhy(p)}</div>
         <div className={s.signals}>
           {money !== null &&
             (money > 0 ? (
@@ -172,4 +172,18 @@ export function ProjectCard({ p, variant = "feed", now = Date.now() }: { p: Proj
       )}
     </article>
   );
+}
+
+
+/** Until the Claude pass writes a blurb, say what the numbers say. */
+function fallbackWhy(p: ProjectSummary): string {
+  const m = p.metrics;
+  const pools = `${m.poolsN.toLocaleString("en-US")} pool${m.poolsN === 1 ? "" : "s"}`;
+  const delta = m.vol7dPrev > 0 ? (m.vol7d / m.vol7dPrev - 1) * 100 : null;
+  const first =
+    delta !== null && Math.abs(delta) >= 15
+      ? `7-day volume is ${delta > 0 ? "up" : "down"} ${Math.abs(Math.round(delta))}% week over week across ${pools}.`
+      : `${usd(m.vol7d)} of volume in the last 7 days across ${pools}.`;
+  const chains = p.chains.length > 1 ? ` Live on ${p.chains.length} chains.` : "";
+  return first + chains;
 }

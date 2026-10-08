@@ -82,7 +82,7 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
     const p = usingFixtures() ? SAMPLE_PROJECTS.find((x) => x.slug === slug) : undefined;
     detail = p ? derive(p) : null;
   } else {
-    const rows = await loadFromDb(db, { slug, full: true });
+    const rows = await safe("getProject", () => loadFromDb(db, { slug, full: true }), []);
     detail = rows[0] ?? null;
   }
   if (!detail) return null;
@@ -99,7 +99,7 @@ export async function getAllSlugs(): Promise<string[]> {
 export async function getContext(): Promise<ContextStats> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_CONTEXT : EMPTY_CONTEXT;
-  return cached("getContext", () => contextFromDb(db));
+  return safe("getContext", () => cached("getContext", () => contextFromDb(db)), EMPTY_CONTEXT);
 }
 
 async function contextFromDb(db: Db): Promise<ContextStats> {
@@ -135,20 +135,30 @@ async function contextFromDb(db: Db): Promise<ContextStats> {
 export async function getDigest(week: string): Promise<DigestView | null> {
   const db = getDb();
   if (!db) return usingFixtures() ? (SAMPLE_DIGESTS.find((d) => d.week === week) ?? null) : null;
-  const [row] = await db.select().from(t.digests).where(eq(t.digests.weekOf, week)).limit(1);
+  const [row] = await safe("getDigest", () => db.select().from(t.digests).where(eq(t.digests.weekOf, week)).limit(1), []);
   return row ? toDigest(row) : null;
 }
 
 export async function listDigests(limit = 12): Promise<DigestView[]> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_DIGESTS.slice(0, limit) : [];
-  const rows = await db.select().from(t.digests).orderBy(desc(t.digests.weekOf)).limit(limit);
+  const rows = await safe("listDigests", () => db.select().from(t.digests).orderBy(desc(t.digests.weekOf)).limit(limit), []);
   return rows.map(toDigest);
 }
 
 /** Fixtures are opt-in (HOOKFEED_FIXTURES=1) so a build with no DATABASE_URL prerenders empty pages, never sample figures. */
 export function usingFixtures(): boolean {
   return !process.env.DATABASE_URL && process.env.HOOKFEED_FIXTURES === "1";
+}
+
+/** Before the pipeline's first run the tables may not exist yet; render empty rather than 500 (and fail the healthcheck). */
+async function safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    console.error(`[db] ${label} failed, serving empty:`, (e as Error).message);
+    return fallback;
+  }
 }
 
 const EMPTY_CONTEXT: ContextStats = { hooksTracked: 0, hooksDelta7d: 0, projects: 0, projectsNew7d: 0, tvlUsd: 0, tvlDelta7dPct: 0 };
@@ -170,7 +180,7 @@ function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
 async function loadAll(): Promise<ProjectDetail[]> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_PROJECTS.map(derive) : [];
-  return cached("loadAll", () => loadFromDb(db, { full: false }));
+  return safe("loadAll", () => cached("loadAll", () => loadFromDb(db, { full: false })), []);
 }
 
 /** digests.body (pipeline shape) -> DigestView. Title and intro are rendered here, not stored. */

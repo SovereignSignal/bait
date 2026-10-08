@@ -43,8 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         db.create_all(engine)
         log.info("init-db ok url=%s", engine.url.render_as_string(hide_password=True))
         return 0
-    if args.create_tables or engine.url.get_backend_name() == "sqlite":
-        db.create_all(engine)
+    db.create_all(engine)  # idempotent (checkfirst); a fresh Railway Postgres needs no manual migration
 
     steps = [s.strip() for s in args.steps.split(",") if s.strip()]
     bad = [s for s in steps if s not in STEPS]

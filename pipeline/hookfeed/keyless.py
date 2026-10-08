@@ -159,6 +159,10 @@ def decode_pool_key(result: str | None) -> dict | None:
     return {"currency0": c0, "currency1": c1, "fee": int(w[2], 16), "tickSpacing": int(w[3], 16), "hooks": "0x" + w[4][24:]}
 
 
+def is_wash(vol24h: float, traders24h: int) -> bool:
+    return vol24h >= WASH_MIN_VOL_24H and traders24h <= WASH_MAX_TRADERS_24H
+
+
 def categorize(text: str, flags: dict, props: dict) -> str:
     t = (text or "").lower()
     for cat, words in CATEGORY_KEYWORDS:
@@ -179,9 +183,11 @@ def flag_labels(flags: dict) -> list[str]:
     return [v for k, v in names.items() if flags.get(k)][:4]
 
 
-def collect(http: Http, pages: int) -> dict:
+def collect(http: Http, pages: int, new_pages: int = 2, nets: list[str] | None = None) -> dict:
     pools: dict[tuple[str, str], dict] = {}
     for net, (cid, cname, _, _) in CHAINS.items():
+        if nets is not None and net not in nets:
+            continue
         dexes = http.gt(f"/networks/{net}/dexes?page=1") or {}
         dex_ids = [d["id"] for d in dexes.get("data", []) if "uniswap" in d["id"] and "v4" in d["id"]]
         if not dex_ids:
@@ -202,7 +208,7 @@ def collect(http: Http, pages: int) -> dict:
                 if len(rows) < 20:
                     break
         # newest pools across all dexes, keep v4 ones
-        for page in range(1, 4):
+        for page in range(1, new_pages + 1):
             res = http.gt(f"/networks/{net}/new_pools?page={page}")
             for p in (res or {}).get("data", []):
                 dex_rel = (((p.get("relationships") or {}).get("dex") or {}).get("data") or {}).get("id", "")
@@ -364,7 +370,7 @@ def build(pools: dict, hooklist: list[dict], now: datetime) -> dict:
         has_series = any(x["vol7d"] is not None for x in pools_)
         tvl = sum(x["tvl"] for x in pools_)
         traders = sum(x["traders24h"] for x in pools_)
-        wash = vol24 >= WASH_MIN_VOL_24H and traders <= WASH_MAX_TRADERS_24H
+        wash = is_wash(vol24, traders)
         created = [datetime.fromisoformat(x["createdAt"].replace("Z", "+00:00")) for x in pools_ if x.get("createdAt")]
         first_seen = min(created) if created else None
         is_new = bool(first_seen and first_seen >= now - timedelta(days=7) and (tvl > 1_000 or sum(x["txs24h"] for x in pools_) >= 10))
@@ -413,6 +419,7 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--pages", type=int, default=10)
     ap.add_argument("--ohlcv-cap", type=int, default=160)
+    ap.add_argument("--new-pages", type=int, default=2)
     ap.add_argument("--hooklist-file")
     ap.add_argument("--cache-dir", help="cache GeckoTerminal responses here; reruns are instant")
     ap.add_argument("--spacing", type=float, default=6.5, help="seconds between GeckoTerminal calls")
@@ -424,7 +431,7 @@ def main(argv=None) -> int:
     else:
         hooklist = http._open(HOOKLIST)
     log(f"hooklist: {len(hooklist)} hooks")
-    pools = collect(http, args.pages)
+    pools = collect(http, args.pages, args.new_pages)
     resolve_hooks(http, pools)
     resolve_via_logs(http, pools)
     hooked = [p for p in pools.values() if p.get("key") and int(p["key"]["hooks"], 16) != 0]

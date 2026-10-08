@@ -28,7 +28,7 @@ def test_score_hand_computed(conn, ctx):
     assert d.score_trending == pytest.approx(math.log1p(100_000) * 2.0)
     assert d.is_new is True            # first_seen 3d ago and max pool TVL 5000 > $1k
     assert d.is_spam is False
-    assert out == {"projects": 1, "with_pools": 1, "new": 1, "trending": 1, "spam": 0}
+    assert out == {"projects": 1, "with_pools": 1, "new": 1, "trending": 1, "spam": 0, "wash": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):

@@ -22,6 +22,7 @@ class RunContext:
     signals_limit: int = 50                  # New ∪ Trending projects per night (step 6)
     now: datetime = field(default_factory=utcnow)
     clients: dict = field(default_factory=dict)   # name -> client instance or None (injected in tests)
+    extras: dict = field(default_factory=dict)    # step-to-step hand-offs within one run (e.g. keyless pool stats)
 
     def client(self, name: str):
         """Lazy from_env() per client; tests pre-populate ctx.clients."""

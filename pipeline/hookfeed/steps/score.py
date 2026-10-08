@@ -57,6 +57,19 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         a["tx7"] += max((cur.tx_count_cum or 0) - (b7.tx_count_cum or 0), 0)
         a["stats"].append((cur.tvl_usd or 0.0, cur.tx_count_cum or 0))
 
+    # Keyless runs hand over per-pool (24h volume, unique wallets); wash-like projects are excluded like spam.
+    wash: set[int] = set()
+    stats = ctx.extras.get("keyless_pool_stats") or {}
+    if stats:
+        from ..keyless import is_wash
+        per: dict[int, list[float]] = {}
+        for key, (vol24, traders) in stats.items():
+            if key in pool_project:
+                t = per.setdefault(pool_project[key][0], [0.0, 0])
+                t[0] += vol24
+                t[1] += traders
+        wash = {pid for pid, (v, n) in per.items() if is_wash(v, n)}
+
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
     rows = []
     for pid, fs in first_seen.items():
@@ -64,15 +77,15 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         rows.append({
             "project_id": pid, "day": day, "tvl_usd": a["tvl"], "vol_7d": a["vol7"], "vol_7d_prev": a["vol7p"],
             "swaps_7d": a["tx7"], "pools_n": a["pools"],
-            "score_trending": score_trending(a["vol7"], a["vol7p"]),
-            "is_new": is_new(fs, day, a["max_tvl"], a["tx7"]),
-            "is_spam": is_spam(a["stats"]),
+            "score_trending": 0.0 if pid in wash else score_trending(a["vol7"], a["vol7p"]),
+            "is_new": pid not in wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
+            "is_spam": pid in wash or is_spam(a["stats"]),
         })
     for i in range(0, len(rows), 500):
         upsert(conn, project_daily, rows[i:i + 500], keys=["project_id", "day"])
     trending = sum(1 for r in rows if r["score_trending"] > 0)
     return {"projects": len(rows), "with_pools": len(agg), "new": sum(r["is_new"] for r in rows),
-            "trending": trending, "spam": sum(r["is_spam"] for r in rows)}
+            "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(wash)}
 
 
 _D = timedelta(days=1)
