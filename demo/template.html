@@ -1,0 +1,301 @@
+<title>Bait</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: classic Uniswap interface. One centered 480px column of swap-widget cards under a pink radial glow. */
+:root{
+  --bg:#ffffff; --glow:rgba(255,0,122,.14);
+  --surface:#ffffff; --well:#f5f6fc; --well-hover:#eef0f8; --border:#d2d9ee;
+  --fg:#0d111c; --fg2:#7780a0; --fg3:#98a1c0;
+  --pink:#ff007a; --pink-hover:#e60069; --pink-tint:#fdeaf1; --pink-tint-fg:#d50066;
+  --green:#27ae60; --green-tint:#e6f7ed; --amber:#b8860b; --amber-tint:#fff6d6; --red:#d93025; --red-tint:#fdecea;
+  --shadow:0 4px 12px rgba(13,17,28,.04), 0 24px 48px -16px rgba(255,0,122,.12);
+  --overlay:rgba(13,17,28,.35);
+  --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0d111c; --glow:rgba(255,0,122,.22);
+  --surface:#191b1f; --well:#212429; --well-hover:#2c2f36; --border:#40444f;
+  --fg:#ffffff; --fg2:#c3c5cb; --fg3:#8f96ac;
+  --pink:#ff007a; --pink-hover:#ff3393; --pink-tint:#3a1322; --pink-tint-fg:#ff7cb8;
+  --green:#4ade80; --green-tint:#113222; --amber:#f5c542; --amber-tint:#3a2e0d; --red:#ff8a80; --red-tint:#3b1614;
+  --shadow:0 4px 12px rgba(0,0,0,.3), 0 24px 48px -16px rgba(255,0,122,.18);
+  --overlay:rgba(0,0,0,.55);
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0d111c; --glow:rgba(255,0,122,.22);
+  --surface:#191b1f; --well:#212429; --well-hover:#2c2f36; --border:#40444f;
+  --fg:#ffffff; --fg2:#c3c5cb; --fg3:#8f96ac;
+  --pink:#ff007a; --pink-hover:#ff3393; --pink-tint:#3a1322; --pink-tint-fg:#ff7cb8;
+  --green:#4ade80; --green-tint:#113222; --amber:#f5c542; --amber-tint:#3a2e0d; --red:#ff8a80; --red-tint:#3b1614;
+  --shadow:0 4px 12px rgba(0,0,0,.3), 0 24px 48px -16px rgba(255,0,122,.18);
+  --overlay:rgba(0,0,0,.55);
+  color-scheme:dark}
+
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased;position:relative;overflow-x:hidden}
+body::before{content:"";position:fixed;inset:-20vh 0 auto 0;height:70vh;pointer-events:none;z-index:0;background:radial-gradient(50% 50% at 50% 50%,var(--glow) 0%,rgba(255,0,122,0) 100%)}
+a{color:inherit;text-decoration:none}
+button,select{font:inherit;color:inherit}
+button{background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--pink);outline-offset:2px;border-radius:12px}
+.num{font-variant-numeric:tabular-nums}
+
+.nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;flex-wrap:wrap;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:-.01em}
+.tabs{display:flex;gap:2px;padding:4px;border-radius:16px;background:var(--surface);border:1px solid var(--border)}
+.tab{padding:7px 14px;border-radius:12px;font-weight:600;color:var(--fg2)}
+.tab:hover{color:var(--fg)}
+.tab[aria-selected="true"]{background:var(--well);color:var(--fg)}
+.nav-right{display:flex;gap:8px;align-items:center}
+.chainsel{appearance:none;-webkit-appearance:none;padding:7px 30px 7px 12px;border-radius:999px;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12'%3E%3Cpath d='M2 4l4 4 4-4' stroke='%237780a0' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 10px center;border:1px solid var(--border);font-weight:600;cursor:pointer}
+.cta-sm{padding:8px 14px;border-radius:999px;background:var(--pink-tint);color:var(--pink-tint-fg);font-weight:600}
+
+main{position:relative;z-index:1;max-width:480px;margin:0 auto;padding-inline:16px;padding-block:16px 64px;display:flex;flex-direction:column;gap:16px}
+.lead{display:flex;flex-direction:column;gap:4px;padding:8px 4px 0}
+.lead h1{margin:0;font-size:24px;font-weight:600;letter-spacing:-.01em;text-wrap:balance}
+.lead p{margin:0;color:var(--fg2)}
+.context{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.ctx{padding:12px 14px;border-radius:16px;background:var(--surface);border:1px solid var(--border);min-width:0}
+.ctx .k{font-size:12px;color:var(--fg2);font-weight:500}
+.ctx .v{font-size:18px;font-weight:600;margin-top:2px}
+.ctx .d{font-size:12px;color:var(--fg3);font-weight:500}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 2px}
+.chip{padding:6px 12px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--fg2);font-weight:600;font-size:13px}
+.chip[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.count{margin-left:auto;font-size:12px;color:var(--fg3)}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:12px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:4px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 8px 8px}
+.title{display:flex;align-items:center;gap:10px;min-width:0}
+.title > div{min-width:0}
+.logo{width:28px;height:28px;border-radius:50%;flex:0 0 auto;display:grid;place-items:center;font-weight:700;font-size:12px;color:#fff}
+.card-head h2{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-head h2 a:hover{color:var(--pink)}
+.cat{font-size:12px;color:var(--fg2);font-weight:500}
+.rank{font-size:12px;font-weight:600;padding:4px 8px;border-radius:999px;background:var(--well);color:var(--fg2);white-space:nowrap;flex:0 0 auto}
+.rank.new{background:var(--pink-tint);color:var(--pink-tint-fg)}
+.rank.hot{background:var(--amber-tint);color:var(--amber)}
+.rank.wash{background:var(--red-tint);color:var(--red)}
+.well{background:var(--well);border-radius:20px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.label{font-size:13px;color:var(--fg2);font-weight:500}
+.big{font-size:19px;line-height:1.35;font-weight:500;letter-spacing:-.01em;text-wrap:pretty;overflow-wrap:anywhere}
+.body{font-size:15px;line-height:1.5;text-wrap:pretty}
+.muted{color:var(--fg2)}
+.well-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.chains{display:flex;gap:6px;flex-wrap:wrap}
+.token{display:inline-flex;align-items:center;gap:6px;padding:4px 8px 4px 4px;border-radius:999px;background:var(--surface);border:1px solid var(--border);font-weight:600;font-size:13px}
+.token .dot{width:18px;height:18px;border-radius:50%;display:inline-block;border:1px solid rgba(0,0,0,.06)}
+.flags{font-size:12px;color:var(--fg3)}
+.arrow{display:flex;justify-content:center;height:0;position:relative;z-index:2}
+.arrow span{position:relative;top:-18px;width:36px;height:36px;border-radius:12px;background:var(--well);border:4px solid var(--surface);display:grid;place-items:center;color:var(--fg2)}
+.signals{display:flex;gap:6px;flex-wrap:wrap}
+.sig{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--surface);border:1px solid var(--border);color:var(--fg2)}
+.sig.on{background:var(--green-tint);color:var(--green);border-color:transparent}
+.sig.off{color:var(--fg3)}
+.sig.warn{background:var(--red-tint);color:var(--red);border-color:transparent}
+.rate{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px 6px;font-size:13px;color:var(--fg2)}
+.rate b{color:var(--fg);font-weight:500}
+.up{color:var(--green);font-weight:600}
+.down{color:var(--red);font-weight:600}
+details.det summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:4px;color:var(--fg2)}
+details.det summary::-webkit-details-marker{display:none}
+.grid2{display:grid;grid-template-columns:1fr auto;gap:6px 12px;padding:4px 12px 10px;font-size:13px;color:var(--fg2)}
+.grid2 b{color:var(--fg);font-weight:500;text-align:right;overflow-wrap:anywhere}
+.cta{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:16px;border-radius:20px;background:var(--pink);color:#fff;font-size:18px;font-weight:600;margin-top:4px}
+.cta:hover{background:var(--pink-hover)}
+.cta.alt{background:var(--well);color:var(--fg)}
+.cta.alt:hover{background:var(--well-hover)}
+.receipts{display:flex;flex-direction:column;gap:2px;padding:8px 8px 4px}
+.receipts a{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 4px;border-radius:8px;color:var(--fg2);font-size:13px;min-width:0}
+.receipts a:hover{background:var(--well)}
+.receipts a span:first-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.receipts .src{color:var(--fg3);flex:0 0 auto;font-size:12px}
+.empty{padding:32px 16px;text-align:center;color:var(--fg2);background:var(--surface);border:1px dashed var(--border);border-radius:24px}
+.more{align-self:center;padding:10px 18px;border-radius:999px;border:1px solid var(--border);background:var(--surface);font-weight:600;color:var(--fg2)}
+
+/* project view */
+.back{display:inline-flex;align-items:center;gap:6px;color:var(--fg2);font-weight:600;padding:4px}
+.block{background:var(--surface);border:1px solid var(--border);border-radius:24px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.block h3{margin:0;font-size:15px;font-weight:600}
+.tablewrap{overflow-x:auto;margin:0 -4px}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:420px}
+th{color:var(--fg2);font-weight:500;text-align:right;padding:6px 4px;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+td{padding:8px 4px;border-top:1px solid var(--border);text-align:right;white-space:nowrap}
+td a:hover{color:var(--pink)}
+.spark{width:100%;height:auto;display:block}
+.spark .axis{fill:var(--fg3);font-size:10px;font-family:var(--font)}
+.spark .area{fill:var(--pink-tint)}
+.spark .line{fill:none;stroke:var(--pink);stroke-width:2}
+.spark .grid{stroke:var(--border);stroke-width:1}
+.spark .dot{fill:var(--pink)}
+.hooklist{display:flex;flex-direction:column;gap:8px}
+.hookrow{display:flex;justify-content:space-between;gap:8px;font-size:13px;flex-wrap:wrap}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;overflow-wrap:anywhere}
+
+.foot{color:var(--fg3);font-size:12px;text-align:center;padding:8px 16px;line-height:1.6}
+.foot a{text-decoration:underline}
+@media (max-width:560px){.tabs{order:3;width:100%;justify-content:center}.context{grid-template-columns:1fr 1fr}.context .ctx:last-child{grid-column:1/-1}}
+@media (prefers-reduced-motion:no-preference){.card{transition:transform .15s ease}.card:hover{transform:translateY(-1px)}}
+</style>
+
+<header class="nav">
+  <a class="brand" href="#" aria-label="Bait home">
+    <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="14" fill="#ff007a"/><path d="M10 7v8a4 4 0 0 0 8 0v-1" stroke="#fff" stroke-width="2.6" stroke-linecap="round" fill="none"/><circle cx="18" cy="12" r="1.6" fill="#fff"/></svg>
+    Bait
+  </a>
+  <nav class="tabs" role="tablist" aria-label="Feed">
+    <button class="tab" role="tab" data-tab="new" aria-selected="false">New</button>
+    <button class="tab" role="tab" data-tab="trending" aria-selected="true">Trending</button>
+    <button class="tab" role="tab" data-tab="all" aria-selected="false">All</button>
+  </nav>
+  <div class="nav-right">
+    <label class="sr" for="chain" hidden>Chain</label>
+    <select id="chain" class="chainsel" aria-label="Chain"></select>
+    <a class="cta-sm" href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">Submit a hook</a>
+  </div>
+</header>
+
+<main id="app"></main>
+
+<script id="snapshot" type="application/json">__SNAPSHOT__</script>
+<script>
+(function(){
+var S = JSON.parse(document.getElementById('snapshot').textContent);
+var P = S.projects;
+var CHAIN = {ethereum:['Ethereum','#627eea'],base:['Base','#0052ff'],unichain:['Unichain','#f50db4'],robinhood:['Robinhood','#00c805'],bnb:['BNB','#f0b90b'],arbitrum:['Arbitrum','#28a0f0'],avalanche:['Avalanche','#e84142'],polygon:['Polygon','#8247e5'],ink:['Ink','#7132f5'],optimism:['Optimism','#ff0420']};
+var CAT = {'dynamic-fee':'Dynamic fee','launchpad':'Launchpad','orders':'Orders','lp-management':'LP management','compliance':'Compliance','oracle':'Oracle','mev-lvr':'MEV / LVR','lending':'Lending','gaming-nft':'Gaming / NFT','other':'Other'};
+var COPY = {
+  trending:['What’s moving in v4 hooks','Ranked by 7-day volume growth. Wash-traded pools are excluded.'],
+  'new':['Fresh bait','Hook projects whose first pool appeared in the last 7 days with real activity.'],
+  all:['Every hook with live usage','Grouped by project. Sorted by 7-day volume.']
+};
+var COLORS=['#5b2fff','#ff007a','#1b5e3f','#ff6a00','#2563eb','#0ea5e9','#c2410c','#7c3aed','#0f766e','#b45309'];
+var state={tab:'trending',chain:'',cat:'',limit:30};
+try{var saved=JSON.parse(localStorage.getItem('bait-ui')||'{}');if(saved.tab)state.tab=saved.tab;}catch(e){}
+
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function usd(n){if(n==null)return '—';var a=Math.abs(n);if(a>=1e9)return '$'+(n/1e9).toFixed(2)+'B';if(a>=1e6)return '$'+(n/1e6).toFixed(1)+'M';if(a>=1e3)return '$'+(n/1e3).toFixed(1)+'K';return '$'+Math.round(n)}
+function int(n){return (n||0).toLocaleString('en-US')}
+function hash(s){var h=0;for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))|0;return Math.abs(h)}
+function ago(iso){if(!iso)return '';var d=(Date.parse(S.generatedAt)-Date.parse(iso))/864e5;if(d<1)return 'today';if(d<2)return '1d';return Math.floor(d)+'d'}
+function pct(p){var m=p.metrics;if(!m.hasSeries||!m.vol7dPrev)return null;return (m.vol7d/m.vol7dPrev-1)*100}
+function chevron(){return '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>'}
+function explorer(chain,addr){var b={ethereum:'https://etherscan.io',base:'https://basescan.org',unichain:'https://uniscan.xyz',robinhood:'https://robinhoodchain.blockscout.com',bnb:'https://bscscan.com',arbitrum:'https://arbiscan.io',avalanche:'https://snowtrace.io',polygon:'https://polygonscan.com',ink:'https://explorer.inkonchain.com',optimism:'https://optimistic.etherscan.io'}[chain]||'https://etherscan.io';return b+'/address/'+addr}
+function poolLink(pool){return 'https://app.uniswap.org/explore/pools/'+pool.chain+'/'+pool.poolId}
+
+var trending = P.filter(function(p){return p.scoreTrending>0 && !p.wash}).sort(function(a,b){return b.scoreTrending-a.scoreTrending||b.metrics.tvl-a.metrics.tvl}).slice(0,20);
+var rank = {}; trending.forEach(function(p,i){rank[p.slug]=i+1});
+var bySlug = {}; P.forEach(function(p){bySlug[p.slug]=p});
+
+function why(p){
+  if(p.whyBlurb) return p.whyBlurb;
+  var m=p.metrics, bits=[];
+  var d=pct(p);
+  if(d!=null && Math.abs(d)>=15) bits.push('7-day volume is '+(d>0?'up ':'down ')+Math.abs(Math.round(d))+'% week over week across '+p.poolsN+' pool'+(p.poolsN>1?'s':'')+'.');
+  else bits.push(usd(m.vol7d)+' of volume in the last 7 days across '+p.poolsN+' pool'+(p.poolsN>1?'s':'')+'.');
+  if(m.traders24h) bits.push(int(m.traders24h)+' wallets traded it in the last 24 hours'+(p.chains.length>1?' on '+p.chains.length+' chains.':'.'));
+  if(p.wash) bits.push('Most of that volume comes from a handful of wallets, so treat it as wash trading until proven otherwise.');
+  return bits.join(' ');
+}
+
+function card(p, opts){
+  opts=opts||{};
+  var m=p.metrics, top=p.pools[0], d=pct(p);
+  var badge = p.wash ? '<span class="rank wash">⚠ Wash-like</span>'
+    : rank[p.slug] ? '<span class="rank hot">#'+rank[p.slug]+' trending</span>'
+    : p.isNew ? '<span class="rank new">New · '+ago(p.firstSeen)+'</span>' : '';
+  var chains = p.chains.map(function(c){var x=CHAIN[c]||[c,'#999'];return '<span class="token"><span class="dot" style="background:'+x[1]+'"></span>'+x[0]+'</span>'}).join('');
+  var flags = p.hooksN>20 ? int(p.hooksN)+' hooks · one per pool' : (p.flags.join(' · ') || (p.inRegistry?'':'not in registry'));
+  var what = p.whatLine ? esc(p.whatLine) : '<span class="muted">Not in the Uniswap hooklist registry yet, so there is no description. Hook contract '+esc(p.hooks[0].address.slice(0,10))+'…</span>';
+  var sig = [];
+  if(p.wash) sig.push('<span class="sig warn">⚠ '+int(m.traders24h)+' wallets 24h</span>');
+  else if(m.traders24h) sig.push('<span class="sig on">● '+int(m.traders24h)+' wallets 24h</span>');
+  sig.push(p.routable===true ? '<span class="sig on">● Routes in Uniswap app</span>' : p.routable===false ? '<span class="sig off">○ Not routable in app</span>' : '<span class="sig off">○ Routing unknown</span>');
+  sig.push(p.audited ? '<span class="sig on">✓ Audit linked</span>' : '<span class="sig off">○ No audit linked</span>');
+  if(p.upgradeable) sig.push('<span class="sig off">↻ Upgradeable</span>');
+  var delta = d==null ? (m.hasSeries?'':'<span class="muted">24h only</span>') : '<span class="'+(d>=0?'up':'down')+'">'+(d>=0?'+':'')+Math.round(d)+'%</span>';
+  var cta = p.routable===true
+    ? '<a class="cta" href="'+poolLink(top)+'" target="_blank" rel="noopener">Swap on Uniswap <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></a>'
+    : '<a class="cta alt" href="'+poolLink(top)+'" target="_blank" rel="noopener">View top pool</a>';
+  var rec = (p.receipts||[]).slice(0,2).map(function(r){return '<a href="'+esc(r.url)+'" target="_blank" rel="noopener"><span>'+esc(r.title)+'</span><span class="src">'+esc(r.source)+'</span></a>'}).join('');
+  var name = opts.header ? esc(p.name) : '<a href="#p-'+esc(p.slug)+'">'+esc(p.name)+'</a>';
+  return '<article class="card">'+
+    '<div class="card-head"><div class="title"><span class="logo" style="background:'+COLORS[hash(p.slug)%COLORS.length]+'">'+esc(p.name.replace(/^Unlisted hook /,'').charAt(0).toUpperCase())+'</span><div><h2>'+name+'</h2><div class="cat">'+esc(CAT[p.category]||'Other')+(p.hooksN>1?' · '+int(p.hooksN)+' hooks':'')+'</div></div></div>'+badge+'</div>'+
+    '<div class="well"><div class="label">What it does</div><div class="big">'+what+'</div><div class="well-foot"><div class="chains">'+chains+'</div><span class="flags">'+esc(flags)+'</span></div></div>'+
+    '<div class="arrow"><span><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v12M3 9l5 5 5-5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span></div>'+
+    '<div class="well"><div class="label">Why people care</div><div class="body">'+esc(why(p))+'</div><div class="signals">'+sig.join('')+'</div></div>'+
+    '<details class="det"><summary class="rate" style="display:flex;width:100%"><span>7d volume <b class="num">'+usd(m.vol7d)+'</b> '+delta+'</span><span style="display:inline-flex;align-items:center;gap:4px">Details '+chevron()+'</span></summary>'+
+      '<div class="grid2"><span>TVL in tracked pools</span><b class="num">'+usd(m.tvl)+'</b><span>24h volume</span><b class="num">'+usd(m.vol24h)+'</b><span>Pools tracked</span><b class="num">'+int(p.poolsN)+'</b><span>Swaps 24h</span><b class="num">'+int(m.txs24h)+'</b><span>Hooks under this project</span><b class="num">'+int(p.hooksN)+'</b><span>Top pool</span><b>'+esc(top.name)+' · '+esc((CHAIN[top.chain]||[top.chain])[0])+'</b><span>Source</span><b>'+(p.verified?'Verified':'Unverified')+(p.audited?' · audit linked':'')+'</b></div></details>'+
+    cta+(rec?'<div class="receipts">'+rec+'</div>':'')+
+  '</article>';
+}
+
+function rows(){
+  var list;
+  if(state.tab==='trending') list=trending.slice();
+  else if(state.tab==='new') list=P.filter(function(p){return p.isNew}).sort(function(a,b){return Date.parse(b.firstSeen)-Date.parse(a.firstSeen)});
+  else list=P.slice().sort(function(a,b){return b.metrics.vol7d-a.metrics.vol7d});
+  return list.filter(function(p){return (!state.chain||p.chains.indexOf(state.chain)>=0)&&(!state.cat||p.category===state.cat)});
+}
+
+function feed(){
+  var list=rows(), tvl=P.reduce(function(s,p){return s+p.metrics.tvl},0), vol=P.reduce(function(s,p){return s+p.metrics.vol7d},0);
+  var cats={}; P.forEach(function(p){cats[p.category]=(cats[p.category]||0)+1});
+  var chips=['<button class="chip" data-cat="" aria-pressed="'+(!state.cat)+'">All</button>'].concat(Object.keys(CAT).filter(function(c){return cats[c]}).map(function(c){return '<button class="chip" data-cat="'+c+'" aria-pressed="'+(state.cat===c)+'">'+CAT[c]+'</button>'})).join('');
+  var body = list.length ? list.slice(0,state.limit).map(function(p){return card(p)}).join('') + (list.length>state.limit?'<button class="more" id="more">Show more ('+(list.length-state.limit)+')</button>':'')
+    : '<div class="empty">Nothing here for this filter yet.</div>';
+  return '<div class="lead"><h1>'+COPY[state.tab][0]+'</h1><p>'+COPY[state.tab][1]+'</p></div>'+
+    '<section class="context" aria-label="Context"><div class="ctx"><div class="k">Hook projects live</div><div class="v num">'+int(P.length)+'</div><div class="d">'+int(S.registryHooks)+' hooks in registry</div></div>'+
+    '<div class="ctx"><div class="k">7d volume, hooked pools</div><div class="v num">'+usd(vol)+'</div><div class="d">'+int(S.hookedPools)+' pools tracked</div></div>'+
+    '<div class="ctx"><div class="k">TVL, hooked pools</div><div class="v num">'+usd(tvl)+'</div><div class="d">'+Object.keys(CHAIN).length+' chains</div></div></section>'+
+    '<div class="filters" role="group" aria-label="Category">'+chips+'<span class="count">'+list.length+' projects</span></div>'+body+footer();
+}
+
+function spark(series){
+  if(!series||series.length<2) return '';
+  var W=440,H=120,pl=8,pr=8,pt=10,pb=22, max=Math.max.apply(null,series.map(function(d){return d.v}))||1;
+  var x=function(i){return pl+i*(W-pl-pr)/(series.length-1)}, y=function(v){return pt+(H-pt-pb)*(1-v/max)};
+  var pts=series.map(function(d,i){return x(i).toFixed(1)+','+y(d.v).toFixed(1)}).join(' ');
+  var area='M'+x(0)+','+(H-pb)+' L'+pts.split(' ').join(' L')+' L'+x(series.length-1)+','+(H-pb)+' Z';
+  var f=function(t){var d=new Date(t*1000);return (d.getUTCMonth()+1)+'/'+d.getUTCDate()};
+  var last=series[series.length-1];
+  return '<svg class="spark" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Daily volume, last '+series.length+' days, peak '+usd(max)+'">'+
+    '<line class="grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+pt+'" y2="'+pt+'"/><line class="grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+(H-pb)+'" y2="'+(H-pb)+'"/>'+
+    '<path class="area" d="'+area+'"/><polyline class="line" points="'+pts+'"/><circle class="dot" cx="'+x(series.length-1)+'" cy="'+y(last.v)+'" r="3.5"/>'+
+    '<text class="axis" x="'+pl+'" y="'+(H-6)+'">'+f(series[0].t)+'</text><text class="axis" x="'+(W-pr)+'" y="'+(H-6)+'" text-anchor="end">'+f(last.t)+'</text>'+
+    '<text class="axis" x="'+(W-pr)+'" y="'+(pt-1)+'" text-anchor="end" dy="10">peak '+usd(max)+'</text></svg>';
+}
+
+function project(p){
+  var pools=p.pools.map(function(x){return '<tr><td><a href="'+poolLink(x)+'" target="_blank" rel="noopener">'+esc(x.name)+'</a></td><td>'+esc((CHAIN[x.chain]||[x.chain])[0])+'</td><td class="num">'+usd(x.tvl)+'</td><td class="num">'+usd(x.vol24h)+'</td><td class="num">'+int(x.traders24h)+'</td><td>'+(x.dynamicFee?'dynamic':(x.feeBps!=null?(x.feeBps/100).toFixed(2)+'%':''))+'</td></tr>'}).join('');
+  var hooks=p.hooks.slice(0,12).map(function(h){return '<div class="hookrow"><a class="mono" href="'+explorer(h.chain,h.address)+'" target="_blank" rel="noopener">'+esc(h.address)+'</a><span class="muted">'+esc((CHAIN[h.chain]||[h.chain])[0])+(h.flags.length?' · '+esc(h.flags.join(', ')):'')+(h.auditUrl?' · <a href="'+esc(h.auditUrl)+'" target="_blank" rel="noopener">audit</a>':'')+'</span></div>'}).join('') + (p.hooks.length>12?'<div class="muted">+'+int(p.hooks.length-12)+' more</div>':'');
+  return '<a class="back" href="#">← Back to feed</a>'+card(p,{header:true})+
+    (p.series&&p.series.length>1?'<section class="block"><h3>Daily volume</h3>'+spark(p.series)+'</section>':'')+
+    '<section class="block"><h3>Pools</h3><div class="tablewrap"><table><thead><tr><th>Pool</th><th>Chain</th><th>TVL</th><th>24h vol</th><th>Wallets</th><th>Fee</th></tr></thead><tbody>'+pools+'</tbody></table></div>'+(p.poolsN>p.pools.length?'<div class="muted">Top '+p.pools.length+' of '+int(p.poolsN)+' tracked pools.</div>':'')+'</section>'+
+    '<section class="block"><h3>Hook contracts</h3><div class="hooklist">'+hooks+'</div></section>'+footer();
+}
+
+function footer(){
+  var t=new Date(S.generatedAt);
+  return '<p class="foot">Hooks are third-party code in the swap path. Nothing here is audited by Bait. Flags are as published in the <a href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">hooklist registry</a>. The routable badge is a rule, not a guarantee.<br>Snapshot '+t.toISOString().slice(0,16).replace('T',' ')+' UTC · '+esc(S.source)+'. Personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</p>';
+}
+
+var app=document.getElementById('app');
+function render(){
+  var h=location.hash.replace(/^#/,'');
+  document.querySelectorAll('.tab').forEach(function(b){b.setAttribute('aria-selected',String(b.dataset.tab===state.tab))});
+  if(h.indexOf('p-')===0 && bySlug[h.slice(2)]){app.innerHTML=project(bySlug[h.slice(2)]);window.scrollTo(0,0);return}
+  app.innerHTML=feed();
+  app.querySelectorAll('.chip').forEach(function(c){c.onclick=function(){state.cat=c.dataset.cat;state.limit=30;render()}});
+  var more=document.getElementById('more'); if(more) more.onclick=function(){state.limit+=30;render()};
+}
+var sel=document.getElementById('chain');
+var counts={}; P.forEach(function(p){p.chains.forEach(function(c){counts[c]=(counts[c]||0)+1})});
+sel.innerHTML='<option value="">All chains</option>'+Object.keys(CHAIN).filter(function(c){return counts[c]}).map(function(c){return '<option value="'+c+'">'+CHAIN[c][0]+' ('+counts[c]+')</option>'}).join('');
+sel.onchange=function(){state.chain=sel.value;state.limit=30;if(location.hash)location.hash='';render()};
+document.querySelectorAll('.tab').forEach(function(b){b.onclick=function(){state.tab=b.dataset.tab;state.limit=30;try{localStorage.setItem('bait-ui',JSON.stringify({tab:state.tab}))}catch(e){};if(location.hash&&location.hash!=='#'){location.hash=''}render()}});
+window.addEventListener('hashchange',render);
+render();
+})();
+</script>

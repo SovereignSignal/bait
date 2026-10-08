@@ -5,7 +5,7 @@ import { int, pctDelta, usd } from "@/lib/format";
 import { categoryLine, sourceLine } from "@/components/ProjectCard";
 
 export const revalidate = 3600;
-export const alt = "Hook Feed project card";
+export const alt = "Bait project card";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -63,7 +63,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
   if (!p) {
     return new ImageResponse(
       <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: T.bg, color: T.fg, fontFamily: font, fontSize: 48 }}>
-        Hook Feed
+        Bait
       </div>,
       { ...size, fonts },
     );
@@ -106,7 +106,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
             {badge && <div style={{ display: "flex", fontSize: 20, padding: "6px 14px", borderRadius: 999, background: badge.bg, color: badge.fg }}>{badge.text}</div>}
             <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 22, color: T.fg }}>
               <div style={{ width: 28, height: 28, borderRadius: 14, background: T.pink }} />
-              Hook Feed
+              Bait
             </div>
           </div>
         </div>

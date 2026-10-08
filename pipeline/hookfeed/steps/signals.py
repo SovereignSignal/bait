@@ -48,7 +48,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if claude is not None and _needs_blurb(conn, p):
             try:
                 blurb = claude.why_blurb(_blurb_ctx(conn, p, daily))
-                conn.execute(sa.update(projects).values(why_blurb=blurb.strip()[:400], blurb_at=utcnow()).where(projects.c.id == p.id))
+                conn.execute(sa.update(projects).values(why_blurb=blurb.strip()[:400], blurb_at=ctx.now).where(projects.c.id == p.id))
                 out["blurbs"] += 1
             except Exception as e:
                 out["errors"] += 1

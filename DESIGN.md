@@ -167,3 +167,17 @@ Rules
 - No hero. The first card is the hero.
 - Project pages reuse the card as the header and add the pools table and history below it.
 - OG image = the card at 1200x630.
+
+## Update 2026-10-08: name, keyless source, wash rule
+
+- Product name is **Bait**. Repo and package names stay `hookfeed`.
+- **Keyless source** (`pipeline/hookfeed/keyless.py`): GeckoTerminal v4 pools per chain (top by 24h volume, top by
+  24h swaps, newest) give poolId, volume, reserve, unique wallets and creation time. The hook is resolved on-chain
+  with `PositionManager.poolKeys(bytes25)` over public RPCs (addresses from developers.uniswap.org v4 deployments).
+  Covers Robinhood chain and Ink, which have no public v4 subgraph, so it is also the planned fallback for those two.
+  Limits: GeckoTerminal free tier throttles to roughly 10 calls/min; pools never touched by PositionManager cannot be
+  resolved and are counted as unresolved; 7-day series only for the top hooked pools (OHLCV cap, logged).
+- **Wash rule:** 24h volume >= $250K from <= 25 unique wallets marks a project wash-like. Excluded from Trending,
+  shown in All with a red badge. First real run found a Base pool doing $160M/day from 5 wallets.
+- **Demo:** `demo/build.py` bakes a snapshot into `demo/template.html` (same tokens and card anatomy as the web app)
+  for review as a single page. The Next.js app on Railway remains the product.

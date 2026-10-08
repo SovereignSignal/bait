@@ -1,6 +1,6 @@
 # hookfeed / web
 
-Next.js App Router frontend for Hook Feed: one feed for Uniswap v4 hooks, grouped by project. Spec: `../DESIGN.md`. Visual spec: `../mock.html`.
+Next.js App Router frontend for Bait: one feed for Uniswap v4 hooks, grouped by project. Spec: `../DESIGN.md`. Visual spec: `../mock.html`.
 
 ## Run
 

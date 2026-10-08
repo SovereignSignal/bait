@@ -22,7 +22,7 @@ type Search = { tab?: string; chain?: string; category?: string };
 export async function generateMetadata({ searchParams }: { searchParams: Promise<Search> }): Promise<Metadata> {
   const sp = await searchParams;
   const tab = parseTab(sp.tab);
-  return { title: tab === "trending" ? "Hook Feed" : `${TAB_COPY[tab].h1}`, description: TAB_COPY[tab].p };
+  return { title: tab === "trending" ? "Bait" : `${TAB_COPY[tab].h1}`, description: TAB_COPY[tab].p };
 }
 
 function parseTab(s: string | undefined): Tab {

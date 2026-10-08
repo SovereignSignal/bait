@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Footer } from "@/components/Footer";
 import { Nav } from "@/components/Nav";
 
-export const metadata: Metadata = { title: "About", description: "How Hook Feed finds, groups, scores and labels Uniswap v4 hooks." };
+export const metadata: Metadata = { title: "About", description: "How Bait finds, groups, scores and labels Uniswap v4 hooks." };
 
 export default function AboutPage() {
   return (
@@ -61,7 +61,7 @@ export default function AboutPage() {
           <h2>Routable</h2>
           <p>
             The Uniswap app only routes through hooked pools whose hook is allowlisted. Per Uniswap&apos;s published rule, a hook is allowed automatically unless its address
-            starts with <code>0x91</code>, or it uses <code>beforeSwapReturnsDelta</code>, <code>afterSwapReturnsDelta</code> or a dynamic fee. Hook Feed computes this from the
+            starts with <code>0x91</code>, or it uses <code>beforeSwapReturnsDelta</code>, <code>afterSwapReturnsDelta</code> or a dynamic fee. Bait computes this from the
             published flags and also treats <code>afterAddLiquidityReturnsDelta</code> and <code>afterRemoveLiquidityReturnsDelta</code> as blocking, which is stricter than the
             published rule. Hooks that Uniswap Labs reviewed and allowlisted by hand will still show as not routable here, because no public list of manual approvals exists.
             The badge is a rule, not a guarantee. The pink &quot;Swap on Uniswap&quot; button only appears when the rule says a pool should route.
@@ -76,7 +76,7 @@ export default function AboutPage() {
             <li>&quot;Audited&quot; means an audit link is published. It is not a statement about the audit&apos;s scope or findings.</li>
             <li>Smart-money counts are Nansen labels on addresses that interacted with a project&apos;s top pools. They are not investment signals.</li>
             <li>Figures are derived from public subgraphs and can lag or be wrong when a subgraph halts. Metrics are USD estimates.</li>
-            <li>Hook Feed is a personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</li>
+            <li>Bait is a personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</li>
           </ul>
         </section>
         <Footer />
