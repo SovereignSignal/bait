@@ -1,0 +1,74 @@
+[
+  {
+    "project": "StablePairHook",
+    "title": "Uniswap向Curve宣戰：StablePair Hook要重塑穩定幣交易市場？ - BlockBeats",
+    "source": "tw.theblockbeats.news",
+    "keep": true
+  },
+  {
+    "project": "StablePairHook",
+    "title": "Uniswap Labs lên kế hoạch phát triển hook thưởng OUSD cho pool v4 - TokenPost",
+    "source": "vn.tokenpost.com",
+    "keep": false
+  },
+  {
+    "project": "StablePairHook",
+    "title": "젠슨 황, AI의 다음 격전지는 사이버 보안… NVIDIA CEO의 예측",
+    "source": "hosu-news.com",
+    "keep": false
+  },
+  {
+    "project": "Angstrom",
+    "title": "Invincible Vs developers provide a detailed overview of Angstrom Levy's fighting style",
+    "source": "eventhubs.com",
+    "keep": false
+  },
+  {
+    "project": "Angstrom",
+    "title": "Kyle Hall",
+    "source": "linkedin.com",
+    "keep": false
+  },
+  {
+    "project": "Angstrom",
+    "title": "Angstrom brings MEV protection to Uniswap v4 pools",
+    "source": "theblock.co",
+    "keep": true
+  },
+  {
+    "project": "FablesRampETH",
+    "title": "Uniswap v4 Hooks: How Customizable Liquidity Pools Reshape DeFi Payment Flows | Spark",
+    "source": "spark.money",
+    "keep": false
+  },
+  {
+    "project": "FablesRampETH",
+    "title": "Fables: the deepest ETH/USDG pool on Robinhood Chain",
+    "source": "x.com",
+    "keep": true
+  },
+  {
+    "project": "Unlisted hook 0x16f2…3a80",
+    "title": "New Uniswap v4 hook launched",
+    "source": "x.com",
+    "keep": false
+  },
+  {
+    "project": "Claus",
+    "title": "Claus token hook adds FOMO pool and buyback fees",
+    "source": "claus.si",
+    "keep": true
+  },
+  {
+    "project": "Hot",
+    "title": "Hot hook ships",
+    "source": "blog.example.com",
+    "keep": true
+  },
+  {
+    "project": "Fresh",
+    "title": "Hot hook ships",
+    "source": "blog.example.com",
+    "keep": false
+  }
+]

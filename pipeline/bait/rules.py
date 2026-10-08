@@ -79,3 +79,38 @@ def is_spam(pool_stats: list[tuple[float, int]]) -> bool:
 def is_alive(last_commit_at: datetime | None, latest_exa_hit: datetime | None, now: datetime) -> bool:
     cutoff = now - timedelta(days=30)
     return bool((last_commit_at and last_commit_at >= cutoff) or (latest_exa_hit and latest_exa_hit >= cutoff))
+
+
+# --- receipt relevance (mirrors web/src/lib/relevance.ts; shared cases in fixtures/relevance_cases.json) ---
+_DOMAIN_WORDS = ("uniswap", "hook", "v4", "liquidity", "swap", "pool", "defi", "amm", "dex", "lp", "mev", "fee")
+_BLOCKED_HOSTS = ("linkedin.com", "wikipedia.org", "netlify.app", "facebook.com", "instagram.com", "tiktok.com")
+
+
+def name_tokens(project_name: str) -> list[str]:
+    if re.match(r"(?i)^unlisted hook", project_name or ""):
+        return []
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", project_name or "")
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", spaced) if w]
+    norm = re.sub(r"hooks?$", "", re.sub(r"[^a-z0-9]", "", (project_name or "").lower()))
+    first = words[0].lower() if words else ""
+    toks: list[str] = []
+    if len(norm) >= 3:
+        toks.append(norm)
+    if len(first) >= 4 and first not in ("uniswap", "hook", "dynamic", "static") and first not in toks:
+        toks.append(first)
+    return toks
+
+
+def receipt_relevant(project_name: str, title: str, source: str) -> bool:
+    """Keep a link only when its title names the project AND reads as DeFi/Uniswap (Exa matches on names alone)."""
+    toks = name_tokens(project_name)
+    if not toks:
+        return False
+    host = (source or "").lower()
+    if any(host == b or host.endswith("." + b) for b in _BLOCKED_HOSTS):
+        return False
+    flat = re.sub(r"[^a-z0-9]", "", (title or "").lower())
+    words = (title or "").lower()
+    named = any(t in flat for t in toks)
+    defi = any(re.search(rf"(^|[^a-z0-9]){w}([^a-z0-9]|$)", words) for w in _DOMAIN_WORDS)
+    return named and defi
