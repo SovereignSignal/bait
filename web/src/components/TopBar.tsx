@@ -68,6 +68,9 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
         </span>
       </label>
       <nav className={s.links} aria-label="Pages">
+        <Link href="/building" aria-current={pathname === "/building" ? "page" : undefined}>
+          Building
+        </Link>
         <Link href="/leaders" aria-current={pathname === "/leaders" ? "page" : undefined}>
           Leaders
         </Link>

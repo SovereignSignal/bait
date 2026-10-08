@@ -37,3 +37,41 @@ Optional keys, each one switches on a layer: `GRAPH_API_KEY` (subgraph usage, fa
 (what-it-does and why-it-matters blurbs), `EXA_API_KEY` (receipt links), `NANSEN_API_KEY` (smart money),
 `GITHUB_TOKEN`, `PARALLEL_API_KEY`. Tuning: `KEYLESS_PAGES` (4), `KEYLESS_OHLCV_CAP` (70), `KEYLESS_SPACING` (10 s),
 `KEYLESS=0` to disable the keyless source.
+
+## Adding the `indexer` service (on-chain v4 indexer)
+
+Not created yet. `python -m bait.indexer` is a long-running process (one loop every `INDEXER_INTERVAL`, 60 s) that
+writes `v4_pools`, `pool_daily_onchain`, `pool_wallet_day` and `indexer_state`; the nightly `pipeline` run copies them
+into the feed tables (step `onchain`). Same image as `pipeline`, different start command, always on.
+
+| Setting | Value |
+|---|---|
+| Source | repo `SovereignSignal/bait`, branch `main` |
+| Root Directory | `/pipeline` |
+| Dockerfile | `Dockerfile` (the pipeline one) |
+| Start command | `python -m bait.indexer` (overrides the Dockerfile `CMD python -m bait run`) |
+| Restart policy | `ALWAYS` |
+| Cron | none |
+| Watch paths | `/pipeline/**` |
+| Variables | `DATABASE_URL=${{Postgres.DATABASE_URL}}`, `HYPERSYNC_API_TOKEN=<Envio token>` (set in the dashboard, never in git) |
+
+```sh
+railway api 'mutation { serviceCreate(input: { name: "indexer", projectId: "<project>", source: { repo: "SovereignSignal/bait" } }) { id } }'
+railway api 'mutation { serviceInstanceUpdate(serviceId: "<id>", environmentId: "<env>",
+  input: { rootDirectory: "/pipeline", dockerfilePath: "Dockerfile", startCommand: "python -m bait.indexer",
+           restartPolicyType: ALWAYS, watchPatterns: ["/pipeline/**"] }) }'
+railway variables --service indexer --set 'DATABASE_URL=${{Postgres.DATABASE_URL}}'
+railway variables --service indexer --set "HYPERSYNC_API_TOKEN=$HYPERSYNC_API_TOKEN"   # from your shell, not a file
+railway api 'mutation { serviceInstanceDeployV2(serviceId: "<id>", environmentId: "<env>") }'
+```
+
+As with the other services, the first deploy fires before the root directory is set and fails; deploy again after the
+update. Tables are created by the indexer on start (`metadata.create_all`), or apply `db/migrations/0004_indexer.sql`.
+
+Without `HYPERSYNC_API_TOKEN` the service still runs, in a degraded mode it logs at startup: new Initialize logs only, over
+public RPCs on 10 chains, no history and no swaps. With the token it backfills every hooked pool from block 0 on 16
+chains and the last 14 days of swaps, then follows the heads. Watch the logs for the per-loop line
+`heartbeat loop=N mode=hypersync new_pools=K base:lag=<initialize>/<swap>,new=..,swaps=..`; lags fall to near 0 once a chain
+is caught up, and `indexer_state.backfilled` flips to true per chain. Optional: `INDEXER_CHAINS` (subset),
+`INDEXER_MAX_PAGES` (40 HyperSync pages per chain per loop).
+

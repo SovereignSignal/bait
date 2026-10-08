@@ -9,7 +9,7 @@ from ..db import utcnow
 
 log = logging.getLogger("bait")
 
-STEP_ORDER = ["ingest", "snapshot", "activity", "group", "enrich", "score", "signals", "digest"]
+STEP_ORDER = ["ingest", "snapshot", "activity", "onchain", "group", "enrich", "score", "signals", "radar", "digest"]
 
 
 @dataclass

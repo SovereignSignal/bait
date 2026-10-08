@@ -283,3 +283,53 @@ export const CATEGORIES = Object.keys(CATEGORY_LABEL) as Category[];
 export function isCategory(s: string | undefined): s is Category {
   return !!s && s in CATEGORY_LABEL;
 }
+
+// ---------- dev radar (/building) and the launch feed ----------
+
+export type RadarKind = "registry_submission" | "repo" | "hackathon" | "incubator" | "audit" | "launch_post";
+
+/** Display order and pill labels for /building. */
+export const RADAR_KINDS: Array<[RadarKind, string]> = [
+  ["launch_post", "Launch"],
+  ["audit", "Audit"],
+  ["hackathon", "Hackathon"],
+  ["incubator", "Incubator"],
+  ["repo", "Repo"],
+  ["registry_submission", "Registry"],
+];
+
+export function isRadarKind(s: string | null | undefined): s is RadarKind {
+  return RADAR_KINDS.some(([k]) => k === s);
+}
+
+/** One radar_items row (score < 0.5 already filtered out). chainId may be any chain, not just the ten. */
+export interface RadarItemView {
+  url: string;
+  kind: RadarKind;
+  title: string;
+  summary: string | null;
+  source: string | null;
+  repo: string | null;
+  stars: number | null;
+  chainId: number | null;
+  hookAddress: string | null;
+  projectSlug: string | null;
+  publishedAt: string | null;
+  lastSeen: string;
+}
+
+/** A hooked pool initialization from v4_pools (the on-chain indexer). Any chain id. */
+export interface LaunchView {
+  chainId: number;
+  poolId: string;
+  hook: string;
+  projectSlug: string | null;
+  projectName: string | null;
+  currency0: string;
+  currency1: string;
+  symbol0: string | null;
+  symbol1: string | null;
+  fee: number | null;
+  blockTime: string | null;
+  txHash: string | null;
+}

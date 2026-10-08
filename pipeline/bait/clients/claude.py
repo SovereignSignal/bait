@@ -41,6 +41,22 @@ WHY_SCHEMA = {
     "additionalProperties": False,
 }
 
+RADAR_KINDS = ["hackathon", "incubator", "audit", "launch_post"]
+
+RADAR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": RADAR_KINDS,
+                 "description": "hackathon = hackathon project or showcase; incubator = Uniswap Hook Incubator (UHI) or similar cohort/demo; "
+                                "audit = security review or audit report; launch_post = launch or release announcement"},
+        "summary": {"type": "string", "description": "One plain sentence, max 160 chars: what was built, audited or launched"},
+        "score": {"type": "number", "description": "0-1: how clearly this is about a specific Uniswap v4 hook being built, audited or launched. "
+                                                   "Generic v4 explainers, price news, listicles and unrelated pages score below 0.5"},
+    },
+    "required": ["kind", "summary", "score"],
+    "additionalProperties": False,
+}
+
 SYSTEM = (
     "You write for Bait, a feed of Uniswap v4 hooks. Be concrete and plain. No hype, no emojis, "
     "no marketing adjectives. Only state facts present in the input. Never claim an audit or security "
@@ -90,6 +106,19 @@ class Claude:
             f"If it matches none, give a short new project name (the hook name is usually right)."
         )
         return self._json(CLAUDE_CLASSIFY_MODEL, user, CLASSIFY_SCHEMA, 400)
+
+    def classify_radar(self, item: dict) -> dict:
+        """Dev radar (steps/radar.py): kind + one-sentence summary + relevance score for one web result."""
+        user = (
+            "Classify this web result for a radar of Uniswap v4 hooks being built, audited or launched.\n\n"
+            + json.dumps(item, indent=1, default=str)[:4000]
+        )
+        out = self._json(CLAUDE_CLASSIFY_MODEL, user, RADAR_SCHEMA, 300)
+        try:
+            out["score"] = max(0.0, min(1.0, float(out.get("score", 0))))
+        except (TypeError, ValueError):
+            out["score"] = 0.0
+        return out
 
     def what_line(self, ctx: dict) -> dict:
         user = "Write the 'what it does' line and pick a category for this hook project.\n\n" + json.dumps(ctx, indent=1, default=str)[:12000]

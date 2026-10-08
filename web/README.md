@@ -16,7 +16,9 @@ Set `DATABASE_URL` to read Postgres. For local UI work without a database, run w
 
 | Route | What |
 |---|---|
-| `/` | terminal: movers strip, project list, detail of the list's first project, trade panel. `?tab=trending\|new\|verified\|all`, `?chain=<slug or id>`, `?category=<slug>` |
+| `/` | terminal: movers strip, project list, detail of the list's first project, trade panel. `?tab=trending\|new\|verified\|all`, `?chain=<slug or id>`, `?category=<slug>`. The New tab opens with the "Just launched" feed (latest 20 hooked pool initializations, filtered by the chain select) |
+| `/building` | dev radar: radar items grouped by kind (Launch, Audit, Hackathon, Incubator, Repo, Registry) with kind chips (`?kind=<kind>`), a "Live on Bait" pill when the item matches a project, and the "Just launched" feed. Dynamic (reads `?kind`); reads cached in-process (radar 5 min, launches 30s) |
+| `/api/launches` | latest 20 `v4_pools` rows as `{launches}` for the feed's 60s client refresh; 30s cache; empty list on any error |
 | `/p/[slug]` | the same terminal with that project selected (ISR 1h; phone shows detail + trade with a back link) |
 | `/p/[slug]/opengraph-image` | 1200x630 OG card (next/og), night palette |
 | `/leaders` | usage leaderboards: wallets 24h, 7d volume, TVL, smart-money wallets; usage totals header |
@@ -27,7 +29,7 @@ Set `DATABASE_URL` to read Postgres. For local UI work without a database, run w
 
 Data pages export `revalidate = 3600` (ISR, 1h) on top of a 1h in-process cache in `queries.ts`. Client-side work: list search (name or hook-address prefix), the localStorage watchlist (star on the project header, Watchlist in the dock and the star tab), and the live trade feed (refreshes every 60s while visible). Verified tab = an audit link or routable in the Uniswap app.
 
-Phone (<820px): `/` is movers + list, `/p/[slug]` is detail + trade; bottom dock: Feed, Search, Watchlist, Leaders.
+Phone (<820px): `/` is movers + list, `/p/[slug]` is detail + trade, `/building` is the launch feed then the radar list; bottom dock: Feed, Search, Building, Watchlist, Leaders.
 
 ## Layout
 
@@ -35,13 +37,16 @@ Phone (<820px): `/` is movers + list, `/p/[slug]` is detail + trade; bottom dock
 src/app/            routes (server components), globals.css (dark tokens from the terminal mock)
 src/components/     Terminal shell, TopBar, ProjectList (list + movers), Detail, TradePanel, LiveTrades,
                     Dock, WatchStar, TerminalProvider (client state: search, watchlist), Avatar, Footer
-src/db/schema.ts    Drizzle schema mirroring db/migrations (0001 + 0002: pool_stats, pool_top_wallets, wallet_labels)
-src/db/queries.ts   getRows / getProject / getLeaders / getWalletLabels / getFeed / getDigest / listDigests
+src/db/schema.ts    Drizzle schema mirroring db/migrations (0001-0003 core + activity, 0004 v4_pools / pool_daily_onchain, 0005 radar_items)
+src/db/queries.ts   getRows / getProject / getLeaders / getWalletLabels / getFeed / getDigest / listDigests (+ safe())
+src/db/radar.ts     getRadar / getLaunches (radar_items, v4_pools; own short caches)
 src/db/client.ts    lazy postgres.js + drizzle client
 src/fixtures/       sample dataset (BAIT_FIXTURES=1 only)
 src/lib/            feed rules (tabs, ranking, movers, search), routable rule, chains (+ GeckoTerminal ids,
                     explorers), formatters, presentation helpers, view types
 ```
+
+Radar and launches: `radar_items` (pipeline step "radar", `0005_radar.sql`) and `v4_pools` / `pool_daily_onchain` (on-chain indexer, `0004_indexer.sql`) may be missing or empty; both reads go through `safe()` and render an empty state. Radar rows with `score < 0.5` are hidden (kept by the pipeline only to avoid re-classifying). Launch pairs use `pools.token0/1` symbols when the pool is also in `pools`, the chain's native symbol for currency `0x0`, else short addresses; fee bit `0x800000` reads "dynamic". Launches and radar items can be on any chain: `lib/chains.ts` `anyChainName` / `anyChainColor` / `nativeSymbol` / `anyExplorerTxUrl` cover the ten plus a name map for the other hooklist chains (Zora, World Chain, Soneium, Celo, Monad, MegaETH, X Layer, Arc, Tempo, Linea, Blast) with a neutral dot; unknown ids render as "Chain <id>". With `BAIT_FIXTURES=1`, `src/fixtures/radar-sample.ts` serves sample radar items and launches (launch times relative to the request).
 
 Schema notes: `src/db/schema.ts` mirrors `../db/migrations` (the pipeline's SQLAlchemy metadata is the other copy). `pools.token0` / `token1` are the subgraph Token JSONB (`{id, symbol, name, decimals}`). `project_daily.is_spam` hides a project everywhere. 24h volume and txs are deltas between the latest two `pool_snapshots` days; wallets, buys and sells come from `pool_stats` (latest day; buys/sells may be null on older rows); top wallets from `pool_top_wallets` (latest day) with `wallet_labels` joined. The three activity tables may be missing or empty: each read has its own `safe()` and the UI shows "–" or an empty state. Registry hooks span ~22 chains; only the ten in `lib/chains.ts` are shown, and every `CHAINS[id]` lookup is guarded. `signals.nansen` still feeds the OG card's smart-money pill. Optional `projects.enrichment.secondary_categories` (array) and `.color` feed the list; `enrichment.parallel.audit_url` counts as an audit link.
 

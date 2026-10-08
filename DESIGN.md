@@ -199,3 +199,42 @@ Nightly step `activity`, right after `snapshot`: who actually uses each hook.
   window across both steps. Without `NANSEN_API_KEY` the trades layer still runs (keyless) and labels are skipped.
 - All addresses lowercase. The web app reads these three tables directly (project page "who trades it", smart-money
   signal); the pipeline never reads them back except for the relabel window.
+
+## Dev radar (added 2026-10-08)
+
+Bait ranks hooks by usage, which is late: by the time a hook trades, it was submitted, pushed, demoed or audited weeks
+earlier. `/building` shows that earlier layer.
+
+- **Pipeline step `radar`** (after signals, before digest) writes `radar_items`, one row per URL
+  (`db/migrations/0005_radar.sql`): Uniswap/hooklist issues and PRs from the last 30 days (registry_submission, chain +
+  hook address parsed from the issue form, the bot PR folded into its issue), GitHub repos building v4 hooks pushed in
+  the last 30 days (repo; forks, Uniswap's own repos, small templates and per-owner floods dropped), and Exa results from
+  the last 60 days classified by Claude Haiku into hackathon / incubator / audit / launch_post with a one-sentence summary
+  and a 0-1 relevance score (under 0.5 hidden). Every source is capped (`RADAR_*`), skipped without its key, and never
+  fails the run. 90-day retention. `project_slug` links an item to a project already on Bait.
+- **Just launched**: the latest hooked pool initializations from the on-chain indexer's `v4_pools`, across every chain it
+  covers, on top of the New tab and on `/building`; server-rendered (20 rows), refreshed every 60s from
+  `/api/launches` (30s cache). Pair, fee (dynamic when bit `0x800000`), hook or project name, explorer link to the tx.
+- Not reviewed by us: the radar is a pointer to look, like the rest of Bait.
+
+## On-chain indexer (added 2026-10-08)
+
+GeckoTerminal pages and subgraphs only see the pools they choose to list. Bait now runs its own indexer so every hooked
+v4 pool on every chain it covers shows up as soon as it is initialized, with exact on-chain usage.
+
+- **Process:** `python -m bait.indexer` (`pipeline/bait/indexer/`), a Railway always-on service `indexer` next to the
+  nightly `pipeline` cron. Engine: Envio HyperSync's JSON API (`HYPERSYNC_API_TOKEN`) on 16 chains: Ethereum, Optimism,
+  BNB, Unichain, Polygon, Monad, World Chain, Soneium, MegaETH, Robinhood, Base, Arbitrum, Celo, Avalanche, Ink, Zora.
+- **What it records:** every PoolManager `Initialize` with `hooks != 0x0` from block 0 (`v4_pools`); `Swap` logs of those
+  pools from 14 days back, then live, aggregated per UTC day: swaps, unique wallets (transaction `from`, not the router
+  that is the Swap `sender`) and USD volume (`pool_daily_onchain`, wallets per day in `pool_wallet_day`, 30 days).
+  Per-chain cursors in `indexer_state`, committed with each batch, so restarts resume exactly.
+- **Volume is approximate by design:** valued at current DefiLlama prices, not prices at swap time; unpriced tokens
+  count as swaps with $0. TVL is not computed (GeckoTerminal/subgraph reserve is kept).
+- **Into the feed:** nightly step `onchain` (after activity) adds unlisted hooks (capped per night), upserts `pools`,
+  and for fully backfilled, fresh chains replaces keyless usage with on-chain numbers in `pool_snapshots` (cumulative
+  series for the 7d math) and `pool_stats` (24h volume + wallets for the wash rule). The web's "Just launched" list reads
+  `v4_pools` directly.
+- **Without the token:** the indexer degrades to following new Initialize logs over the public RPCs on 10 chains (no
+  history, no swaps) and says so in its startup log.
+

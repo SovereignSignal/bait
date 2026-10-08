@@ -1,8 +1,8 @@
 "use client";
-// Phone-only bottom dock: Feed, Search, Watchlist, Leaders.
+// Phone-only bottom dock: Feed, Search, Building, Watchlist, Leaders.
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { DockSearchIcon, HomeIcon, LeadersIcon, StarIcon } from "./Icons";
+import { DockSearchIcon, HomeIcon, LeadersIcon, RadarIcon, StarIcon } from "./Icons";
 import { useTerminal } from "./TerminalProvider";
 import s from "./Terminal.module.css";
 
@@ -19,7 +19,7 @@ export function Dock() {
     window.scrollTo(0, 0);
   };
 
-  const current = pathname === "/leaders" ? "leaders" : t.searchOpen ? "search" : onFeed && t.watchOnly ? "watch" : onFeed ? "feed" : null;
+  const current = pathname === "/leaders" ? "leaders" : pathname === "/building" ? "building" : t.searchOpen ? "search" : onFeed && t.watchOnly ? "watch" : onFeed ? "feed" : null;
 
   return (
     <nav className={s.dock} aria-label="Sections">
@@ -47,6 +47,10 @@ export function Dock() {
         <DockSearchIcon />
         Search
       </button>
+      <Link href="/building" aria-current={current === "building" ? "page" : undefined} onClick={() => t.closeSearch()}>
+        <RadarIcon />
+        Building
+      </Link>
       <button
         type="button"
         aria-current={current === "watch" ? "true" : undefined}

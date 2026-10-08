@@ -1,8 +1,8 @@
 # Bait pipeline
 
 Nightly Python job: ingest Uniswap v4 hooks, snapshot hooked pools per chain, record who trades the
-busiest hooked pools (with Nansen wallet labels), group hooks into projects, enrich, score, pull
-signals, write the Monday digest. Spec: `../DESIGN.md`
+busiest hooked pools (with Nansen wallet labels), fold in the on-chain indexer's exact usage, group hooks into projects, enrich, score, pull
+signals, scan the dev radar (registry submissions, repos, audits, launches), write the Monday digest. Spec: `../DESIGN.md`
 ("Pipeline", "Postgres schema", "Grouping", "Scoring", "Data sources").
 
 ## Run locally
@@ -19,7 +19,7 @@ cp .env.example .env            # fill in keys; never commit .env
 .venv/bin/python -m bait run --day 2026-10-06 --hooklist-file fixtures/hooklist.sample.json \
     --database-url sqlite:///./bait.sqlite --force-digest
 
-.venv/bin/python -m pytest -q -p no:cacheprovider   # 57 tests, SQLite in memory, HTTP mocked, KEYLESS=0
+.venv/bin/python -m pytest -q -p no:cacheprovider   # 93 tests, SQLite in memory, HTTP mocked, KEYLESS=0
 ```
 
 `--day` defaults to today's UTC date (what the Docker CMD relies on). Runs are idempotent per day:
@@ -38,11 +38,13 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 | 1 | ingest | hooklist.json (GitHub raw or `--hooklist-file`) | hooks (first_seen_at set once) | nothing |
 | 2 | snapshot | v4 subgraph per chain, `pools(where hooks != 0x0, id_gt)` paginated by 1000; keyless GeckoTerminal for the rest | pools, pool_snapshots(day), pool_stats(day) incl. buys/sells/buyers/sellers_24h | GRAPH_API_KEY, else keyless |
 | 3 | activity | pool_stats(day) ⨝ pools, wash excluded, top `ACTIVITY_POOLS` by 24h vol; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept), wallet_labels | keyless; optional NANSEN_API_KEY |
+| 3b | onchain | v4_pools, pool_daily_onchain, indexer_state (from `python -m bait.indexer`) | hooks (unlisted, capped), pools, pool_snapshots, pool_stats(day) overriding keyless usage | nothing; no-op when the indexer tables are empty |
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
 | 5 | enrich | projects with enriched_at null | what_line, category, website/github/x_handle, enrichment | ANTHROPIC_API_KEY; optional PARALLEL_API_KEY, Blockscout |
 | 6 | score | pool_snapshots (day-14..day), pool_stats(day) | project_daily(day) | nothing |
 | 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | receipts, signals, why_blurb, wallet_labels | optional EXA_API_KEY, GITHUB_TOKEN, NANSEN_API_KEY (+GRAPH_API_KEY), ANTHROPIC_API_KEY |
-| 8 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
+| 8 | radar | Uniswap/hooklist issues + PRs (30d), GitHub repo/code search (30d), Exa (60d) classified by Claude Haiku | radar_items (one row per URL, 90 days kept) | optional GITHUB_TOKEN (else anonymous unless KEYLESS=0), EXA_API_KEY + ANTHROPIC_API_KEY |
+| 9 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
 
 Every external client is `bait/clients/<name>.py` with `from_env()`; when the key is missing it
 returns `None` and the step logs `client=<name> skipped: no key in env` and does not call out.
@@ -66,6 +68,50 @@ cap (100 credits per labels call, 500 with `NANSEN_PREMIUM_LABELS=1`). Empty ans
 the run. Step 7 (signals) reads the same table before calling Nansen and writes what it pays for.
 Logged: `nansen queried= labeled= smart_money=`. With `KEYLESS=0` and no keys the step only prunes.
 
+### On-chain indexer + step `onchain` (step 3b)
+`python -m bait.indexer` (package `bait/indexer/`) is a separate long-running process (Railway service `indexer`, see
+`../railway/README.md`). Tables (DDL `../db/migrations/0004_indexer.sql`, metadata in `db.py` "# --- indexer ---"):
+`v4_pools` (hooked pools only), `pool_daily_onchain`, `pool_wallet_day` (30 days kept), `indexer_state` (per-chain cursors).
+
+- **Engine:** Envio HyperSync JSON API over httpx (`indexer/hypersync.py`), `POST https://<chain>.hypersync.xyz/query`
+  with `Authorization: Bearer $HYPERSYNC_API_TOKEN`, paginated by `next_block`; `GET /height` for the head. 16 chains:
+  Ethereum, Optimism, BNB, Unichain, Polygon, Monad, World Chain, Soneium, MegaETH, Robinhood, Base, Arbitrum, Celo,
+  Avalanche, Ink, Zora (`indexer/chains.py`, PoolManager addresses from developers.uniswap.org v4 deployments).
+- **Initialize:** every PoolManager `Initialize` log from block 0 to the head, then followed; rows with `hooks != 0x0`
+  upserted into `v4_pools`. Each chain stays `lag` blocks behind the archive head (3 on Ethereum, 10-40 on L2s) as reorg
+  margin.
+- **Swap:** only hooked pools, from the first block of the UTC day 14 days back (found by binary search on HyperSync
+  block timestamps), then followed. Up to `INDEXER_TOPIC_FILTER_MAX` (2000) hooked pools on a chain the query filters
+  `topic1` by pool id in chunks of `INDEXER_TOPIC_CHUNK` (500); above that it scans every v4 Swap and keeps hooked pools by
+  a DB lookup per page. Wallet = transaction `from` (joined via `field_selection.transaction`), not the Swap `sender`
+  (usually a router). Per UTC day: swaps, unique wallets (`pool_wallet_day` rows), USD volume.
+- **USD volume is approximate by design:** each swap is valued at the token's *current* DefiLlama price
+  (`coins.llama.fi/prices/current`, batched 80 ids, cached 30 min; native 0x0 -> the chain's coingecko id). Prices with
+  confidence < 0.5, above $10M, or without decimals are ignored; with both sides priced the larger value is used unless
+  they differ by more than 20x (then the smaller); a single swap above $500M counts as $0; swaps with no priced side
+  count as swaps and wallets with $0 volume (logged as `unpriced`).
+- **Safety:** each page is written with its cursor in one transaction, so a restart resumes exactly (no gaps, no double
+  counts); at most `INDEXER_MAX_PAGES` (40) pages per chain per loop so a backfilling chain cannot starve the rest; one
+  chain failing never stops the others. A heartbeat line per loop: `heartbeat loop= mode= new_pools= <chain>:lag=<init>/<swap>,new=,swaps=`.
+- **No token:** RPC fallback on the 10 chains with a public RPC in `keyless.LOGS` (Base and BNB use publicnode, the
+  `keyless.LOGS` endpoints answered 429): Initialize only, new blocks only (cursor starts at the head, no backfill, no
+  swaps), narrow `eth_getLogs` windows. Logged at startup. If it falls more than `INDEXER_RPC_MAX_WINDOWS` windows behind
+  it skips ahead and clears the swap cursor, so the next HyperSync run re-backfills from block 0.
+
+Step `onchain` (after activity) copies this into the tables the web app and score read:
+1. Hooks in `v4_pools` missing from `hooks` become unlisted hook rows (name None, like snapshot keyless), busiest first,
+   at most `ONCHAIN_MAX_NEW_HOOKS` (500) per night because each one can cost a Claude call in group's long tail;
+   code_hash via `keyless.code_hashes` where a public RPC exists (KEYLESS != 0).
+2. `pools` upserted from `v4_pools` for hooks we hold (every chain; the web filters unknown chain ids). token0/token1 are
+   set on insert only, so GeckoTerminal/subgraph symbols survive; `created_at` = Initialize block time.
+3. Usage, only for chains whose `indexer_state.backfilled` is true and `updated_at` is within `ONCHAIN_MAX_STALE_HOURS`
+   (6): pools with `pool_daily_onchain` rows in day-14..day get a cumulative volume + swap-count series in
+   `pool_snapshots` (zero-seeded the day before, replacing the pool's older snapshots so one scale is used; TVL keeps the
+   latest GeckoTerminal/subgraph reserve, the indexer does not compute TVL) and `pool_stats(day)` `vol_24h` /
+   `traders_24h` from the last complete UTC day (buys/sells columns kept). `swaps_7d` for these pools is real swaps, not
+   txCount. While a chain's on-chain history is shorter than the window, pools that keyless already snapshots keep their
+   keyless series and only `pool_stats` is overridden.
+
 ### Grouping rules (step 4)
 1. Same normalized name -> same project (`BunniHook`, `bunni hooks` -> `bunni`).
 2. Same `code_hash` (sha256 of deployed bytecode from Blockscout `/api/v2/smart-contracts/<addr>`,
@@ -82,6 +128,38 @@ no snapshot that old) the earliest snapshot we hold is the baseline, so the firs
 all-time volume as 7d volume. `score_trending = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)`
 when `vol_7d >= $10k`, else 0. `is_new`, `is_spam` as in DESIGN.md. `swaps_7d` is txCount delta
 (swaps + liquidity mods; label it "txs" in the UI).
+
+### Dev radar (step `radar`)
+What is being built before it has volume; the web app shows it at `/building`. Table `radar_items` (DDL
+`../db/migrations/0005_radar.sql`), one row per URL, `kind` in registry_submission / repo / hackathon / incubator /
+audit / launch_post. Each source is capped, skipped with a log line when its key is missing, and wrapped so a failure
+is logged and counted in `source_errors` without failing the run (radar is discovery, not core data).
+
+1. **registry_submission**: `GET /repos/Uniswap/hooklist/issues?state=all&sort=created` newest first, up to
+   `RADAR_REGISTRY_PAGES` (3) pages of 100, stopping at the first item older than 30 days. Chain, hook address, name and
+   description come from the issue form (`### Chain`, `### Hook Address`, ...), else the title (`hook: Name (chain)`,
+   `hook: 0x... on chain`), else a PR's `hooks/<chain>/<address>.json` path. The generator bot's PR that `Closes #N`
+   is folded into issue N (so the issue reads Merged / Open, PR in review / Closed) instead of being its own row.
+   Volume is high (about 200 submissions a day in Oct 2026, mostly Robinhood launchpads), so 3 pages cover roughly a
+   day and a half; older items keep their last state. Chain slugs map to ids for every hooklist chain, not only the ten.
+2. **repo**: up to `RADAR_GITHUB_QUERIES` (8) search calls: four repository searches (`"uniswap v4" hook
+   in:name,description`, `topic:uniswap-v4-hooks`, `hook in:name,description topic:uniswap-v4`,
+   `topic:uniswap-v4-hook`, all `pushed:>` 30 days ago), then code search (`BaseHook v4-core`, `getHookPermissions
+   v4-periphery`, token only), whose repos are resolved with batched `repo:a/b repo:c/d` searches. Spaced 2.1s
+   (6.5s anonymous and for code search) for the 30/min and 10/min limits. Kept: not a fork or archived, not owned by
+   Uniswap, pushed in the last 30 days, and at least 1 star or a push in the last 14 days; names containing
+   template/tutorial/workshop/course need more than 20 stars; at most 3 repos per owner (launchpads mint one repo per
+   token). README matches and the bare `topic:uniswap-v4` were tried and dropped: mostly bots, SDKs and screeners.
+3. **hackathon / incubator / audit / launch_post**: `RADAR_EXA_QUERIES` (6) Exa searches over 60 days (ETHGlobal
+   showcase, Hook Incubator cohort, audit reports incl. Cantina / Spearbit / OpenZeppelin / Certora / Code4rena /
+   Sherlock, launch announcements). URLs already stored only get `last_seen` bumped; up to `RADAR_CLASSIFY_MAX` (30)
+   new ones go to Claude Haiku (`classify_radar`: kind, one-sentence summary, relevance 0-1). Results under 0.5 are
+   stored with their score so they are not paid for again, and the web app hides them. Needs both keys; Exa is not
+   called without ANTHROPIC_API_KEY.
+4. `project_slug` is recomputed each run: hook address + chain via `hooks.project_id -> projects.slug`, repos via
+   `projects.github`. Rows with `last_seen` older than 90 days are deleted.
+
+Logged: `registry= repos= exa_new= classified= dropped= bumped= github_calls= exa_calls= linked= pruned= source_errors=`.
 
 ### Routable
 `bait.rules.routable(hook)` implements DESIGN.md exactly: not `0x91…`, none of
@@ -104,17 +182,25 @@ See `.env.example`. `DATABASE_URL` (Railway injects; `postgres://` is rewritten 
 for Smart Money tags), `GITHUB_TOKEN`, `BLOCKSCOUT_API_KEY` (optional). `BLOCKWORKS_API_KEY` is
 unused by the pipeline.
 
+Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_QUERIES` (6),
+`RADAR_CLASSIFY_MAX` (30); see "Dev radar" above.
+
 Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30),
 `ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 40), `NANSEN_MAX_ADDRESSES` (Nansen label calls per run, default 10), `NANSEN_MONTHLY_CREDITS` (rolling 30-day budget in estimated credits, default 10000; enforced before every call), `NANSEN_RELABEL_DAYS` (days before a
 labeled wallet is queried again, default 14; signals uses the same window). Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP`.
 
+Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs), `INDEXER_INTERVAL`
+(seconds per loop, 60), `INDEXER_CHAINS` (comma slugs or ids, default all 16), `INDEXER_MAX_PAGES` (40),
+`INDEXER_TOPIC_FILTER_MAX` (2000), `INDEXER_TOPIC_CHUNK` (500), `INDEXER_RPC_MAX_WINDOWS` (30). Step `onchain`:
+`ONCHAIN_MAX_NEW_HOOKS` (500), `ONCHAIN_MAX_STALE_HOURS` (6).
+
 ## Chains
 `bait/config.py` `CHAINS`. Subgraph IDs are the community deployments DefiLlama uses; health is
 unverified until the first run with a key (watch the `_meta hasIndexingErrors` warning). Robinhood
-(4663) and Ink (57073) have no public v4 subgraph and are skipped with a log line; the RPC
-Initialize/Swap log-scan fallback is not built. Nansen is skipped on Unichain and Ink. BNB and
+(4663) and Ink (57073) have no public v4 subgraph and are skipped by the subgraph path (keyless covers them, and the
+on-chain indexer covers every chain it serves, see step 3b). Nansen is skipped on Unichain and Ink. BNB and
 Avalanche have no Blockscout instance, so code_hash lookups there return None.
 
 ## Docker

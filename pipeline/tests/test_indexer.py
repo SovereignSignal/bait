@@ -1,0 +1,414 @@
+"""On-chain indexer: decoding, HyperSync request shape, cursor resume, aggregation, prices, RPC fallback. No network:
+HyperSync, RPC and DefiLlama are httpx.MockTransport fakes."""
+import json
+from datetime import date, datetime, timezone
+
+import httpx
+import pytest
+import sqlalchemy as sa
+
+from bait import db, keyless as K
+from bait.indexer import core, store
+from bait.indexer.__main__ import Runner, heartbeat
+from bait.indexer.chains import CHAIN_BY_ID, CHAINS, select_chains
+from bait.indexer.decode import INITIALIZE_TOPIC, SWAP_TOPIC, ZERO, decode_initialize, decode_swap
+from bait.indexer.hypersync import HyperSync, HyperSyncAuthError, swap_query
+from bait.indexer.prices import PriceBook, reliable, swap_usd
+
+BASE = CHAIN_BY_ID[8453]
+USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+NOW = datetime(2026, 10, 6, 12, 0, tzinfo=timezone.utc)
+START_DAY = date(2026, 9, 22)                       # NOW - 14 days
+BT = 60                                             # fake chain: one block per minute
+T0 = int(datetime(2026, 9, 22, tzinfo=timezone.utc).timestamp()) - 1000 * BT   # block 1000 = 2026-09-22 00:00 UTC
+HEAD = 22_000
+
+
+# ------------------------------------------------------------------ keccak (verifies the hardcoded topic hashes)
+
+def _keccak256(data: bytes) -> str:
+    rc = [0x0000000000000001, 0x0000000000008082, 0x800000000000808A, 0x8000000080008000, 0x000000000000808B,
+          0x0000000080000001, 0x8000000080008081, 0x8000000000008009, 0x000000000000008A, 0x0000000000000088,
+          0x0000000080008009, 0x000000008000000A, 0x000000008000808B, 0x800000000000008B, 0x8000000000008089,
+          0x8000000000008003, 0x8000000000008002, 0x8000000000000080, 0x000000000000800A, 0x800000008000000A,
+          0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008]
+    rot = [[0, 36, 3, 41, 18], [1, 44, 10, 45, 2], [62, 6, 43, 15, 61], [28, 55, 25, 21, 56], [27, 20, 39, 8, 14]]
+    m = (1 << 64) - 1
+    rl = lambda v, n: ((v << n) | (v >> (64 - n))) & m if n else v
+    rate = 136
+    msg = bytearray(data) + b"\x01"
+    while len(msg) % rate:
+        msg.append(0)
+    msg[-1] |= 0x80
+    s = [[0] * 5 for _ in range(5)]
+    for off in range(0, len(msg), rate):
+        for i in range(rate // 8):
+            s[i % 5][i // 5] ^= int.from_bytes(msg[off + 8 * i: off + 8 * i + 8], "little")
+        for r in range(24):
+            c = [s[x][0] ^ s[x][1] ^ s[x][2] ^ s[x][3] ^ s[x][4] for x in range(5)]
+            d = [c[(x - 1) % 5] ^ rl(c[(x + 1) % 5], 1) for x in range(5)]
+            s = [[s[x][y] ^ d[x] for y in range(5)] for x in range(5)]
+            b = [[0] * 5 for _ in range(5)]
+            for x in range(5):
+                for y in range(5):
+                    b[y][(2 * x + 3 * y) % 5] = rl(s[x][y], rot[x][y])
+            s = [[b[x][y] ^ (~b[(x + 1) % 5][y] & b[(x + 2) % 5][y]) for y in range(5)] for x in range(5)]
+            s[0][0] ^= rc[r]
+    return "0x" + b"".join(s[i % 5][i // 5].to_bytes(8, "little") for i in range(4)).hex()
+
+
+def test_topic_hashes_are_keccak_of_v4_signatures():
+    assert _keccak256(b"Transfer(address,address,uint256)") == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+    assert _keccak256(b"Initialize(bytes32,address,address,uint24,int24,address,uint160,int24)") == INITIALIZE_TOPIC
+    assert _keccak256(b"Swap(bytes32,address,int128,int128,uint160,uint128,int24,uint24)") == SWAP_TOPIC
+    assert INITIALIZE_TOPIC == K.INITIALIZE
+
+
+# ------------------------------------------------------------------ canned logs
+
+def _w(v: int) -> str:
+    return format(v % (1 << 256), "064x")
+
+
+def _t(addr: str) -> str:
+    return "0x" + "0" * 24 + addr[2:].lower()
+
+
+def pid(n: int) -> str:
+    return "0x" + format(n, "064x")
+
+
+def init_log(pool: str, c0: str, c1: str, hook: str, block: int, fee=3000, spacing=60, tick=-887220, idx=0):
+    return {"block_number": block, "log_index": idx, "transaction_hash": "0x" + format(block, "064x"),
+            "topic0": INITIALIZE_TOPIC, "topic1": pool, "topic2": _t(c0), "topic3": _t(c1),
+            "data": "0x" + _w(fee) + _w(spacing) + _w(int(hook, 16)) + _w(79228162514264337593543950336) + _w(tick)}
+
+
+def swap_log(pool: str, block: int, a0: int, a1: int, sender="0x" + "e" * 40, idx=0):
+    return {"block_number": block, "log_index": idx, "transaction_hash": "0x" + format(block * 100 + idx, "064x"),
+            "topic0": SWAP_TOPIC, "topic1": pool, "topic2": _t(sender), "topic3": None,
+            "data": "0x" + _w(a0) + _w(a1) + _w(1 << 96) + _w(10 ** 18) + _w(-5) + _w(500)}
+
+
+HOOK = "0x" + "a" * 36 + "0080"
+HOOK2 = "0x" + "b" * 36 + "00c0"
+TOKX = "0x" + "c" * 40
+PA, PB, PC = pid(0xA), pid(0xB), pid(0xC)
+W1, W2, W3 = "0x" + "1" * 40, "0x" + "2" * 40, "0x" + "3" * 40
+
+
+def chain_events():
+    inits = [init_log(PA, ZERO, USDC, HOOK, 500), init_log(PB, ZERO, USDC, ZERO, 600), init_log(PC, TOKX, USDC, HOOK2, 1500)]
+    swaps = [
+        (swap_log(PA, 900, -10 ** 18, 2000 * 10 ** 6), W1),           # before the 14-day window: not counted
+        (swap_log(PA, 1100, -10 ** 18, 2000 * 10 ** 6), W1),          # 2026-09-22
+        (swap_log(PA, 1200, 10 ** 18, -2000 * 10 ** 6, idx=1), W1),   # same wallet, other router sender
+        (swap_log(PA, 1300, -(10 ** 18), 2000 * 10 ** 6), W2),
+        (swap_log(PB, 1400, -10 ** 18, 2000 * 10 ** 6), W3),          # unhooked pool: ignored
+        (swap_log(PC, 2500, 5 * 10 ** 18, -7 * 10 ** 6), W3),         # 2026-09-23, TOKX unpriced -> USDC side
+    ]
+    return inits, swaps
+
+
+class FakeHyperSync:
+    """Serves /height and /query like HyperSync: at most `span` blocks per response, next_block = end of scanned range."""
+
+    def __init__(self, span=700, fail_after=None):
+        self.inits, self.swaps = chain_events()
+        self.span = span
+        self.fail_after = fail_after
+        self.requests = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.headers.get("authorization") != "Bearer test-token":
+            return httpx.Response(401, json={"error": "Your token is malformed."})
+        if self.fail_after is not None and len(self.requests) > self.fail_after:
+            return httpx.Response(503, text="down")
+        if request.url.path == "/height":
+            return httpx.Response(200, json={"height": HEAD})
+        q = json.loads(request.content)
+        frm, to = q["from_block"], q.get("to_block") or HEAD + 1
+        if q.get("include_all_blocks"):
+            return httpx.Response(200, json={"data": [{"blocks": [{"number": b, "timestamp": hex(T0 + b * BT)} for b in range(frm, to)]}],
+                                             "archive_height": HEAD, "next_block": to})
+        end = min(to, frm + self.span)
+        sel = q["logs"][0]
+        topic0 = sel["topics"][0][0]
+        ids = set(sel["topics"][1]) if len(sel["topics"]) > 1 else None
+        logs, txs = [], []
+        src = [(lg, None) for lg in self.inits] if topic0 == INITIALIZE_TOPIC else self.swaps
+        for lg, frm_addr in src:
+            if frm <= lg["block_number"] < end and (ids is None or lg["topic1"] in ids):
+                logs.append({k: lg[k] for k in q["field_selection"]["log"] if k in lg})
+                if frm_addr and "transaction" in q["field_selection"]:
+                    txs.append({"hash": lg["transaction_hash"], "from": frm_addr})
+        blocks = [{"number": b, "timestamp": hex(T0 + b * BT)} for b in sorted({lg["block_number"] for lg in logs})]
+        return httpx.Response(200, json={"data": [{"blocks": blocks, "transactions": txs, "logs": logs}],
+                                         "archive_height": HEAD, "next_block": end, "total_execution_time": 3})
+
+
+class FakePrices:
+    def __init__(self):
+        self.asked = []
+
+    def get(self, chain, addrs):
+        self.asked.append(set(addrs))
+        book = {ZERO: (2000.0, 18), USDC: (1.0, 6)}
+        return {a: book[a] for a in addrs if a in book}
+
+
+def _hs(fake):
+    return HyperSync(BASE.hypersync, "test-token", httpx.Client(transport=httpx.MockTransport(fake)), sleep=lambda s: None)
+
+
+def _sync_until_done(engine, fake, settings, max_loops=200):
+    for _ in range(max_loops):
+        st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), settings, now=NOW)
+        with engine.connect() as c:
+            if store.get_state(c, BASE.chain_id).backfilled:
+                return st
+    raise AssertionError("never finished")
+
+
+def _tables(engine):
+    with engine.connect() as c:
+        pools = {r.pool_id: r for r in c.execute(sa.select(db.v4_pools))}
+        daily = {(r.pool_id, r.day): (r.swaps, r.wallets, round(r.volume_usd, 2)) for r in c.execute(sa.select(db.pool_daily_onchain))}
+        wallets = {(r.pool_id, r.day, r.address): r.swaps for r in c.execute(sa.select(db.pool_wallet_day))}
+        state = store.get_state(c, BASE.chain_id)
+    return pools, daily, wallets, state
+
+
+EXPECTED_DAILY = {(PA, date(2026, 9, 22)): (3, 2, 6000.0), (PC, date(2026, 9, 23)): (1, 1, 7.0)}
+
+
+# ------------------------------------------------------------------ decoding
+
+def test_decode_initialize_and_swap_from_hypersync_shaped_logs():
+    p = decode_initialize(init_log(PA, ZERO, USDC, HOOK, 500, fee=0x800000, spacing=-10, tick=-200))
+    assert p == {"pool_id": PA, "currency0": ZERO, "currency1": USDC, "fee": 0x800000, "tick_spacing": -10,
+                 "hook_address": HOOK, "sqrt_price_x96": "79228162514264337593543950336", "tick": -200}
+    s = decode_swap(swap_log(PC, 7, -3 * 10 ** 18, 42, sender=W2))
+    assert (s["pool_id"], s["sender"], s["amount0"], s["amount1"], s["tick"], s["fee"]) == (PC, W2, -3 * 10 ** 18, 42, -5, 500)
+    assert decode_swap(init_log(PA, ZERO, USDC, HOOK, 1)) is None and decode_initialize(swap_log(PA, 1, 1, 1)) is None
+    # RPC-shaped log (topics list) decodes the same
+    lg = init_log(PA, ZERO, USDC, HOOK, 500)
+    rpc = {"topics": [lg["topic0"], lg["topic1"], lg["topic2"], lg["topic3"]], "data": lg["data"], "blockNumber": hex(500)}
+    assert decode_initialize(rpc)["hook_address"] == HOOK
+
+
+def test_request_shape_and_auth_error():
+    fake = FakeHyperSync()
+    hs = _hs(fake)
+    hs.query(swap_query(BASE.pool_manager, 10, 20, [PA, PC]))
+    req = fake.requests[-1]
+    assert req.method == "POST" and str(req.url) == "https://base.hypersync.xyz/query"
+    assert req.headers["authorization"] == "Bearer test-token" and req.headers["content-type"] == "application/json"
+    body = json.loads(req.content)
+    assert body["from_block"] == 10 and body["to_block"] == 20
+    assert body["logs"] == [{"address": [BASE.pool_manager], "topics": [[SWAP_TOPIC], [PA, PC]]}]
+    assert body["field_selection"]["transaction"] == ["hash", "from"] and "timestamp" in body["field_selection"]["block"]
+    bad = HyperSync(BASE.hypersync, "nope", httpx.Client(transport=httpx.MockTransport(fake)), sleep=lambda s: None)
+    with pytest.raises(HyperSyncAuthError):
+        bad.height()
+
+
+# ------------------------------------------------------------------ full sync, modes, resume
+
+@pytest.mark.parametrize("settings", [core.Settings(), core.Settings(topic_chunk=1), core.Settings(topic_filter_max=1)],
+                         ids=["topic", "topic-chunked", "scan"])
+def test_sync_backfills_pools_and_swaps(engine, settings):
+    _sync_until_done(engine, FakeHyperSync(), settings)
+    pools, daily, wallets, state = _tables(engine)
+    assert set(pools) == {PA, PC}                      # unhooked PB never stored
+    a = pools[PA]
+    assert (a.hook_address, a.currency0, a.currency1, a.fee, a.tick_spacing, a.tick, a.block_number) == (HOOK, ZERO, USDC, 3000, 60, -887220, 500)
+    assert a.block_time is not None and a.tx_hash == "0x" + format(500, "064x")
+    assert daily == EXPECTED_DAILY
+    assert wallets == {(PA, date(2026, 9, 22), W1): 2, (PA, date(2026, 9, 22), W2): 1, (PC, date(2026, 9, 23), W3): 1}
+    assert state.initialize_block == HEAD - BASE.lag + 1 == state.swap_block and state.backfilled and state.head_block == HEAD
+
+
+def test_swap_window_starts_at_first_block_of_day_minus_14(engine):
+    fake = FakeHyperSync()
+    assert _hs(fake).block_at_or_after(int(datetime(2026, 9, 22, tzinfo=timezone.utc).timestamp()), HEAD) == 1000
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=0), now=NOW)
+    _, _, _, state = _tables(engine)
+    assert (state.initialize_block, state.swap_block, state.backfilled) == (0, 1000, False)
+
+
+def test_cursor_resume_one_page_per_loop_counts_each_swap_once(engine):
+    _sync_until_done(engine, FakeHyperSync(), core.Settings(max_pages=1))
+    _, daily, _, _ = _tables(engine)
+    assert daily == EXPECTED_DAILY
+
+
+def test_crash_mid_backfill_resumes_from_last_committed_batch(engine):
+    crashing = FakeHyperSync(span=300, fail_after=130)
+    with pytest.raises(RuntimeError):
+        for _ in range(50):
+            core.sync_hypersync(engine, BASE, _hs(crashing), FakePrices(), core.Settings(), now=NOW)
+    _, daily_mid, _, mid = _tables(engine)
+    # crashed inside the swap backfill, after the batches holding every swap were committed
+    assert 3000 < mid.swap_block < mid.initialize_block and not mid.backfilled and daily_mid == EXPECTED_DAILY
+    _sync_until_done(engine, FakeHyperSync(span=300), core.Settings())
+    _, daily, _, _ = _tables(engine)
+    assert daily == EXPECTED_DAILY
+
+
+def test_follow_live_adds_new_pool_and_swaps(engine):
+    fake = FakeHyperSync()
+    _sync_until_done(engine, fake, core.Settings())
+    global HEAD
+    old = HEAD
+    try:
+        HEAD = old + 100
+        fake.inits.append(init_log(pid(0xD), ZERO, USDC, HOOK, old + 20))
+        fake.swaps.append((swap_log(pid(0xD), old + 30, -(10 ** 17), 200 * 10 ** 6), W2))
+        st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(), now=NOW)
+    finally:
+        HEAD = old
+    pools, daily, _, _ = _tables(engine)
+    assert pid(0xD) in pools and st.new_pools == 1 and st.swaps == 1
+    assert [v for (p, _), v in daily.items() if p == pid(0xD)] == [(1, 1, 200.0)]
+
+
+# ------------------------------------------------------------------ aggregation + prices
+
+def test_apply_swaps_increments_and_recounts_unique_wallets(engine):
+    d = date(2026, 10, 1)
+    with engine.begin() as c:
+        store.apply_swaps(c, 1, {(PA, d): [2, 10.0]}, {(PA, d, W1): 2})
+        store.apply_swaps(c, 1, {(PA, d): [3, 5.5]}, {(PA, d, W1): 1, (PA, d, W2): 2})
+    with engine.connect() as c:
+        r = c.execute(sa.select(db.pool_daily_onchain)).one()
+        w = dict(c.execute(sa.select(db.pool_wallet_day.c.address, db.pool_wallet_day.c.swaps)).all())
+    assert (r.swaps, r.wallets, r.volume_usd) == (5, 2, 15.5) and w == {W1: 3, W2: 2}
+    with engine.begin() as c:
+        assert store.prune_wallets(c, d.replace(month=11, day=5)) == 2
+
+
+def test_swap_usd_side_selection():
+    eth, usdc = (2000.0, 18), (1.0, 6)
+    assert swap_usd(-10 ** 18, 2000 * 10 ** 6, eth, usdc) == 2000.0
+    assert swap_usd(-10 ** 18, 1990 * 10 ** 6, eth, usdc) == 2000.0            # both priced: larger
+    assert swap_usd(-10 ** 18, 5 * 10 ** 6, eth, usdc) == 5.0                  # 400x apart: one quote is wrong, smaller
+    assert swap_usd(7, 3 * 10 ** 6, None, usdc) == 3.0                         # only one side priced
+    assert swap_usd(7, 3, None, None) is None
+    assert swap_usd(10 ** 30, 0, eth, None) == 0.0                              # absurd single swap dropped
+    assert reliable({"price": 1.0, "decimals": 6, "confidence": 0.99}) == (1.0, 6)
+    assert reliable({"price": 1.0, "decimals": 6, "confidence": 0.2}) is None
+    assert reliable({"price": 1e12, "decimals": 18}) is None
+    assert reliable({"price": 3.0}) is None and reliable({"price": 3.0}, native=True) == (3.0, 18)
+
+
+def test_pricebook_batches_maps_native_and_caches():
+    calls = []
+
+    def llama(request):
+        calls.append(str(request.url))
+        ids = request.url.path.split("/prices/current/")[1].split(",")
+        coins = {}
+        for i in ids:
+            if i == "coingecko:ethereum":
+                coins[i] = {"price": 2000.0, "symbol": "ETH", "confidence": 0.99}
+            elif i == f"base:{USDC}":
+                coins[i] = {"price": 1.0, "decimals": 6, "symbol": "USDC", "confidence": 0.99}
+        return httpx.Response(200, json={"coins": coins})
+
+    clock = [1000.0]
+    pb = PriceBook(httpx.Client(transport=httpx.MockTransport(llama)), clock=lambda: clock[0])
+    got = pb.get(BASE, [ZERO, USDC, TOKX])
+    assert got == {ZERO: (2000.0, 18), USDC: (1.0, 6)} and len(calls) == 1
+    assert "coingecko:ethereum" in calls[0] and f"base:{USDC}" in calls[0]
+    pb.get(BASE, [USDC, TOKX])                     # hits and cached miss: no call
+    assert len(calls) == 1
+    clock[0] += 31 * 60
+    pb.get(BASE, [USDC])
+    assert len(calls) == 2
+
+
+# ------------------------------------------------------------------ chains, fallback, runner
+
+def test_plan_without_token_uses_rpc_on_ten_chains():
+    mode, chains = core.plan(None)
+    assert mode == "rpc" and len(chains) == 10 and all(c.rpc_net in K.LOGS for c in chains)
+    mode, chains = core.plan("tok")
+    assert mode == "hypersync" and len(chains) == 16
+    for c in CHAINS:                                # one source of truth for PoolManager addresses
+        if c.rpc_net:
+            assert K.LOGS[c.rpc_net][0].lower() == c.pool_manager and K.CHAINS[c.rpc_net][0] == c.chain_id
+    assert [c.slug for c in select_chains("base, 130")] == ["base", "unichain"]
+    with pytest.raises(ValueError):
+        select_chains("solana")
+
+
+class FakeRpc:
+    def __init__(self, head):
+        self.head = head
+        self.logs = []
+        self.calls = []
+
+    def __call__(self, request):
+        body = json.loads(request.content)
+        self.calls.append(body["method"])
+        m, p = body["method"], body["params"]
+        if m == "eth_blockNumber":
+            res = hex(self.head)
+        elif m == "eth_getLogs":
+            f, t = int(p[0]["fromBlock"], 16), int(p[0]["toBlock"], 16)
+            assert t - f + 1 <= 120 and p[0]["topics"] == [INITIALIZE_TOPIC]
+            res = [lg for lg in self.logs if f <= int(lg["blockNumber"], 16) <= t]
+        elif m == "eth_getBlockByNumber":
+            res = {"timestamp": hex(T0 + int(p[0], 16) * BT)}
+        else:
+            raise AssertionError(m)
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": res})
+
+
+def test_rpc_fallback_follows_new_blocks_only(engine):
+    fake = FakeRpc(5000)
+    rpc = core.Rpc("https://mainnet.base.org", httpx.Client(transport=httpx.MockTransport(fake)))
+    st = core.sync_rpc(engine, BASE, rpc, 120, core.Settings())
+    _, _, _, state = _tables(engine)
+    assert state.initialize_block == 5000 - BASE.lag + 1 and state.swap_block is None and not state.backfilled
+    assert fake.calls == ["eth_blockNumber"] and st.new_pools == 0          # no backfill
+    lg = init_log(PC, TOKX, USDC, HOOK2, 5100)
+    unhooked = init_log(PB, ZERO, USDC, ZERO, 5101)
+    fake.logs = [{"topics": [x["topic0"], x["topic1"], x["topic2"], x["topic3"]], "data": x["data"],
+                  "blockNumber": hex(x["block_number"]), "transactionHash": x["transaction_hash"]} for x in (lg, unhooked)]
+    fake.head = 5300
+    st = core.sync_rpc(engine, BASE, rpc, 120, core.Settings())
+    pools, _, _, state = _tables(engine)
+    assert set(pools) == {PC} and pools[PC].block_time is not None and st.new_pools == 1
+    assert state.initialize_block == 5300 - BASE.lag + 1
+
+
+def test_rpc_gap_clears_swap_cursor_for_later_hypersync_backfill(engine):
+    with engine.begin() as c:
+        store.set_state(c, BASE.chain_id, initialize_block=100, swap_block=90, backfilled=True)
+    rpc = core.Rpc("https://x", httpx.Client(transport=httpx.MockTransport(FakeRpc(100_000))))
+    core.sync_rpc(engine, BASE, rpc, 120, core.Settings(rpc_max_windows=2))
+    _, _, _, state = _tables(engine)
+    assert state.swap_block is None and not state.backfilled
+    assert state.initialize_block == 100_000 - BASE.lag + 1
+
+
+def test_runner_one_chain_failing_does_not_stop_others(engine, monkeypatch, caplog):
+    seen = []
+
+    def fake_sync(engine_, ch, hs, prices, settings):
+        seen.append(ch.slug)
+        if ch.slug == "ethereum":
+            raise RuntimeError("boom")
+        return core.ChainStats(head=10, init_lag=1, swap_lag=2, new_pools=3, mode="hypersync")
+
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync", fake_sync)
+    r = Runner(engine, "tok", select_chains("ethereum,base"), httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(500))), core.Settings())
+    with caplog.at_level("INFO", logger="bait.indexer"):
+        out = r.run_once()
+    assert seen == ["ethereum", "base"] and out["ethereum"].error == "RuntimeError" and out["base"].new_pools == 3
+    line = heartbeat(1, "hypersync", out)
+    assert "ethereum:ERR(RuntimeError)" in line and "base:lag=1/2,new=3" in line and "new_pools=3" in line
+    assert any("heartbeat loop=1" in m for m in caplog.messages)

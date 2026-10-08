@@ -13,9 +13,12 @@ from . import db
 from .config import CHAIN_BY_SLUG
 from .steps import STEP_ORDER, RunContext, log
 from .steps import activity, digest, enrich, group, ingest, score, signals, snapshot
+from .steps import radar
+from .steps import onchain  # on-chain indexer -> web tables
 
 STEPS = {"ingest": ingest.run, "snapshot": snapshot.run, "activity": activity.run, "group": group.run, "enrich": enrich.run,
-         "score": score.run, "signals": signals.run, "digest": digest.run}
+         "score": score.run, "signals": signals.run, "digest": digest.run,
+         "radar": radar.run, "onchain": onchain.run}
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

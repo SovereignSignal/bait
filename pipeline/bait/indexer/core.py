@@ -1,0 +1,335 @@
+"""Per-chain sync. HyperSync mode: Initialize history from block 0 + Swap logs of hooked pools from 14 days back, then
+follow the head. RPC mode (no token): Initialize only, new blocks only, over the public RPCs in keyless.LOGS."""
+from __future__ import annotations
+
+import logging
+import os
+from dataclasses import dataclass, field
+from datetime import date, datetime, time as dtime, timedelta, timezone
+
+import httpx
+import sqlalchemy as sa
+
+from .chains import CHAINS, IndexedChain
+from .decode import INITIALIZE_TOPIC, decode_initialize, decode_swap, is_hooked, num, utc
+from .hypersync import HyperSync, initialize_query, page, swap_query
+from .prices import PriceBook, swap_usd
+from . import store
+
+log = logging.getLogger("bait.indexer")
+
+SWAP_BACKFILL_DAYS = 14
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+@dataclass
+class Settings:
+    max_pages: int = 40              # HyperSync pages per chain per loop, so one backfilling chain cannot starve the rest
+    topic_filter_max: int = 2000     # up to this many hooked pools: filter Swap logs by pool id (topic1) server side
+    topic_chunk: int = 500           # pool ids per Swap query in topic mode
+    rpc_max_windows: int = 30        # RPC mode: eth_getLogs windows per chain per loop before jumping to the head
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        return cls(max_pages=_env_int("INDEXER_MAX_PAGES", 40), topic_filter_max=_env_int("INDEXER_TOPIC_FILTER_MAX", 2000),
+                   topic_chunk=max(1, _env_int("INDEXER_TOPIC_CHUNK", 500)), rpc_max_windows=_env_int("INDEXER_RPC_MAX_WINDOWS", 30))
+
+
+@dataclass
+class ChainStats:
+    head: int | None = None
+    init_lag: int | None = None
+    swap_lag: int | None = None
+    new_pools: int = 0
+    swaps: int = 0
+    unpriced: int = 0
+    pages: int = 0
+    mode: str = ""
+    error: str | None = None
+
+
+@dataclass
+class SwapAgg:
+    daily: dict = field(default_factory=dict)      # (pool_id, day) -> [swaps, usd]
+    wallets: dict = field(default_factory=dict)    # (pool_id, day, address) -> swaps
+    swaps: int = 0
+    unpriced: int = 0
+
+    def add(self, pool_id: str, day: date, wallet: str, usd: float | None) -> None:
+        d = self.daily.setdefault((pool_id, day), [0, 0.0])
+        d[0] += 1
+        d[1] += usd or 0.0
+        k = (pool_id, day, wallet)
+        self.wallets[k] = self.wallets.get(k, 0) + 1
+        self.swaps += 1
+        self.unpriced += usd is None
+
+
+def plan(token: str | None, chains: list[IndexedChain] | None = None) -> tuple[str, list[IndexedChain]]:
+    """Which path runs: with a token every chain via HyperSync; without, the RPC fallback on chains with a public RPC."""
+    chains = list(CHAINS) if chains is None else chains
+    if token:
+        return "hypersync", chains
+    return "rpc", [c for c in chains if c.rpc_net]
+
+
+# ---------------------------------------------------------------- HyperSync
+
+def _pool_row(chain_id: int, p: dict, lg: dict, block_ts: int | None, block_number: int | None) -> dict:
+    return {**p, "chain_id": chain_id, "block_number": block_number, "block_time": utc(block_ts),
+            "tx_hash": (lg.get("transaction_hash") or lg.get("transactionHash") or "").lower() or None}
+
+
+def hooked_pools_from_page(chain_id: int, logs: list[dict], blocks: dict[int, int]) -> list[dict]:
+    rows = []
+    for lg in logs:
+        p = decode_initialize(lg)
+        if p and is_hooked(p):
+            bn = num(lg.get("block_number"))
+            rows.append(_pool_row(chain_id, p, lg, blocks.get(bn), bn))
+    return rows
+
+
+def aggregate_swaps(chain: IndexedChain, logs: list[dict], blocks: dict[int, int], txs: dict[str, str],
+                    known: dict[str, tuple[str, str]], prices: PriceBook | None, agg: SwapAgg) -> None:
+    """Swaps of known hooked pools -> agg. Wallet = transaction sender (tx.from), falling back to the Swap sender."""
+    decoded = []
+    for lg in logs:
+        s = decode_swap(lg)
+        if s is None or s["pool_id"] not in known:
+            continue
+        ts = blocks.get(num(lg.get("block_number")))
+        if ts is None:
+            continue
+        decoded.append((s, ts, txs.get((lg.get("transaction_hash") or "").lower()) or s["sender"] or "unknown"))
+    if not decoded:
+        return
+    book = {}
+    if prices is not None:
+        addrs = {c for s, _, _ in decoded for c in known[s["pool_id"]]}
+        book = prices.get(chain, addrs)
+    for s, ts, wallet in decoded:
+        c0, c1 = known[s["pool_id"]]
+        usd = swap_usd(s["amount0"], s["amount1"], book.get(c0), book.get(c1))
+        agg.add(s["pool_id"], datetime.fromtimestamp(ts, tz=timezone.utc).date(), wallet, usd)
+
+
+def swap_start_ts(now: datetime) -> tuple[date, int]:
+    d = now.astimezone(timezone.utc).date() - timedelta(days=SWAP_BACKFILL_DAYS)
+    return d, int(datetime.combine(d, dtime.min, tzinfo=timezone.utc).timestamp())
+
+
+def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices: PriceBook | None,
+                   settings: Settings, now: datetime | None = None) -> ChainStats:
+    st = ChainStats(mode="hypersync")
+    now = now or datetime.now(timezone.utc)
+    head = hs.height()
+    st.head = head
+    end = head - chain.lag + 1          # exclusive end of the reorg-safe range
+    if end <= 0:
+        return st
+    with engine.connect() as conn:
+        state = store.get_state(conn, chain.chain_id)
+    if state is None or state.swap_block is None:
+        # First HyperSync run for this chain (or history broken by an RPC-mode gap): full Initialize backfill from 0 and a
+        # fresh 14-day Swap window starting at the first block of that UTC day.
+        start_day, ts = swap_start_ts(now)
+        start_block = hs.block_at_or_after(ts, end - 1)
+        with engine.begin() as conn:
+            store.reset_swaps_from(conn, chain.chain_id, start_day)
+            store.set_state(conn, chain.chain_id, initialize_block=0, swap_block=start_block, head_block=head, backfilled=False)
+        log.info("chain=%s backfill start: Initialize from 0, Swap from block %d (%s 00:00 UTC)", chain.slug, start_block, start_day)
+        with engine.connect() as conn:
+            state = store.get_state(conn, chain.chain_id)
+
+    init_from = state.initialize_block or 0
+    while init_from < end and st.pages < settings.max_pages:
+        logs, blocks, _, nb, _ = page(hs.query(initialize_query(chain.pool_manager, init_from, end)))
+        st.pages += 1
+        if nb is None or nb <= init_from:
+            raise RuntimeError(f"HyperSync made no progress at block {init_from} (next_block={nb})")
+        nb = min(nb, end)
+        rows = hooked_pools_from_page(chain.chain_id, logs, blocks)
+        with engine.begin() as conn:
+            store.upsert_pools(conn, rows)
+            store.set_state(conn, chain.chain_id, initialize_block=nb, head_block=head)
+        st.new_pools += len(rows)
+        init_from = nb
+
+    swap_from = state.swap_block
+    swap_end = min(init_from, end)      # never count swaps past the block our pool list is complete for
+    with engine.connect() as conn:
+        n_pools = store.pool_count(conn, chain.chain_id)
+    if n_pools == 0:
+        if swap_from < swap_end:
+            with engine.begin() as conn:
+                store.set_state(conn, chain.chain_id, swap_block=swap_end, head_block=head)
+            swap_from = swap_end
+    elif n_pools <= settings.topic_filter_max:
+        st.mode = "hypersync/topic"
+        with engine.connect() as conn:
+            known = store.all_pools(conn, chain.chain_id)
+        ids = sorted(known)
+        chunks = [ids[i:i + settings.topic_chunk] for i in range(0, len(ids), settings.topic_chunk)]
+        while swap_from < swap_end and st.pages < settings.max_pages:
+            agg = SwapAgg()
+            logs, blocks, txs, nb, _ = page(hs.query(swap_query(chain.pool_manager, swap_from, swap_end, chunks[0])))
+            st.pages += 1
+            if nb is None or nb <= swap_from:
+                raise RuntimeError(f"HyperSync made no progress at block {swap_from} (next_block={nb})")
+            nb = min(nb, swap_end)
+            aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
+            for chunk in chunks[1:]:   # same block range for the other id chunks, so one cursor covers them all
+                cur = swap_from
+                while cur < nb:
+                    logs, blocks, txs, n2, _ = page(hs.query(swap_query(chain.pool_manager, cur, nb, chunk)))
+                    st.pages += 1
+                    if n2 is None or n2 <= cur:
+                        raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={n2})")
+                    aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
+                    cur = n2
+            _commit_swaps(engine, chain, agg, nb, head, st)
+            swap_from = nb
+    else:
+        st.mode = "hypersync/scan"
+        while swap_from < swap_end and st.pages < settings.max_pages:
+            agg = SwapAgg()
+            logs, blocks, txs, nb, _ = page(hs.query(swap_query(chain.pool_manager, swap_from, swap_end)))
+            st.pages += 1
+            if nb is None or nb <= swap_from:
+                raise RuntimeError(f"HyperSync made no progress at block {swap_from} (next_block={nb})")
+            nb = min(nb, swap_end)
+            ids = set()
+            for lg in logs:
+                s = decode_swap(lg)
+                if s:
+                    ids.add(s["pool_id"])
+            with engine.connect() as conn:
+                known = store.pools_by_id(conn, chain.chain_id, ids)
+            aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
+            _commit_swaps(engine, chain, agg, nb, head, st)
+            swap_from = nb
+
+    st.init_lag = max(end - init_from, 0)
+    st.swap_lag = max(end - swap_from, 0)
+    if not state.backfilled and init_from >= end and swap_from >= end:
+        with engine.begin() as conn:
+            store.set_state(conn, chain.chain_id, backfilled=True, head_block=head)
+        log.info("chain=%s backfill complete at block %d", chain.slug, end - 1)
+    return st
+
+
+def _commit_swaps(engine: sa.Engine, chain: IndexedChain, agg: SwapAgg, cursor: int, head: int, st: ChainStats) -> None:
+    with engine.begin() as conn:
+        store.apply_swaps(conn, chain.chain_id, agg.daily, agg.wallets)
+        store.set_state(conn, chain.chain_id, swap_block=cursor, head_block=head)
+    st.swaps += agg.swaps
+    st.unpriced += agg.unpriced
+
+
+# ---------------------------------------------------------------- RPC fallback (no token)
+
+class RpcError(RuntimeError):
+    pass
+
+
+class Rpc:
+    def __init__(self, url: str, client: httpx.Client, sleep=None):
+        import time
+        self.url = url
+        self.client = client
+        self.calls = 0
+        self.sleep = sleep or time.sleep
+
+    def call(self, method: str, params: list):
+        """One JSON-RPC call; public endpoints throttle (429), so back off twice before giving up for this loop."""
+        for attempt in range(3):
+            self.calls += 1
+            try:
+                r = self.client.post(self.url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
+                                     headers={"User-Agent": "bait-indexer/0.1"}, timeout=30)
+            except httpx.HTTPError as e:
+                if attempt == 2:
+                    raise RpcError(f"{self.url} {method}: {e!r}") from e
+                self.sleep(2 * (attempt + 1))
+                continue
+            if r.status_code in (429, 502, 503, 504) and attempt < 2:
+                self.sleep(3 * (attempt + 1))
+                continue
+            if r.status_code != 200:
+                raise RpcError(f"{self.url} {method}: HTTP {r.status_code}")
+            body = r.json()
+            if "error" in body:
+                raise RpcError(f"{self.url} {method}: {body['error']}")
+            return body.get("result")
+        raise RpcError(f"{self.url} {method}: gave up")
+
+
+# Following the head needs an endpoint that tolerates one eth_getLogs per loop. mainnet.base.org and bsc.drpc.org
+# (keyless.LOGS) answered 429 from the first call on 2026-10-08; publicnode served 1000-block Initialize windows on both.
+RPC_OVERRIDES = {"base": ("https://base-rpc.publicnode.com", 500), "bsc": ("https://bsc-rpc.publicnode.com", 200)}
+
+
+def rpc_endpoint(chain: IndexedChain) -> tuple[str, str, int]:
+    """(pool manager, url, eth_getLogs window in blocks): keyless.LOGS unless overridden above."""
+    from .. import keyless as K
+    pm, url, window = K.LOGS[chain.rpc_net]
+    url, window = RPC_OVERRIDES.get(chain.rpc_net, (url, window))
+    return pm.lower(), url, window
+
+
+def sync_rpc(engine: sa.Engine, chain: IndexedChain, rpc: Rpc, window: int, settings: Settings) -> ChainStats:
+    st = ChainStats(mode="rpc")
+    pm = chain.pool_manager
+    head = num(rpc.call("eth_blockNumber", []))
+    st.head = head
+    end = head - chain.lag + 1
+    with engine.connect() as conn:
+        state = store.get_state(conn, chain.chain_id)
+    if state is None or state.initialize_block is None:
+        with engine.begin() as conn:
+            store.set_state(conn, chain.chain_id, initialize_block=end, head_block=head)
+        log.info("chain=%s rpc mode: following new blocks from %d (no backfill without HYPERSYNC_API_TOKEN)", chain.slug, end)
+        st.init_lag = 0
+        return st
+    cur = state.initialize_block
+    max_gap = window * settings.rpc_max_windows
+    if end - cur > max_gap:
+        skipped = end - max_gap - cur
+        cur = end - max_gap
+        # History now has a hole: clear the swap cursor so a later HyperSync run re-backfills from block 0.
+        with engine.begin() as conn:
+            store.set_state(conn, chain.chain_id, initialize_block=cur, swap_block=None, backfilled=False, head_block=head)
+        log.warning("chain=%s rpc mode fell %d blocks behind; skipped them (a HyperSync run will backfill)", chain.slug, skipped)
+    while cur < end:
+        to = min(cur + window, end) - 1
+        logs = rpc.call("eth_getLogs", [{"address": pm, "topics": [INITIALIZE_TOPIC], "fromBlock": hex(cur), "toBlock": hex(to)}]) or []
+        st.pages += 1
+        rows = []
+        need_ts = {}
+        for lg in logs:
+            p = decode_initialize(lg)
+            if p and is_hooked(p):
+                bn = num(lg.get("blockNumber"))
+                ts = num(lg.get("blockTimestamp")) or None    # some nodes (Robinhood) send 0x0
+                row = _pool_row(chain.chain_id, p, lg, ts, bn)
+                rows.append(row)
+                if ts is None and bn is not None:
+                    need_ts.setdefault(bn, []).append(row)
+        for bn, rs in need_ts.items():
+            b = rpc.call("eth_getBlockByNumber", [hex(bn), False]) or {}
+            for r in rs:
+                r["block_time"] = utc(num(b.get("timestamp")))
+        with engine.begin() as conn:
+            store.upsert_pools(conn, rows)
+            store.set_state(conn, chain.chain_id, initialize_block=to + 1, head_block=head)
+        st.new_pools += len(rows)
+        cur = to + 1
+    st.init_lag = max(end - cur, 0)
+    return st

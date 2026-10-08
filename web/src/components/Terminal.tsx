@@ -2,7 +2,7 @@
 // List, movers and the back link read the URL on the client; on the statically rendered
 // project page they suspend and the fallback renders the default tab.
 import { Suspense } from "react";
-import type { ProjectDetail, RowView } from "@/lib/types";
+import type { LaunchView, ProjectDetail, RowView } from "@/lib/types";
 import { Detail, EmptyDetail } from "./Detail";
 import { Footer } from "./Footer";
 import { BackLink, BackLinkView, Movers, MoversFallback, ProjectList, ProjectListFallback } from "./ProjectList";
@@ -17,6 +17,8 @@ export function Terminal({
   now,
   sample,
   emptyText,
+  launches,
+  launchesNow,
 }: {
   rows: RowView[];
   moverRows: RowView[];
@@ -26,6 +28,9 @@ export function Terminal({
   now: number;
   sample: boolean;
   emptyText?: string;
+  /** "Just launched" panel on top of the New tab's list (only passed when the tab is New) */
+  launches?: LaunchView[];
+  launchesNow?: number;
 }) {
   return (
     <div className={s.shell} data-view={view}>
@@ -34,7 +39,7 @@ export function Terminal({
       </Suspense>
       <main className={s.app}>
         <Suspense fallback={<ProjectListFallback rows={rows} selected={project?.slug} now={now} />}>
-          <ProjectList rows={rows} selected={project?.slug} now={now} />
+          <ProjectList rows={rows} selected={project?.slug} now={now} launches={launches} launchesNow={launchesNow} />
         </Suspense>
         <section className={s.detail} aria-live="polite" aria-label="Project">
           {view === "detail" && (

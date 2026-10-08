@@ -173,7 +173,7 @@ export function usingFixtures(): boolean {
 }
 
 /** Before the pipeline's first run the tables may not exist yet; render empty rather than 500 (and fail the healthcheck). */
-async function safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
+export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
   try {
     return await fn();
   } catch (e) {
