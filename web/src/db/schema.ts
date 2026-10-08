@@ -1,4 +1,4 @@
-// Mirrors db/migrations/0001_init.sql (and pipeline/hookfeed/db.py). Column
+// Mirrors db/migrations/0001_init.sql (and pipeline/bait/db.py). Column
 // names are snake_case in Postgres, camelCase here. Keep the three in sync.
 import { pgTable, serial, text, integer, bigint, boolean, jsonb, timestamp, date, doublePrecision, primaryKey, index } from "drizzle-orm/pg-core";
 
@@ -132,7 +132,7 @@ export const receipts = pgTable(
   (t) => [primaryKey({ columns: [t.projectId, t.url] })],
 );
 
-/** Digest card as written by pipeline/hookfeed/steps/digest.py. */
+/** Digest card as written by pipeline/bait/steps/digest.py. */
 export interface DigestCard {
   slug: string;
   name: string;

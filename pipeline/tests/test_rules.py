@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from hookfeed.rules import is_dynamic_fee, is_new, is_spam, normalize_name, routable, score_trending, slugify
+from bait.rules import is_dynamic_fee, is_new, is_spam, normalize_name, routable, score_trending, slugify
 
 
 def hook(address="0xabc0000000000000000000000000000000000001", flags=None, dynamic=False):

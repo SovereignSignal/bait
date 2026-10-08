@@ -27,7 +27,7 @@ import type {
 export const TRENDING_TOP_N = 20;
 export const TRENDING_MIN_VOL = 10_000;
 
-// Same markers as pipeline/hookfeed/clients/nansen.py is_smart_money.
+// Same markers as pipeline/bait/clients/nansen.py is_smart_money.
 const SMART_MONEY_MARKERS = ["smart money", "fund", "smart trader", "smart lp", "smart dex"];
 
 // ---------- derivation shared by both sources ----------
@@ -146,9 +146,9 @@ export async function listDigests(limit = 12): Promise<DigestView[]> {
   return rows.map(toDigest);
 }
 
-/** Fixtures are opt-in (HOOKFEED_FIXTURES=1) so a build with no DATABASE_URL prerenders empty pages, never sample figures. */
+/** Fixtures are opt-in (BAIT_FIXTURES=1) so a build with no DATABASE_URL prerenders empty pages, never sample figures. */
 export function usingFixtures(): boolean {
-  return !process.env.DATABASE_URL && process.env.HOOKFEED_FIXTURES === "1";
+  return !process.env.DATABASE_URL && process.env.BAIT_FIXTURES === "1";
 }
 
 /** Before the pipeline's first run the tables may not exist yet; render empty rather than 500 (and fail the healthcheck). */

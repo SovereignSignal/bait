@@ -55,7 +55,7 @@ def env(name: str) -> str | None:
 
 
 def database_url() -> str:
-    url = env("DATABASE_URL") or "sqlite:///./hookfeed.sqlite"
+    url = env("DATABASE_URL") or "sqlite:///./bait.sqlite"
     if url.startswith("postgres://"):
         url = "postgresql+psycopg://" + url[len("postgres://"):]
     elif url.startswith("postgresql://"):

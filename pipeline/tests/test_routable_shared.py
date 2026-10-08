@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hookfeed.rules import routable
+from bait.rules import routable
 
 CASES_FILE = Path(__file__).resolve().parents[2] / "fixtures" / "routable_cases.json"
 CASES = json.loads(CASES_FILE.read_text())["cases"]

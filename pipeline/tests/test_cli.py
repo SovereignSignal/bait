@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 
-from hookfeed import db
-from hookfeed.__main__ import main
+from bait import db
+from bait.__main__ import main
 from tests.conftest import FIXTURE
 
 

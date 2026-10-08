@@ -1,4 +1,4 @@
-# Bait (repo: hookfeed)
+# Bait
 
 One feed for Uniswap v4 hooks: discover new hooks, see what people are using, understand why it
 matters, try it. Cards grouped by project, not by hook address.
@@ -9,11 +9,11 @@ tokens: [`mock.html`](mock.html). Not part of UF ops.
 ## Layout
 
 ```
-hookfeed/
+bait/
   DESIGN.md            the spec; read it first
   mock.html            UI mock, source of the design tokens
   db/                  SQL migrations (db/migrations/000N_*.sql), applied with psql
-  pipeline/            Python nightly job, Railway cron service: python -m hookfeed run
+  pipeline/            Python nightly job, Railway cron service: python -m bait run
   web/                 Next.js App Router site, Railway web service (Drizzle -> Postgres, ISR 1h)
   railway/README.md    how the three Railway services are created and configured
   pipeline/railway.json, web/railway.json   Railway config-as-code per service
@@ -26,7 +26,7 @@ Each of `db/`, `pipeline/`, `web/` has its own README with the details.
 ## Local dev, in order
 
 Requirements: Node 20, Python 3.12, `psql` (postgresql-client). A Postgres is optional for a
-first run: the pipeline falls back to SQLite, and the web app to fixture data (with `HOOKFEED_FIXTURES=1`), when `DATABASE_URL`
+first run: the pipeline falls back to SQLite, and the web app to fixture data (with `BAIT_FIXTURES=1`), when `DATABASE_URL`
 is unset.
 
 1. Env
@@ -67,7 +67,7 @@ is unset.
    and `web/src/lib/routable.test.ts` (`npm test`) both assert it so the two implementations cannot drift.
 
    `run-pipeline-local.sh` loads `.env`, cds into `pipeline/` and runs
-   `python -m hookfeed run --hooklist-file fixtures/hooklist.sample.json` plus whatever flags you
+   `python -m bait run --hooklist-file fixtures/hooklist.sample.json` plus whatever flags you
    pass (`--steps`, `--chains`, `--day`, `--database-url`, `--force-digest`). Runs are
    idempotent per day. Without `GRAPH_API_KEY` the snapshot step logs
    `client=graph skipped` and writes nothing, which is expected.
@@ -78,7 +78,7 @@ is unset.
    cd web && npm install && npm run dev      # http://localhost:3000
    ```
 
-   No `DATABASE_URL` = empty pages. Add `HOOKFEED_FIXTURES=1` for sample data with a "Sample figures" note. Set `DATABASE_URL` to read the database the
+   No `DATABASE_URL` = empty pages. Add `BAIT_FIXTURES=1` for sample data with a "Sample figures" note. Set `DATABASE_URL` to read the database the
    pipeline just filled.
 
 ## Deploy
@@ -103,7 +103,7 @@ Railway variables and your local `.env`, never in the repo.
    ```
 
    That uses the 300-hook fixture. For the live hooklist.json from GitHub run the CLI directly:
-   `cd pipeline && .venv/bin/python -m hookfeed run --steps ingest,snapshot`.
+   `cd pipeline && .venv/bin/python -m bait run --steps ingest,snapshot`.
 4. Check counts and the subgraph health warnings:
 
    ```sql
@@ -127,7 +127,7 @@ Railway variables and your local `.env`, never in the repo.
 - The v4 pool deep link `app.uniswap.org/explore/pools/<chain>/<poolId>` with a bytes32 poolId
   is unconfirmed in a browser.
 - Routable rule in code is stricter than the published Labs rule (adds the two liquidity-delta
-  flags); `NON_ROUTABLE_FLAGS` in `pipeline/hookfeed/rules.py` is where to relax it.
+  flags); `NON_ROUTABLE_FLAGS` in `pipeline/bait/rules.py` is where to relax it.
 
 Disclaimers on every project page: not audited by us; flags shown as published; the routable
 badge is a rule, not a guarantee.

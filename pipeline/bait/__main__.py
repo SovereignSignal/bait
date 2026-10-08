@@ -1,5 +1,5 @@
-"""CLI: python -m hookfeed run --day YYYY-MM-DD [--steps a,b] [--chains base,ethereum] [--hooklist-file f] [--force-digest]
-       python -m hookfeed init-db   (create tables; for local SQLite dev, Postgres uses db/migrations)."""
+"""CLI: python -m bait run --day YYYY-MM-DD [--steps a,b] [--chains base,ethereum] [--hooklist-file f] [--force-digest]
+       python -m bait init-db   (create tables; for local SQLite dev, Postgres uses db/migrations)."""
 from __future__ import annotations
 
 import argparse
@@ -18,7 +18,7 @@ STEPS = {"ingest": ingest.run, "snapshot": snapshot.run, "group": group.run, "en
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(prog="hookfeed")
+    ap = argparse.ArgumentParser(prog="bait")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run the nightly pipeline for one day (idempotent)")
     r.add_argument("--day", type=date.fromisoformat, default=None, help="YYYY-MM-DD, default: today UTC")

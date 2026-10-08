@@ -1,1 +1,0 @@
-"""hookfeed nightly pipeline."""

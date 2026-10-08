@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from ..db import utcnow
 
-log = logging.getLogger("hookfeed")
+log = logging.getLogger("bait")
 
 STEP_ORDER = ["ingest", "snapshot", "group", "enrich", "score", "signals", "digest"]
 

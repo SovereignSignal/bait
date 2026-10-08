@@ -1,8 +1,8 @@
 import sqlalchemy as sa
 
-from hookfeed import db
-from hookfeed.clients.blockscout import CodeInfo
-from hookfeed.steps import group, ingest
+from bait import db
+from bait.clients.blockscout import CodeInfo
+from bait.steps import group, ingest
 from tests.conftest import insert_hook
 
 

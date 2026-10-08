@@ -3,10 +3,10 @@ import json
 import httpx
 import sqlalchemy as sa
 
-from hookfeed import db
-from hookfeed.clients.graph import Graph
-from hookfeed.config import ZERO_ADDRESS
-from hookfeed.steps import snapshot
+from bait import db
+from bait.clients.graph import Graph
+from bait.config import ZERO_ADDRESS
+from bait.steps import snapshot
 
 
 def pool(i, hook="0x0000fe59823933ac763611a69c88f91d45f81888"):

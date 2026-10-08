@@ -1,4 +1,4 @@
-# hookfeed / web
+# Bait / web
 
 Next.js App Router frontend for Bait: one feed for Uniswap v4 hooks, grouped by project. Spec: `../DESIGN.md`. Visual spec: `../mock.html`.
 
@@ -10,7 +10,7 @@ npm run dev            # http://localhost:3000, fixture data (no DATABASE_URL)
 npm run build && npm start
 ```
 
-Set `DATABASE_URL` to read Postgres. For local UI work without a database, run with `HOOKFEED_FIXTURES=1` to serve `src/fixtures/sample.ts` (the four mock projects plus six sample rows); the feed then shows a "Sample figures" note. With neither set, every page renders empty, which is what the Docker build does so no sample figures are ever baked into the image.
+Set `DATABASE_URL` to read Postgres. For local UI work without a database, run with `BAIT_FIXTURES=1` to serve `src/fixtures/sample.ts` (the four mock projects plus six sample rows); the feed then shows a "Sample figures" note. With neither set, every page renders empty, which is what the Docker build does so no sample figures are ever baked into the image.
 
 ## Routes
 
@@ -44,8 +44,8 @@ Schema notes: `src/db/schema.ts` mirrors `../db/migrations/0001_init.sql` exactl
 ## Docker
 
 ```sh
-docker build -t hookfeed-web .
-docker run -p 3000:3000 -e DATABASE_URL=postgres://... hookfeed-web
+docker build -t bait-web .
+docker run -p 3000:3000 -e DATABASE_URL=postgres://... bait-web
 ```
 
 Multi-stage, `node:20-alpine`, `output: 'standalone'`.

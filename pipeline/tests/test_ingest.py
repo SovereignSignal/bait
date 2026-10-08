@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 
 import sqlalchemy as sa
 
-from hookfeed import db
-from hookfeed.steps import ingest
+from bait import db
+from bait.steps import ingest
 
 
 def test_ingest_fixture_then_idempotent(conn, ctx):
