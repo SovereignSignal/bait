@@ -126,7 +126,7 @@ class PriceBook:
         except httpx.HTTPError as e:
             log.warning("defillama error %r", e)
             return None
-        if r.status_code == 429 or r.status_code >= 500:
+        if r.status_code in (401, 403, 429) or r.status_code >= 500:  # auth/rate/server: transient, never a bad batch
             log.warning("defillama HTTP %s for %d coins; page retried next loop", r.status_code, len(ids))
             return None
         if r.status_code != 200:

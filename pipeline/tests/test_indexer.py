@@ -622,3 +622,12 @@ def test_runner_warns_after_three_consecutive_price_outages_on_a_chain(engine, m
         warned.append(any(rec.levelname == "WARNING" and "consecutive" in rec.getMessage() for rec in caplog.records))
         assert out["base"].error in ("prices", None)
     assert warned == [False, False, True, False, False]    # third in a row warns; a success resets the count
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_defillama_auth_errors_are_transient_not_a_rejected_batch(status):
+    from bait.indexer.prices import PricesUnavailable
+    pb = PriceBook(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(status))))
+    with pytest.raises(PricesUnavailable):
+        pb.get(BASE, [TOKX, ZERO])
+    assert pb.calls == 1                                   # not split into per-coin retries
