@@ -101,3 +101,24 @@ def test_digest_only_on_monday_or_forced(conn, ctx):
     seed_daily_monday = conn.execute(sa.insert(db.project_daily).values(project_id=p, day=ctx.day, score_trending=0, is_new=False, is_spam=False))
     assert digest.run(conn, ctx)["written"] == 1
     assert conn.execute(sa.select(sa.func.count()).select_from(db.digests)).scalar_one() == 2
+
+
+def test_signals_unnamed_first_target_does_not_crash_or_leak_hits(conn, ctx):
+    # An unlisted hook has no name tokens, so Exa is never queried for it. Before the fix, `hits` was unbound on
+    # the first such project (UnboundLocalError -> soft error) and stale on later ones.
+    unnamed = insert_project(conn, "Unlisted hook 0xabcd…1234", NOW - timedelta(days=40), slug="unlisted-hook-0xabcd-1234")
+    named = insert_project(conn, "Hot", NOW - timedelta(days=40), slug="hot")
+    for pid in (unnamed, named):
+        insert_hook(conn, f"0x{pid}", 1, project_id=pid)
+    seed_daily(conn, unnamed, score=50.0, tvl=5e6)      # ranks first
+    seed_daily(conn, named, score=30.0, tvl=1e6)
+    hit = {"url": "https://blog.example.com/hot", "title": "Hot hook ships", "source": "blog.example.com",
+           "published_at": NOW - timedelta(days=3), "highlights": []}
+    exa = FakeExa([hit])
+    ctx.clients.update(exa=exa, github=None, claude=None, nansen=None)
+    out = signals.run(conn, ctx)
+    assert out["errors"] == 0
+    assert exa.calls == 1                                  # only the named project was searched
+    kinds = {(r.project_id, r.kind) for r in conn.execute(sa.select(db.signals.c.project_id, db.signals.c.kind))}
+    assert (unnamed, "exa") not in kinds                   # no leaked receipt signal on the unnamed project
+    assert (named, "exa") in kinds
