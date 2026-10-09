@@ -85,6 +85,7 @@ def test_no_client_still_renames_from_stored_names(conn, ctx):
     conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(9)).values(contract_name="OuroborosHook"))
     names.run(conn, ctx, {})
     assert conn.execute(sa.select(db.projects.c.name).where(db.projects.c.id == pid)).scalar_one() == "OuroborosHook"
+    assert _aliases(conn) == {"unlisted-000009-130": (pid, "renamed")}
 
 
 def test_useful_name():
@@ -132,3 +133,30 @@ def test_chain_labels_cover_indexed_chains():
     from bait.steps.names import chain_label
     assert chain_label(4326) == "MegaETH" and chain_label(1) == "Ethereum"
     assert all(not chain_label(c.chain_id).isdigit() for c in CHAINS)
+
+
+def _aliases(conn):
+    return {r.old_slug: (r.project_id, r.reason) for r in conn.execute(sa.select(db.project_aliases))}
+
+
+def test_retire_moves_hooks_and_repoints_aliases(conn, ctx):
+    a, b, c = (insert_project(conn, n, NOW, slug=n.lower()) for n in ("A", "B", "C"))
+    insert_hook(conn, A(20), 1, project_id=a)
+    names.add_alias(conn, "old-a", a, "renamed", NOW)
+    names.retire_project(conn, a, into=b, reason="test", now=NOW)
+    assert _aliases(conn) == {"old-a": (b, "renamed"), "a": (b, "test")}
+    assert conn.execute(sa.select(db.hooks.c.project_id).where(db.hooks.c.address == A(20))).scalar_one() == b
+    names.retire_project(conn, c, into=None, reason="split", now=NOW)
+    assert {r.id for r in conn.execute(sa.select(db.projects.c.id))} == {b}
+
+
+def test_backfill_unlisted_aliases_recreates_old_unlisted_slugs(conn, ctx):
+    named = insert_project(conn, "OuroborosHook", NOW, slug="ouroboroshook")
+    insert_hook(conn, "0x7bc2af6fb9a989505e9629470869a19143532aec", 4663, project_id=named)
+    x, y = insert_project(conn, "X", NOW, slug="x"), insert_project(conn, "Y", NOW, slug="y")
+    insert_hook(conn, "0x1111" + "0" * 32 + "beef", 1, project_id=x)        # these two would share one old slug:
+    insert_hook(conn, "0x1111" + "1" * 32 + "beef", 8453, project_id=y)     # ambiguous, so neither gets it
+    conn.execute(sa.update(db.hooks).values(hooklisted=False))
+    assert names.backfill_unlisted_aliases(conn, NOW) == 1
+    assert names.backfill_unlisted_aliases(conn, NOW) == 0                  # idempotent
+    assert _aliases(conn) == {"unlisted-hook-0x7bc2-2aec": (named, "backfill")}

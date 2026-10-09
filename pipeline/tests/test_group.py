@@ -115,3 +115,16 @@ def test_group_backfills_address_flags_for_empty_metadata_hooks(conn, ctx):
     group.run(conn, ctx)
     f = conn.execute(sa.select(db.hooks.c.flags).where(db.hooks.c.address == "0x4444000000000000000000000000000000000008")).scalar_one()
     assert f["beforeSwapReturnsDelta"] is True and f["beforeSwap"] is False
+
+
+def test_regroup_column_is_added_to_an_existing_hooks_table(tmp_path):
+    e = db.make_engine(f"sqlite:///{tmp_path}/old.sqlite")
+    with e.begin() as c:
+        c.execute(sa.text("CREATE TABLE hooks (address text NOT NULL, chain_id integer NOT NULL, name text,"
+                          " first_seen_at timestamp NOT NULL, PRIMARY KEY (address, chain_id))"))
+        c.execute(sa.text("INSERT INTO hooks VALUES ('0xa', 1, NULL, '2026-10-06 06:00:00')"))
+    db.create_all(e)
+    assert "hooks.regroup" in db.add_missing_columns(e)
+    with e.begin() as c:
+        assert c.execute(sa.text("SELECT regroup FROM hooks")).scalar_one() == 0
+        assert sa.inspect(c).has_table("project_aliases")
