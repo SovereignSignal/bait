@@ -144,9 +144,13 @@ def _counted(chain_id: int, hook: str, total: int, first, last, seen_at, rows: l
 
 def widen_lookup_floor(conn: sa.Connection, chain_id: int) -> None:
     """History was reset (an RPC-mode hole, a fresh backfill): pools past a cap may sit below any first_block recorded
-    since, so lookups by pool id start from block 0 on this chain."""
-    conn.execute(sa.update(hook_pool_counts).where(hook_pool_counts.c.chain_id == chain_id, hook_pool_counts.c.first_block != 0)
-                 .values(first_block=0))
+    since, so lookups by pool id start at the chain's PoolManager deployment block when recorded (chains.py), else 0."""
+    from .chains import CHAIN_BY_ID
+    ch = CHAIN_BY_ID.get(chain_id)
+    floor = (ch.deploy_block if ch is not None else None) or 0
+    t = hook_pool_counts.c
+    conn.execute(sa.update(hook_pool_counts).where(t.chain_id == chain_id, sa.or_(t.first_block.is_(None), t.first_block > floor))
+                 .values(first_block=floor))
 
 
 def capped_floor(conn: sa.Connection, chain_id: int) -> int | None:

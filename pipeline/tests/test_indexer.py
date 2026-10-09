@@ -953,3 +953,16 @@ def test_a_history_reset_widens_the_lookup_floor_to_block_zero(engine):
         c.execute(sa.update(db.hook_pool_counts).values(first_block=500))
     core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=0), now=NOW)   # re-backfill
     assert _counter(engine).first_block == 0
+
+
+def test_a_history_reset_floors_lookups_at_the_pool_managers_deployment_block_when_known(engine, monkeypatch):
+    import dataclasses
+    from bait.indexer import chains
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=9, first_block=500,
+                                                        last_block=900))
+    monkeypatch.setitem(chains.CHAIN_BY_ID, BASE.chain_id, dataclasses.replace(BASE, deploy_block=120))
+    with engine.begin() as c:
+        store.widen_lookup_floor(c, BASE.chain_id)
+    assert _counter(engine).first_block == 120
+    assert all(c.deploy_block is None or c.deploy_block >= 0 for c in chains.CHAINS)
