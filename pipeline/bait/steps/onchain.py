@@ -17,7 +17,7 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
@@ -133,21 +133,36 @@ def _upsert_pools(conn, ctx: RunContext, known: set[tuple[str, int]], out: dict)
         out["pools"] += len(rows)
 
 
-def _usage(conn, ctx: RunContext, out: dict) -> None:
+def ref_day(ctx: RunContext) -> date:
+    """The day pool_stats reports: the last complete UTC day (today is still running when the nightly job fires)."""
+    return ctx.day - timedelta(days=1) if ctx.day >= ctx.now.astimezone(timezone.utc).date() else ctx.day
+
+
+def ready_chains(conn, ctx: RunContext, out: dict | None = None) -> list[int]:
+    """Chains whose on-chain usage may replace keyless numbers: backfilled, written within ONCHAIN_MAX_STALE_HOURS, and the
+    swap cursor's block time past the end of the reference day. updated_at alone is not enough: Initialize pages keep
+    bumping it while swap queries fail every loop."""
     stale_h = _env_int("ONCHAIN_MAX_STALE_HOURS", 6)
+    ref_end = datetime.combine(ref_day(ctx) + timedelta(days=1), dtime.min, tzinfo=timezone.utc)
     ready = []
-    for st in conn.execute(sa.select(indexer_state)):
-        if ctx.chains and st.chain_id not in ctx.chains:
+    for st in conn.execute(sa.select(indexer_state).order_by(indexer_state.c.chain_id)):
+        if (ctx.chains and st.chain_id not in ctx.chains) or not st.backfilled:
             continue
         fresh = st.updated_at is not None and as_utc(st.updated_at) >= ctx.now - timedelta(hours=stale_h)
-        if st.backfilled and fresh:
+        swaps_done = st.swap_block_time is not None and as_utc(st.swap_block_time) >= ref_end
+        if fresh and swaps_done:
             ready.append(st.chain_id)
-        elif st.backfilled:
+        elif out is not None:
             out["chains_stale"] += 1
-            log.warning("onchain chain_id=%s indexer stale (updated_at=%s); keyless usage kept", st.chain_id, st.updated_at)
+            log.warning("onchain chain_id=%s not ready (updated_at=%s swap_block_time=%s, need >= %s); keyless usage kept",
+                        st.chain_id, st.updated_at, st.swap_block_time, ref_end)
+    return ready
+
+
+def _usage(conn, ctx: RunContext, out: dict) -> None:
+    ready = ready_chains(conn, ctx, out)
     window_start = ctx.day - timedelta(days=WINDOW_DAYS)
-    # The day pool_stats reports: the last complete UTC day (today is still running when the nightly job fires).
-    ref = ctx.day - timedelta(days=1) if ctx.day >= ctx.now.astimezone(timezone.utc).date() else ctx.day
+    ref = ref_day(ctx)
     extras_stats = ctx.extras.get("keyless_pool_stats")
     for cid in ready:
         coverage = conn.execute(sa.select(sa.func.min(pool_daily_onchain.c.day)).where(pool_daily_onchain.c.chain_id == cid)).scalar()

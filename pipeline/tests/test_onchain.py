@@ -37,7 +37,8 @@ def _setup(conn, coverage_days=20, backfilled=True, updated=NOW - timedelta(hour
         _daily(conn, 8453, PA, d, 9 if d == REF else 2, 7 if d == REF else 1, 500.0 if d == REF else 100.0)
     _daily(conn, 8453, PC, REF, 4, 2, 50.0)
     conn.execute(sa.insert(db.indexer_state).values(chain_id=8453, initialize_block=10, swap_block=10, head_block=10,
-                                                    backfilled=backfilled, updated_at=updated))
+                                                    backfilled=backfilled, updated_at=updated,
+                                                    swap_block_time=NOW - timedelta(hours=1)))
     # keyless already wrote PA for today: a 16-day candle series on another scale, TVL from GeckoTerminal, 24h stats
     for i in range(15, -1, -1):
         conn.execute(sa.insert(db.pool_snapshots).values(pool_id=PA, chain_id=8453, day=DAY - timedelta(days=i), tvl_usd=12345.0,
@@ -124,3 +125,11 @@ def test_new_hook_cap_takes_busiest_first(conn, ctx, monkeypatch):
     assert out["hooks_added"] == 1 and out["hooks_deferred"] == 1
     assert {r.address for r in conn.execute(sa.select(db.hooks))} == {HOOK, HOOK2}     # HOOK2 has swaps, HOOK3 none
     assert {r.pool_id for r in conn.execute(sa.select(db.pools))} == {PA, PC}           # PE waits for its hook
+
+
+def test_stuck_swap_cursor_keeps_keyless_even_when_updated_at_is_fresh(conn, ctx):
+    _setup(conn)                                   # Initialize commits kept updated_at fresh...
+    conn.execute(sa.update(db.indexer_state).values(swap_block_time=datetime(2026, 10, 5, 18, tzinfo=timezone.utc)))
+    out = onchain.run(conn, ctx)                   # ...but swaps stopped at 10-05 18:00, inside REF (10-05)
+    assert out["chains_stale"] == 1 and out["pools_usage"] == 0
+    assert conn.execute(sa.select(db.pool_stats.c.vol_24h).where(db.pool_stats.c.pool_id == PA)).scalar() == 999.0
