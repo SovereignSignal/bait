@@ -121,13 +121,17 @@ class PoolResolver:
     RECENT_MAX), then one HyperSync Initialize query by pool id (topic1) over [floor, page end) per `topic_chunk` ids, at
     most `pool_lookups` calls per loop (a chunk that started finishes). A swap page with ids left unresolved is not
     committed: its swaps are never dropped, and what was learned carries over to the next loop. This is also the defence
-    against a hook filled to its cap with junk pools: a later real pool is a row from its first swap on. `absent` remembers ids that are not hooked pools (unhooked pools are most of a
-    scan page); it is only valid for the floor it was built with, so it is cleared when the floor moves down."""
+    against a hook filled to its cap with junk pools: a later real pool is a row from its first swap on. `pending` keeps
+    what lookups found for the page being resolved, out of reach of `recent`'s eviction (Initialize pages can push more
+    than RECENT_MAX rows in between), so a held page resumes where it stopped; it is cleared when the page commits.
+    `absent` remembers ids that are not hooked pools (unhooked pools are most of a scan page); it is only valid for the
+    floor it was built with, so it is cleared when the floor moves down."""
     RECENT_MAX = 50_000
     ABSENT_MAX = 1_000_000
 
     def __init__(self):
         self.recent: dict[str, dict] = {}
+        self.pending: dict[str, dict] = {}              # looked up for the page not yet committed
         self.absent: set[str] = set()
         self.absent_floor: int | None = None
         self.calls = 0
@@ -144,7 +148,7 @@ class PoolResolver:
         if self.absent_floor is None or floor < self.absent_floor:
             self.absent.clear()
             self.absent_floor = floor
-        found = {i: self.recent[i] for i in ids if i in self.recent}
+        found = {i: self.pending.get(i) or self.recent[i] for i in ids if i in self.pending or i in self.recent}
         need = sorted(i for i in ids if i not in found and i not in self.absent)
         for k in range(0, len(need), settings.topic_chunk):
             if self.calls >= settings.pool_lookups:
@@ -158,6 +162,7 @@ class PoolResolver:
                 for r in hooked_pools_from_page(chain.chain_id, logs, blocks):
                     got[r["pool_id"]] = r
                 cur = nb
+            self.pending.update(got)
             self.remember(got.values())
             found.update(got)
             self.absent.update(i for i in chunk if i not in got)
@@ -352,6 +357,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
             rows, adds = _admit_late(engine, chain, late, agg, settings, st) if late else ([], {})
             swap_time = _commit_swaps(engine, chain, agg, swap_from, nb, head, st, rows, adds) or swap_time
+            resolver.pending.clear()
             swap_from = nb
 
     if swap_from >= end and (swap_time is None or now - swap_time > ANCHOR_MAX_AGE):
