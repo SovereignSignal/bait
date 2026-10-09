@@ -54,12 +54,14 @@ export async function getLaunches(n = 20): Promise<LaunchView[]> {
             txHash: t.v4Pools.txHash,
             projectSlug: t.projects.slug,
             projectName: t.projects.name,
+            projectSpam: t.projectDaily.isSpam,
             token0: t.pools.token0,
             token1: t.pools.token1,
           })
           .from(t.v4Pools)
           .leftJoin(t.hooks, and(eq(t.hooks.address, t.v4Pools.hookAddress), eq(t.hooks.chainId, t.v4Pools.chainId)))
           .leftJoin(t.projects, eq(t.projects.id, t.hooks.projectId))
+          .leftJoin(t.projectDaily, and(eq(t.projectDaily.projectId, t.projects.id), eq(t.projectDaily.day, sql`(select max(day) from project_daily)`)))
           .leftJoin(t.pools, and(eq(t.pools.poolId, t.v4Pools.poolId), eq(t.pools.chainId, t.v4Pools.chainId)))
           .orderBy(sql`${t.v4Pools.blockTime} desc nulls last`, desc(t.v4Pools.blockNumber))
           .limit(n);
@@ -68,8 +70,9 @@ export async function getLaunches(n = 20): Promise<LaunchView[]> {
             chainId: r.chainId,
             poolId: r.poolId,
             hook: r.hook.toLowerCase(),
-            projectSlug: r.projectSlug ?? null,
-            projectName: r.projectName ?? null,
+            // Same rule as the pages: a project with no scored row today, or flagged spam, is not linked (its page is a 404).
+            projectSlug: r.projectSpam === false ? (r.projectSlug ?? null) : null,
+            projectName: r.projectSpam === false ? (r.projectName ?? null) : null,
             currency0: r.currency0,
             currency1: r.currency1,
             symbol0: symbol(r.token0),

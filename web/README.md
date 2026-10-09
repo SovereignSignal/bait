@@ -19,7 +19,7 @@ Set `DATABASE_URL` to read Postgres. For local UI work without a database, run w
 | `/` | terminal: movers strip, project list, detail of the list's first project, trade panel. `?tab=trending\|new\|verified\|all`, `?chain=<slug or id>`, `?category=<slug>`. The New tab opens with the "Just launched" feed (latest 20 hooked pool initializations, filtered by the chain select) |
 | `/building` | dev radar: radar items grouped by kind (Launch, Audit, Hackathon, Incubator, Repo, Registry) with kind chips (`?kind=<kind>`), a "Live on Bait" pill when the item matches a project, and the "Just launched" feed. Dynamic (reads `?kind`); reads cached in-process (radar 5 min, launches 30s) |
 | `/api/launches` | latest 20 `v4_pools` rows as `{launches}` for the feed's 60s client refresh; 30s cache; empty list on any error |
-| `/p/[slug]` | the same terminal with that project selected (ISR 1h; phone shows detail + trade with a back link) |
+| `/p/[slug]` | the same terminal with that project selected (ISR 1h, hidden for spam-flagged projects; phone shows detail + trade with a back link) |
 | `/p/[slug]/opengraph-image` | 1200x630 OG card (next/og), night palette |
 | `/leaders` | usage leaderboards: wallets 24h, 7d volume, TVL, smart-money wallets; usage totals header |
 | `/api/trades/[chain]/[pool]` | live trades from GeckoTerminal for one pool (>= $10, newest 25, wallet_labels joined); 120s in-process cache; empty list on any error or 429 |
@@ -27,7 +27,7 @@ Set `DATABASE_URL` to read Postgres. For local UI work without a database, run w
 | `/feed.xml` | RSS: digests plus new projects |
 | `/about` | method, scoring, routable rule, disclaimers |
 
-Data pages export `revalidate = 3600` (ISR, 1h) on top of a 1h in-process cache in `queries.ts`. Client-side work: list search (name or hook-address prefix), the localStorage watchlist (star on the project header, Watchlist in the dock and the star tab), and the live trade feed (refreshes every 60s while visible). Verified tab = an audit link or routable in the Uniswap app.
+Caching: `/p/[slug]` and `/week/[date]` are ISR (1h). `/`, `/leaders`, `/building`, `/feed.xml` and `/week` render per request behind a 1h stale-while-revalidate in-process cache in `queries.ts` (an expired entry is served at once while one refresh runs; the cache holds at most 400 entries and is dropped within a minute of the pipeline scoring a new day). `/api/ready` checks Postgres and is the endpoint for Railway's healthcheck; `/api/health` reports data freshness. Client-side work: list search (name or hook-address prefix), the localStorage watchlist (star on the project header, Watchlist in the dock and the star tab), and the live trade feed (refreshes every 60s while visible). Verified tab = an audit link or routable in the Uniswap app.
 
 Phone (<820px): `/` is movers + list, `/p/[slug]` is detail + trade, `/building` is the launch feed then the radar list; bottom dock: Feed, Search, Building, Watchlist, Leaders.
 

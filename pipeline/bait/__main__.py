@@ -60,10 +60,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "init-db":
         db.create_all(engine)
         db.add_missing_columns(engine)
+        db.add_missing_indexes(engine)
         log.info("init-db ok url=%s", engine.url.render_as_string(hide_password=True))
         return 0
     db.create_all(engine)  # idempotent (checkfirst); a fresh Railway Postgres needs no manual migration
     db.add_missing_columns(engine)  # create_all never alters existing tables; additive columns go here
+    db.add_missing_indexes(engine)
     meter = Meter(engine)
     if args.cmd == "cost-preview":
         with engine.connect() as conn:

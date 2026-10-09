@@ -1,16 +1,14 @@
 import { getFeed, listDigests } from "@/db/queries";
 import { usd } from "@/lib/format";
+import { escXml as esc } from "@/lib/xml";
 
-export const revalidate = 3600;
+export const dynamic = "force-dynamic";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
-function esc(s: string): string {
-  return s.replace(/[<>&'"]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c] as string);
-}
-
 export async function GET() {
   const [digests, fresh] = await Promise.all([listDigests(12), getFeed({ tab: "new" })]);
+  const newest = fresh.slice(0, 50);
   const items: string[] = [];
 
   for (const d of digests) {
@@ -20,7 +18,7 @@ export async function GET() {
         `<pubDate>${new Date(d.createdAt).toUTCString()}</pubDate><description>${esc(body)}</description></item>`,
     );
   }
-  for (const p of fresh) {
+  for (const p of newest) {
     const body = `${p.whatLine}\n\n${p.whyBlurb}\n\n7d volume ${usd(p.metrics.vol7d)}, TVL ${usd(p.metrics.tvlUsd)}, ${p.metrics.poolsN} pools.`;
     items.push(
       `<item><title>${esc(`New: ${p.name}`)}</title><link>${SITE}/p/${p.slug}</link><guid isPermaLink="true">${SITE}/p/${p.slug}</guid>` +
