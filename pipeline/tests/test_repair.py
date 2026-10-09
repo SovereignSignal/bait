@@ -159,3 +159,107 @@ def test_rescore_backs_up_once_reports_the_top_10_change_and_restore_puts_the_ol
         assert repair.restore_day(c, DAY - D) is None
         row = c.execute(sa.select(db.project_daily)).one()
     assert row.is_spam and row.window_end is None and row.score_trending == 0.0
+
+
+# --- prose --------------------------------------------------------------------------------------
+class FakeClaude:
+    """Goes through the meter like the real client: check the worst case, then record what was spent."""
+
+    def __init__(self, meter, usd=0.004):
+        self.meter, self.usd, self.what, self.why = meter, usd, [], []
+
+    def what_line(self, ctx):
+        self.meter.check("anthropic", prose_estimate(what_line_prompt(ctx)))
+        self.meter.record("anthropic", self.usd)
+        self.what.append(ctx)
+        return {"what_line": f"{ctx['name']} routes swaps through a hook.", "category": "orders"}
+
+    def why_blurb(self, ctx):
+        self.meter.check("anthropic", prose_estimate(why_blurb_prompt(ctx)))
+        self.meter.record("anthropic", self.usd)
+        self.why.append(ctx)
+        return f"{ctx['name']} moved ${ctx['metrics']['vol_7d']:,.0f} in the 7 closed days. More next week.  "
+
+
+CUT = ("word " * 40)[:199] + "x"          # 200 chars, mid-word, the old strip()[:200]
+
+
+def _prose_seed(c):
+    ids = {}
+    ids["missing"] = _project(c, "missing", "0xm", what_line="placeholder from the hooklist",
+                              enrichment={"parallel": {"website": "https://m.xyz", "team": "M"}})
+    ids["failed"] = _project(c, "failed", "0xf", enrichment={"parallel": {"_failed": "run1", "reason": "404"}})
+    ids["cut_small"] = _project(c, "cut-small", "0xc1", what_line=CUT, category="other", enriched_at=NOW)
+    ids["cut_big"] = _project(c, "cut-big", "0xc2", what_line=CUT, category="other", enriched_at=NOW)
+    _project(c, "sentence", "0xc3", what_line=CUT[:-1] + ".", enriched_at=NOW)
+    _project(c, "ellipsis", "0xc4", what_line=CUT[:-1] + "…", enriched_at=NOW)
+    for k, vol in (("cut_small", 10.0), ("cut_big", 1e6)):
+        _old_row(c, ids[k], DAY, vol_7d=vol, is_spam=False)
+    return ids
+
+
+def test_what_line_targets_missing_first_then_cut_mid_word_busiest_first(engine):
+    with engine.begin() as c:
+        _prose_seed(c)
+        got = [(p.slug, kind) for p, kind in repair.what_line_targets(c)]
+    assert got == [("missing", "missing"), ("cut-big", "cut"), ("cut-small", "cut")]
+    assert repair.cut_mid_word(CUT) and not repair.cut_mid_word(CUT[:-1] + "…") and not repair.cut_mid_word("short")
+
+
+def test_prose_what_lines_use_stored_facts_and_stop_at_the_repair_cap(engine):
+    with engine.begin() as c:
+        ids = _prose_seed(c)
+        targets = repair.what_line_targets(c)
+    meter = repair.CappedMeter(None, cap_usd=0.0085, budgets=Budgets(3.0, 40.0, {}))
+    claude = FakeClaude(meter)
+    out = repair.write_what_lines(engine, claude, targets)
+    # each call is checked at its worst case (~$0.007) on top of what this run spent: the second call no longer fits $0.0085
+    assert out == {"missing": 1, "cut": 0, "errors": 0, "budget_stop": 1}
+    assert claude.what[0]["enrichment"] == {"parallel": {"website": "https://m.xyz", "team": "M"}}
+    with engine.connect() as c:
+        rows = {r.slug: r for r in c.execute(sa.select(db.projects))}
+    m = rows["missing"]
+    assert (m.what_line, m.category, m.website) == ("Missing routes swaps through a hook.", "orders", "https://m.xyz")
+    assert m.enriched_at is not None and rows["cut-big"].what_line == CUT
+    out = repair.write_what_lines(engine, FakeClaude(repair.CappedMeter(None, None, budgets=Budgets(3.0, 40.0, {}))),
+                                  [(rows["cut-big"], "cut")])
+    with engine.connect() as c:
+        big = c.execute(sa.select(db.projects).where(db.projects.c.slug == "cut-big")).one()
+    assert out["cut"] == 1 and big.what_line == "Cut-Big routes swaps through a hook." and big.category == "other"
+
+
+def test_blurbs_go_to_stale_signals_targets_scored_with_package_8_windows_only(engine):
+    with engine.begin() as c:
+        old = _project(c, "old-blurb", "0xo", blurb_at=repair.P8_MERGED_AT - D, why_blurb="22,874 swaps in 7 days.")
+        fresh = _project(c, "fresh-blurb", "0xn", blurb_at=repair.P8_MERGED_AT + D, why_blurb="ok")
+        wash = _project(c, "wash", "0xw", blurb_at=None)
+        unscored = _project(c, "unscored", "0xu", blurb_at=None)
+        for pid, sc in ((old, 9.0), (fresh, 8.0), (wash, 7.0)):
+            _old_row(c, pid, DAY, is_spam=False, score_trending=sc, vol_7d=70_000.0, window_end=DAY - D, is_wash=pid == wash)
+        _old_row(c, unscored, DAY, is_spam=False, score_trending=6.0)               # window_end NULL: the old score
+        targets, info = repair.blurb_targets(c, DAY, 50, repair.P8_MERGED_AT)
+    assert [p.slug for p, _ in targets] == ["old-blurb"] and info == {"targets": 3, "fresh": 1, "old_row": 1}
+    claude = FakeClaude(repair.CappedMeter(None, None, budgets=Budgets(3.0, 40.0, {})))
+    assert repair.write_blurbs(engine, claude, targets, NOW) == {"blurbs": 1, "errors": 0}
+    assert "closed UTC days ending" in claude.why[0]["metrics"]["windows"]
+    with engine.connect() as c:
+        r = c.execute(sa.select(db.projects).where(db.projects.c.id == old)).one()
+    assert r.why_blurb == "Old-Blurb moved $70,000 in the 7 closed days. More next week." and db.as_utc(r.blurb_at) == NOW
+
+
+def test_prose_plan_shows_counts_worst_case_and_both_budget_options(engine):
+    now = datetime.now(timezone.utc)
+    with engine.begin() as c:
+        _prose_seed(c)
+        c.execute(sa.insert(db.api_spend).values(ts=now, provider="anthropic", step="enrich", units=1, usd=1.02, detail=""))
+        expect = sum(repair.what_line_estimates(c, repair.what_line_targets(c)))
+    meter = repair.CappedMeter(engine, None, budgets=Budgets(3.0, 40.0, {}))
+    lines, worst = repair.prose_plan(engine, meter, now, True, True, None, 50, repair.P8_MERGED_AT)
+    text = "\n".join(lines)
+    assert worst == pytest.approx(expect)
+    assert "prose what-lines: 1 missing (stored Parallel facts, no Claude line), 2 cut mid-word" in text
+    assert "spent today $1.02 of $3.00" in text and "option A, no budget change" in text
+    assert f"option B, one run: the owner sets SPEND_DAILY_USD=3.00 on the pipeline service" in text   # 1.02 + worst fits
+    assert f"--max-usd {repair._cents_up(worst):.2f}" in text
+    lines = repair.budget_lines(meter, 2.5, 1.02, "--max-usd")
+    assert "SPEND_DAILY_USD=3.52" in lines[2] and "about 2 day(s)" in lines[1]

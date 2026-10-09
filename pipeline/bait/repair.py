@@ -282,3 +282,198 @@ def rescore(engine, days: list[date], now: datetime, echo=print) -> dict:
             echo(f"            on-chain history starts after this day's 7-day window opens on: {', '.join(partial)}")
         per[d.isoformat()] = {**counts, "backed_up": backed, "top10_in": came, "top10_out": went}
     return per
+
+
+# ------------------------------------------------------------------------------------------------
+# prose
+# ------------------------------------------------------------------------------------------------
+class CappedMeter(Meter):
+    """The run's Meter plus an extra cap on what this repair run may spend (--max-usd / --prose-budget-usd)."""
+
+    def __init__(self, engine, cap_usd: float | None, **kw):
+        super().__init__(engine, **kw)
+        self.cap_usd = cap_usd
+
+    def check(self, provider: str, est_usd: float) -> None:
+        if self.cap_usd is not None and self.run_usd + est_usd > self.cap_usd:
+            log.warning("spend stop: %s call (~$%.4f) would take this repair past its $%.2f cap", provider, est_usd, self.cap_usd)
+            raise BudgetExceeded(f"{provider}: repair cap ${self.cap_usd:.2f}")
+        super().check(provider, est_usd)
+
+
+def stored_parallel(enrichment) -> bool:
+    par = (enrichment or {}).get("parallel")
+    return bool(par) and "_failed" not in par
+
+
+def cut_mid_word(line: str | None) -> bool:
+    """The old code stored strip()[:200]: a line of exactly 200 chars that does not end a sentence was cut. cut_line's own
+    cuts end in an ellipsis and are left alone."""
+    return line is not None and len(line) == 200 and line[-1] not in ".!?…\"')"
+
+
+def latest_day(conn) -> date | None:
+    return conn.execute(sa.select(sa.func.max(project_daily.c.day))).scalar_one()
+
+
+def what_line_targets(conn) -> list[tuple[object, str]]:
+    """("missing") Parallel facts stored but no Claude line yet (enriched_at NULL, the budget stopped enrich), then ("cut")
+    lines cut mid-word; each busiest first by the latest 7-day volume."""
+    day = latest_day(conn)
+    vol = {r.project_id: r.vol_7d or 0.0 for r in conn.execute(
+        sa.select(project_daily.c.project_id, project_daily.c.vol_7d).where(project_daily.c.day == day))} if day else {}
+    missing, cut = [], []
+    for p in conn.execute(sa.select(projects).order_by(projects.c.id)):
+        if p.enriched_at is None and stored_parallel(p.enrichment):
+            missing.append(p)
+        elif cut_mid_word(p.what_line):
+            cut.append(p)
+    key = lambda p: (-vol.get(p.id, 0.0), p.id)   # noqa: E731
+    return [(p, "missing") for p in sorted(missing, key=key)] + [(p, "cut") for p in sorted(cut, key=key)]
+
+
+def blurb_targets(conn, day: date, signals_limit: int, stale_before: datetime) -> tuple[list[tuple], dict]:
+    """The signals step's targets for `day` (Trending top 20 then New; spam and wash never) whose blurb predates
+    `stale_before`. A target whose row has no window_end was scored before package 8: re-score first."""
+    rows = signals.select_targets(conn, RunContext(day=day, signals_limit=signals_limit))
+    out, info = [], {"targets": len(rows), "fresh": 0, "old_row": 0}
+    for p, daily in rows:
+        if daily.window_end is None:
+            info["old_row"] += 1
+        elif p.blurb_at is not None and as_utc(p.blurb_at) >= stale_before:
+            info["fresh"] += 1
+        else:
+            out.append((p, daily))
+    return out, info
+
+
+def what_line_estimates(conn, targets) -> list[float]:
+    return [prose_estimate(what_line_prompt(enrich.what_context(p, enrich.hooks_of(conn, p.id), dict(p.enrichment or {}))))
+            for p, _kind in targets]
+
+
+def blurb_estimates(conn, targets) -> list[float]:
+    return [prose_estimate(why_blurb_prompt(signals._blurb_ctx(conn, p, daily))) for p, daily in targets]
+
+
+def write_what_lines(engine, claude, targets) -> dict:
+    """One Claude call per target from stored facts only (no Parallel, no Blockscout); each line committed on its own.
+    "missing" gets enrich's full write (line, category, links, enriched_at); "cut" gets the line only."""
+    out = {"missing": 0, "cut": 0, "errors": 0}
+    for p, kind in targets:
+        enr = dict(p.enrichment or {})
+        try:
+            with engine.connect() as conn:
+                hs = enrich.hooks_of(conn, p.id)
+            res = claude.what_line(enrich.what_context(p, hs, enr))
+        except BudgetExceeded:
+            out["budget_stop"] = 1
+            break
+        except Exception as e:
+            out["errors"] += 1
+            log.warning("repair prose what_line project=%s failed: %s", p.slug, e)
+            continue
+        vals = enrich.what_values(p, res, enr) if kind == "missing" else {"what_line": enrich.cut_line(res["what_line"])}
+        with engine.begin() as conn:
+            conn.execute(sa.update(projects).values(**vals).where(projects.c.id == p.id))
+        out[kind] += 1
+    return out
+
+
+def write_blurbs(engine, claude, targets, now: datetime) -> dict:
+    out = {"blurbs": 0, "errors": 0}
+    for p, daily in targets:
+        try:
+            with engine.connect() as conn:
+                bctx = signals._blurb_ctx(conn, p, daily)
+            blurb = claude.why_blurb(bctx)
+        except BudgetExceeded:
+            out["budget_stop"] = 1
+            break
+        except Exception as e:
+            out["errors"] += 1
+            log.warning("repair prose blurb project=%s failed: %s", p.slug, e)
+            continue
+        with engine.begin() as conn:
+            conn.execute(sa.update(projects).values(why_blurb=blurb.strip()[:400], blurb_at=now).where(projects.c.id == p.id))
+        out["blurbs"] += 1
+    return out
+
+
+def typical_nightly_usd(engine, now: datetime) -> float:
+    """Mean paid spend per day over the last 7 days, repair runs left out."""
+    with engine.connect() as c:
+        total = c.execute(sa.select(sa.func.coalesce(sa.func.sum(api_spend.c.usd), 0.0)).where(
+            api_spend.c.ts >= now - timedelta(days=7), sa.not_(api_spend.c.step.like("repair%")))).scalar_one()
+    return float(total or 0.0) / 7
+
+
+def _cents_up(v: float) -> float:
+    return math.ceil(round(v * 100, 6)) / 100
+
+
+def budget_lines(meter: Meter, worst: float, nightly: float, flag: str) -> list[str]:
+    """Two ways to fit `worst` under the daily budget: spread it over days after the nightly, or raise the budget for one
+    run. The extra cap (flag) never raises a budget; it only stops this run earlier."""
+    b = meter.budgets
+    today, d30 = meter.spent(today=True), meter.spent(days=30)
+    per_day = max(b.daily - nightly, 0.0)
+    when = ("never: the nightly uses the whole daily budget" if per_day <= 0
+            else f"about {max(math.ceil(worst / per_day), 1)} day(s)")
+    lines = [f"  spent today ${today:.2f} of ${b.daily:.2f}; last 30 days ${d30:.2f} of ${b.monthly:.2f}",
+             f"  option A, no budget change: run after the nightly (last 7 days: ${nightly:.2f}/day); about ${per_day:.2f} a "
+             f"day is left, so the worst case takes {when} (one {flag} run per day; reruns skip what is done)"]
+    daily = max(b.daily, _cents_up(today + worst))
+    monthly = _cents_up(d30 + worst)
+    lines.append(f"  option B, one run: the owner sets SPEND_DAILY_USD={daily:.2f}"
+                 + (f" and SPEND_MONTHLY_USD={monthly:.2f}" if monthly > b.monthly else "")
+                 + f" on the pipeline service for this run only, passes {flag} {_cents_up(worst):.2f}, "
+                   "and restores the default before 06:00 UTC")
+    return lines
+
+
+def prose_plan(engine, meter: Meter, now: datetime, what: bool, blurbs: bool, limit: int | None, signals_limit: int,
+               stale_before: datetime, flag: str = "--max-usd") -> tuple[list[str], float]:
+    lines, worst = [], 0.0
+    with engine.connect() as conn:
+        if what:
+            t = what_line_targets(conn)
+            t = t[:limit] if limit is not None else t
+            est = what_line_estimates(conn, t)
+            n_missing = sum(1 for _, k in t if k == "missing")
+            w = sum(est)
+            worst += w
+            lines.append(f"prose what-lines: {n_missing} missing (stored Parallel facts, no Claude line), {len(t) - n_missing} "
+                         f"cut mid-word; worst case ${w:.2f} (max ${max(est, default=0):.4f} a call), Claude only")
+        if blurbs:
+            day = latest_day(conn)
+            t, info = blurb_targets(conn, day, signals_limit, stale_before) if day else ([], {"targets": 0, "fresh": 0, "old_row": 0})
+            t = t[:limit] if limit is not None else t
+            est = blurb_estimates(conn, t)
+            w = sum(est)
+            worst += w
+            lines.append(f"prose blurbs: {len(t)} of {info['targets']} signals targets on {day} predate {stale_before:%Y-%m-%d %H:%M} UTC "
+                         f"({info['fresh']} fresh, {info['old_row']} on a row scored before package 8: re-score first); "
+                         f"worst case ${w:.2f}, Claude only, no Exa")
+    lines += budget_lines(meter, worst, typical_nightly_usd(engine, now), flag)
+    return lines, worst
+
+
+def prose(engine, ctx: RunContext, what: bool, blurbs: bool, limit: int | None, signals_limit: int,
+          stale_before: datetime) -> dict:
+    claude = ctx.client("claude")
+    if claude is None:
+        raise RuntimeError("no ANTHROPIC_API_KEY")
+    out: dict = {}
+    if what:
+        with engine.connect() as conn:
+            t = what_line_targets(conn)
+        out["what_lines"] = write_what_lines(engine, claude, t[:limit] if limit is not None else t)
+    if blurbs and not out.get("what_lines", {}).get("budget_stop"):
+        with engine.connect() as conn:
+            day = latest_day(conn)
+            t, info = blurb_targets(conn, day, signals_limit, stale_before) if day else ([], {})
+        out["blurbs"] = {**write_blurbs(engine, claude, t[:limit] if limit is not None else t, ctx.now), **info}
+    ctx.meter.flush()
+    out["usd"] = round(ctx.meter.run_usd, 4)
+    return out
