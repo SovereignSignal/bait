@@ -31,15 +31,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     for p in todo:
         if p.id in waiting:
             continue        # paid Parallel run still in progress: collect it next run, then write what_line once
-        hs = conn.execute(sa.select(hooks).where(hooks.c.project_id == p.id).order_by(hooks.c.verified_source.desc(), hooks.c.first_seen_at)).all()
-        ctxd = {
-            "name": p.name, "hooks_n": len(hs), "is_factory": p.is_factory,
-            "chains": sorted({CHAIN_BY_ID[h.chain_id].slug if h.chain_id in CHAIN_BY_ID else str(h.chain_id) for h in hs}),
-            "hooklist_descriptions": sorted({h.description for h in hs if h.description})[:5],
-            "flags_union": sorted({f for h in hs for f, v in (h.flags or {}).items() if v}),
-            "dynamic_fee": any((h.properties or {}).get("dynamicFee") for h in hs),
-            "audit_urls": sorted({h.audit_url for h in hs if h.audit_url}),
-        }
+        hs = hooks_of(conn, p.id)
         enrichment = dict(fresh_enr.get(p.id) or {})
         try:
             with savepoint(conn):
@@ -48,8 +40,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                     if src:
                         enrichment["source"] = src
                         out["source"] += 1
-                ctxd["enrichment"] = enrichment
-                res = claude.what_line(ctxd)
+                res = claude.what_line(what_context(p, hs, enrichment))
         except BudgetExceeded:
             out["budget_stop"] = 1
             if enrichment != dict(p.enrichment or {}):   # keep what was already paid for
@@ -59,17 +50,39 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             out["errors"] += 1
             log.warning("enrich project=%s failed: %s", p.slug, e)
             continue
-        par_res = enrichment.get("parallel") or {}
-        vals = {
-            "what_line": cut_line(res["what_line"]), "category": res["category"],
-            "enrichment": enrichment, "enriched_at": utcnow(),
-            "website": p.website or par_res.get("website") or None,
-            "github": p.github or par_res.get("github") or None,
-            "x_handle": p.x_handle or (par_res.get("x_handle") or "").lstrip("@") or None,
-        }
-        conn.execute(sa.update(projects).values(**vals).where(projects.c.id == p.id))
+        conn.execute(sa.update(projects).values(**what_values(p, res, enrichment)).where(projects.c.id == p.id))
         out["enriched"] += 1
     return out
+
+
+def hooks_of(conn, project_id: int) -> list:
+    return conn.execute(sa.select(hooks).where(hooks.c.project_id == project_id)
+                        .order_by(hooks.c.verified_source.desc(), hooks.c.first_seen_at)).all()
+
+
+def what_context(p, hs, enrichment: dict) -> dict:
+    """What Claude's what_line call sees: the project's hooks and its stored enrichment (Parallel facts, verified source)."""
+    return {
+        "name": p.name, "hooks_n": len(hs), "is_factory": p.is_factory,
+        "chains": sorted({CHAIN_BY_ID[h.chain_id].slug if h.chain_id in CHAIN_BY_ID else str(h.chain_id) for h in hs}),
+        "hooklist_descriptions": sorted({h.description for h in hs if h.description})[:5],
+        "flags_union": sorted({f for h in hs for f, v in (h.flags or {}).items() if v}),
+        "dynamic_fee": any((h.properties or {}).get("dynamicFee") for h in hs),
+        "audit_urls": sorted({h.audit_url for h in hs if h.audit_url}),
+        "enrichment": enrichment,
+    }
+
+
+def what_values(p, res: dict, enrichment: dict) -> dict:
+    """The projects row update for a fresh what_line: the line (cut at a word boundary), category, enrichment, links."""
+    par_res = enrichment.get("parallel") or {}
+    return {
+        "what_line": cut_line(res["what_line"]), "category": res["category"],
+        "enrichment": enrichment, "enriched_at": utcnow(),
+        "website": p.website or par_res.get("website") or None,
+        "github": p.github or par_res.get("github") or None,
+        "x_handle": p.x_handle or (par_res.get("x_handle") or "").lstrip("@") or None,
+    }
 
 
 def cut_line(text: str, limit: int = 200) -> str:
