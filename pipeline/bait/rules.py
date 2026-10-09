@@ -76,6 +76,18 @@ def is_spam(pool_stats: list[tuple[float, int]]) -> bool:
     return all((tvl or 0) < 100 and (txs or 0) < 10 for tvl, txs in pool_stats)
 
 
+# 7-day wash from the on-chain indexer (pool_daily_onchain + pool_wallet_day). The 24h rule (keyless.is_wash) only
+# sees pools GeckoTerminal tracks; the indexer sees every swap. A pool moving >= $1M in 7 days through <= 10 distinct
+# wallets is one desk trading with itself, not usage (10/8: Optimism 0x69af...7fff, $436M from 1 wallet in 8 swaps).
+# Private/RFQ hooks with few counterparties also trip this; they are hidden from rankings, not deleted.
+WASH_MIN_VOL_7D = 1_000_000
+WASH_MAX_WALLETS_7D = 10
+
+
+def is_wash_7d(vol_7d: float, wallets_7d: int) -> bool:
+    return vol_7d >= WASH_MIN_VOL_7D and wallets_7d <= WASH_MAX_WALLETS_7D
+
+
 def is_alive(last_commit_at: datetime | None, latest_exa_hit: datetime | None, now: datetime) -> bool:
     cutoff = now - timedelta(days=30)
     return bool((last_commit_at and last_commit_at >= cutoff) or (latest_exa_hit and latest_exa_hit >= cutoff))

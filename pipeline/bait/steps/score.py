@@ -10,8 +10,9 @@ from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from ..db import as_utc, hooks, pool_snapshots, pool_stats, pools, project_daily, projects, upsert
-from ..rules import is_new, is_spam, score_trending
+from ..db import (as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pool_wallet_day, pools, project_daily,
+                  projects, upsert)
+from ..rules import is_new, is_spam, is_wash_7d, score_trending
 from . import RunContext, log
 
 
@@ -74,6 +75,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 if is_wash(vol24, traders):
                     t[1] += vol24
         wash = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
+    wash7 = _wash_7d(conn, day, pool_project)
+    wash |= wash7
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
     # A project's age is its earliest pool when known; on a first run every project was "first seen" today.
@@ -97,7 +100,34 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         upsert(conn, project_daily, rows[i:i + 500], keys=["project_id", "day"])
     trending = sum(1 for r in rows if r["score_trending"] > 0)
     return {"projects": len(rows), "with_pools": len(agg), "new": sum(r["is_new"] for r in rows),
-            "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(wash)}
+            "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(wash), "wash_7d": len(wash7)}
+
+
+def _wash_7d(conn, day: date, pool_project: dict) -> set[int]:
+    """Projects whose 7-day on-chain volume is mostly in wash pools (rules.is_wash_7d), judged per pool."""
+    start = day - timedelta(days=6)
+    vol = {(r.pool_id, r.chain_id): r.v or 0.0 for r in conn.execute(
+        sa.select(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id, sa.func.sum(pool_daily_onchain.c.volume_usd).label("v"))
+        .where(pool_daily_onchain.c.day >= start, pool_daily_onchain.c.day <= day)
+        .group_by(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id))}
+    if not vol:
+        return set()
+    wallets = {(r.pool_id, r.chain_id): r.n for r in conn.execute(
+        sa.select(pool_wallet_day.c.pool_id, pool_wallet_day.c.chain_id, sa.func.count(sa.distinct(pool_wallet_day.c.address)).label("n"))
+        .where(pool_wallet_day.c.day >= start, pool_wallet_day.c.day <= day)
+        .group_by(pool_wallet_day.c.pool_id, pool_wallet_day.c.chain_id))}
+    per: dict[int, list[float]] = {}
+    for key, v in vol.items():
+        if key not in pool_project:
+            continue
+        t = per.setdefault(pool_project[key][0], [0.0, 0.0])
+        t[0] += v
+        if is_wash_7d(v, wallets.get(key, 0)):
+            t[1] += v
+    out = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
+    if out:
+        log.info("score: %d projects flagged as 7-day wash (>= $%d through <= %d wallets)", len(out), 1_000_000, 10)
+    return out
 
 
 _D = timedelta(days=1)
