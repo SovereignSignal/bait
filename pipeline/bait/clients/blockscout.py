@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from ..config import CHAIN_BY_ID, env
-from ..rules import code_hash as canonical_code_hash, proxy_kind
+from ..rules import code_hash as canonical_code_hash, proxy_flag, proxy_kind
 from . import http
 
 
@@ -19,7 +19,7 @@ class CodeInfo:
     source_snippet: str | None = None
     raw: dict = field(default_factory=dict)
     is_proxy: bool | None = None       # Blockscout's own verdict when it gives one, else the bytecode shape
-    proxy_kind: str | None = None      # eip1167 | eip1967 | explorer
+    proxy_kind: str | None = None      # eip1167 | eip1967 | explorer | unknown
 
 
 class Blockscout:
@@ -72,7 +72,7 @@ class Blockscout:
         if not isinstance(code, str) or not code.startswith("0x") or code == "0x":
             return None
         kind = proxy_kind(code)
-        return CodeInfo(code_hash=canonical_code_hash(code), is_proxy=kind is not None, proxy_kind=kind)
+        return CodeInfo(code_hash=canonical_code_hash(code), is_proxy=proxy_flag(kind), proxy_kind=kind)
 
 
 def _proxy_verdict(d: dict, code: str) -> dict:
@@ -81,4 +81,4 @@ def _proxy_verdict(d: dict, code: str) -> dict:
     kind = proxy_kind(code)
     if d.get("proxy_type") or d.get("implementations"):
         return {"is_proxy": True, "proxy_kind": kind if kind in ("eip1167", "eip1967") else "explorer"}
-    return {"is_proxy": kind is not None, "proxy_kind": kind}
+    return {"is_proxy": proxy_flag(kind), "proxy_kind": kind}

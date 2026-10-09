@@ -66,7 +66,7 @@ hooks = sa.Table(
     sa.Column("name_checked_at", TS),          # last contract-name lookup; misses are retried after 14 days
     sa.Column("regroup", sa.Boolean, nullable=False, server_default=sa.false()),  # ingest named it / code_hash landed; group clears
     sa.Column("is_proxy", sa.Boolean),         # from the bytecode (EIP-1967 slot / EIP-1167 clone) or explorer; NULL = unknown
-    sa.Column("proxy_kind", sa.Text),          # eip1167 | eip1967 | explorer; an eip1167 clone's hash is still evidence
+    sa.Column("proxy_kind", sa.Text),          # eip1167 | eip1967 | explorer | unknown; an eip1167 clone's hash is evidence
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), index=True),
     sa.Column("first_seen_at", TS, nullable=False),
 )

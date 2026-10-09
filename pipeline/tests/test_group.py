@@ -447,3 +447,16 @@ def test_minimal_clones_of_one_implementation_are_one_family(conn, ctx, monkeypa
     rows = conn.execute(sa.select(db.hooks.c.project_id, db.hooks.c.is_proxy, db.hooks.c.proxy_kind)).all()
     assert out["by_code"] == 2 and len({r.project_id for r in rows}) == 1
     assert all(r.is_proxy is True and r.proxy_kind == "eip1167" for r in rows)
+
+
+def test_an_unknown_delegatecall_runtime_is_stored_once_and_never_evidence(conn, ctx, monkeypatch):
+    code, asked = "0x" + "d" * 64, []
+    monkeypatch.setattr(group, "_rpc_code_facts",
+                        lambda ctx, rows, deadline: asked.extend(rows) or {(r.chain_id, r.address): (code, "unknown") for r in rows})
+    for n in (141, 142):
+        insert_hook(conn, A(n), 8453, code_hash=code)
+    out = group.run(conn, ctx)
+    group.run(conn, ctx)
+    rows = conn.execute(sa.select(db.hooks.c.project_id, db.hooks.c.is_proxy, db.hooks.c.proxy_kind)).all()
+    assert len(asked) == 2 and out["by_code"] == 0 and len({r.project_id for r in rows}) == 2
+    assert all(r.is_proxy is None and r.proxy_kind == "unknown" for r in rows)

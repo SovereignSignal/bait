@@ -9,7 +9,7 @@ import time
 import sqlalchemy as sa
 
 from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow
-from ..rules import SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, slugify, useful_name
+from ..rules import SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, proxy_flag, slugify, useful_name
 from . import RunContext, log
 from .names import add_alias, backfill_unlisted_aliases, detach_project, hook_rows, retire_project, unique_slug
 
@@ -261,7 +261,8 @@ def _refresh_code_facts(conn, ctx, out: dict) -> None:
     chain has no code there) nulls code_hash. A hash that changed, or one now known not to be a proxy, marks the hook
     for regroup. One-off on the same transition: a generic stored contract name ("ERC1967Proxy") is cleared so the
     lookup, which now resolves implementations, runs again."""
-    need = sa.or_(sa.func.length(hooks.c.code_hash) == 40, sa.and_(hooks.c.code_hash.is_not(None), hooks.c.is_proxy.is_(None)))
+    need = sa.or_(sa.func.length(hooks.c.code_hash) == 40, sa.and_(
+        hooks.c.code_hash.is_not(None), hooks.c.is_proxy.is_(None), hooks.c.proxy_kind.is_(None)))   # "unknown" is settled
     cols = (hooks.c.address, hooks.c.chain_id, hooks.c.project_id, hooks.c.code_hash, hooks.c.contract_name)
     order = (hooks.c.chain_id, hooks.c.address)
     todo = conn.execute(sa.select(*cols).where(need, hooks.c.project_id.is_(None)).order_by(*order)
@@ -287,7 +288,7 @@ def _refresh_code_facts(conn, ctx, out: dict) -> None:
             out["code_missing"] += 1
         else:
             h, kind = got[key]
-            vals = {"code_hash": h, "is_proxy": kind is not None, "proxy_kind": kind}
+            vals = {"code_hash": h, "is_proxy": proxy_flag(kind), "proxy_kind": kind}
             if r.project_id is not None and (h != r.code_hash or kind in (None, "eip1167")):
                 vals["regroup"] = True
             if r.contract_name is not None and useful_name(r.contract_name) is None:

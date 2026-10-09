@@ -171,3 +171,13 @@ def test_proxy_bytecode_needs_the_proxy_shape_not_just_the_constant():
         return SimpleNamespace(code_hash="0xc", is_proxy=True, proxy_kind=kind)
     assert code_evidence(row("eip1167")) == "0xc"          # same clone hash = same implementation: evidence
     assert code_evidence(row("eip1967")) is None and code_evidence(row(None)) is None
+
+
+def test_a_small_delegatecalling_runtime_of_no_known_shape_is_unknown():
+    from types import SimpleNamespace
+    from bait.rules import code_evidence, is_proxy_code, proxy_kind
+    small = "0x363d3d37" + "73" + "ab" * 20 + "5af4" + "3d82803e" + "00" * 50     # forwards with DELEGATECALL (f4)
+    assert proxy_kind(small) == "unknown" and not is_proxy_code(small)
+    assert proxy_kind(small + "00" * 1100) is None                                  # a full contract may delegatecall
+    assert proxy_kind("0x6080604052") is None
+    assert code_evidence(SimpleNamespace(code_hash="0xd", is_proxy=None, proxy_kind="unknown")) is None
