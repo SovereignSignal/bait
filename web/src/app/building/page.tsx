@@ -49,7 +49,6 @@ export default async function BuildingPage({ searchParams }: { searchParams: Pro
                 <Link key={k} className={r.kind} href={radarHref(k)}>
                   <span className="mut">{label}</span>
                   <b className="num">{int(counts.get(k) ?? 0)}</b>
-                  <span>on the radar</span>
                 </Link>
               ))}
             </div>

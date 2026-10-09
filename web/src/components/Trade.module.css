@@ -24,7 +24,8 @@
 .kv b { font-weight: 500; text-align: right; overflow-wrap: anywhere; }
 .kv a:hover { color: var(--pink2); }
 .bar { height: 6px; border-radius: 999px; background: var(--panel2); overflow: hidden; margin-top: 6px; }
-.bar i { display: block; height: 100%; background: var(--green); border-radius: 999px; }
+.bar i { display: block; height: 100%; background: var(--fg3); border-radius: 999px; }
+.bar i.full { background: var(--green); }
 
 /* fomo-style buys vs sells */
 .bsTop { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 700; }

@@ -266,7 +266,7 @@ export const CATEGORY_SHORT: Record<Category, string> = {
   "dynamic-fee": "Dynamic fee",
   launchpad: "Launchpad",
   orders: "Orders",
-  "lp-management": "LP mgmt",
+  "lp-management": "LP management",
   compliance: "Compliance",
   oracle: "Oracle",
   "mev-lvr": "MEV / LVR",

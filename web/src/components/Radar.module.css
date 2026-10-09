@@ -61,7 +61,6 @@ a.lName:hover { color: var(--pink2); }
 .kind { padding: 10px 12px; border-radius: 12px; background: var(--panel2); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .kind:hover { background: var(--hover); }
 .kind b { font-size: 16px; }
-.kind span:last-child { font-size: 12px; color: var(--fg3); }
 
 @media (max-width: 1180px) {
   .app { grid-template-columns: 340px minmax(0,1fr); }
