@@ -318,6 +318,25 @@ def savepoint(conn: sa.Connection):
     return conn.begin_nested() if conn.dialect.name == "postgresql" else nullcontext()
 
 
+RUN_LOCK_KEY = "bait-run"
+
+
+def try_run_lock(engine: sa.Engine) -> sa.Connection | None:
+    """One nightly run at a time. Postgres: session-level advisory lock held by the returned connection; close it
+    to release. Returns None when another runner holds it. Other dialects: no lock, returns an open connection.
+
+    The lock connection comes from a throwaway NullPool engine: a pooled connection would go back to the pool on
+    close() with its session (and so the lock) still alive."""
+    if engine.dialect.name != "postgresql":
+        return engine.connect()
+    conn = sa.create_engine(engine.url, poolclass=sa.pool.NullPool, future=True).connect()
+    got = conn.execute(sa.text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": RUN_LOCK_KEY}).scalar_one()
+    if got:
+        return conn
+    conn.close()
+    return None
+
+
 def upsert(conn: sa.Connection, table: sa.Table, rows: Sequence[dict], keys: Iterable[str],
            update: Iterable[str] | None = None) -> int:
     """INSERT ... ON CONFLICT (keys) DO UPDATE SET <update cols>. update=None means all non-key cols.
