@@ -61,14 +61,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
   const fonts = inter ? [{ name: "Inter", data: inter, weight: 600 as const, style: "normal" as const }] : [];
   const font = inter ? "Inter" : "sans-serif";
 
-  if (!p) {
-    return new ImageResponse(
-      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: T.bg, color: T.fg, fontFamily: font, fontSize: 48 }}>
-        Bait
-      </div>,
-      { ...size, fonts },
-    );
-  }
+  if (!p) return new Response("Not found", { status: 404 });
 
   const delta = pctDelta(p.metrics.vol7d, p.metrics.vol7dPrev, p.isNew);
   const badge = p.isNew ? { text: "New", bg: T.pinkTint, fg: T.pinkTintFg } : p.rank ? { text: `#${p.rank} trending`, bg: T.amberTint, fg: T.amber } : null;
@@ -147,6 +140,6 @@ export default async function Image({ params }: { params: Promise<{ slug: string
         </div>
       </div>
     </div>,
-    { ...size, fonts },
+    { ...size, fonts, headers: { "Cache-Control": "public, max-age=3600" } },
   );
 }
