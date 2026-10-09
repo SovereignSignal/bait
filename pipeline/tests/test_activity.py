@@ -45,7 +45,7 @@ def _seed(conn):
     })
 
 
-def test_activity_aggregates_top_wallets_and_skips_wash(conn, ctx):
+def test_activity_aggregates_top_wallets_and_fetches_wash_candidates_last(conn, ctx):
     http = _seed(conn)
     ctx.extras["keyless_http"] = http
     # stale rows beyond retention are pruned
@@ -53,7 +53,7 @@ def test_activity_aggregates_top_wallets_and_skips_wash(conn, ctx):
                                                        address=_w(1), volume_usd=1.0, trades=1, buys=1, sells=0))
     out = activity.run(conn, ctx)
     assert out["errors"] == 0 and out["pools"] == 2 and out["pools_fetched"] == 2 and out["pruned"] == 1
-    assert not any(POOL_W in p for p in http.paths)
+    assert out["wash_pools"] == 1 and http.paths[-1].endswith(f"{POOL_W}/trades")   # the 24h-wash candidate, after the rest
     assert http.paths[0].endswith(f"{POOL_A}/trades")       # highest volume first
 
     rows = conn.execute(sa.select(db.pool_top_wallets).where(db.pool_top_wallets.c.pool_id == POOL_A)
@@ -75,6 +75,7 @@ def test_activity_aggregates_top_wallets_and_skips_wash(conn, ctx):
 def test_activity_pool_limit(conn, ctx, monkeypatch):
     ctx.extras["keyless_http"] = _seed(conn)
     monkeypatch.setenv("ACTIVITY_POOLS", "1")
+    monkeypatch.setenv("ACTIVITY_WASH_POOLS", "0")
     out = activity.run(conn, ctx)
     assert out["pools"] == 1 and len(ctx.extras["keyless_http"].paths) == 1
 

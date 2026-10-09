@@ -47,7 +47,7 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 |---|---|---|---|---|
 | 1 | ingest | hooklist.json (GitHub raw or `--hooklist-file`) | hooks (first_seen_at set once) | nothing |
 | 2 | snapshot | v4 subgraph per chain, `pools(where hooks != 0x0, id_gt)` paginated by 1000; keyless GeckoTerminal for the rest | pools, pool_snapshots per UTC day (candles; pools past the OHLCV cap only yesterday, estimated; subgraph at day - 1), pool_stats(day) incl. buys/sells/buyers/sellers_24h and vol_24h_rolling | GRAPH_API_KEY, else keyless |
-| 3 | activity | pool_stats(day) ⨝ pools, wash excluded, top `ACTIVITY_POOLS` by 24h vol; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept); pool_stats.wallets_24h when the fetch saw every trade of the day | keyless |
+| 3 | activity | pool_stats(day) ⨝ pools, top `ACTIVITY_POOLS` non-wash pools by 24h vol plus up to `ACTIVITY_WASH_POOLS` 24h-wash candidates; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept); pool_stats.wallets_24h when the fetch saw every trade of the day | keyless |
 | 3b | onchain | v4_pools, pool_daily_onchain, indexer_state (from `python -m bait.indexer`) | hooks (unlisted, capped), pools, pool_snapshots, pool_stats(day) overriding keyless usage | nothing; no-op when the indexer tables are empty |
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
 | 5 | enrich | projects with enriched_at null | what_line, category, website/github/x_handle, enrichment | ANTHROPIC_API_KEY; optional PARALLEL_API_KEY, Blockscout |
@@ -206,7 +206,8 @@ unused by the pipeline.
 Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_QUERIES` (6),
 `RADAR_CLASSIFY_MAX` (30); see "Dev radar" above.
 
-Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30),
+Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30), `ACTIVITY_WASH_POOLS` (24h-wash
+candidates fetched as well, for the symmetric-trader check; default 10),
 `ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 40), Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP` (pools past it get yesterday's volume from the rolling 24h,

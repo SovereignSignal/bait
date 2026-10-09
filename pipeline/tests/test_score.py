@@ -5,10 +5,18 @@ import pytest
 import sqlalchemy as sa
 
 from bait import db
-from bait.steps import score
+from bait.steps import activity, score
 from tests.conftest import DAY, NOW, insert_hook, insert_pool, insert_project, insert_snap
 
 END = DAY - timedelta(days=1)          # window_end: the run on DAY reports closed UTC days through END
+
+
+class _FakeGT:
+    def __init__(self, responses):
+        self.responses = responses
+
+    def gt(self, path):
+        return self.responses.get(path)
 
 
 def daily(conn, pid):
@@ -275,9 +283,6 @@ def test_wash_reasons_on_the_live_cases(conn, ctx):
                                                      traders_24h=buyers + sellers, buyers_24h=buyers, sellers_24h=sellers))
         return p, pool
     ouro, ouro_pool = keyless_project("Ouroboros", 4663, tvl=10_000, vol_day=1_237_000.0, buyers=13, sellers=13, rolling=1_237_000.0)
-    for w in range(10):       # symmetric 10/10 bots: $1M of $1.237M
-        conn.execute(sa.insert(db.pool_top_wallets).values(pool_id=ouro_pool, chain_id=4663, day=DAY, address=f"0xbot{w}",
-                                                           volume_usd=100_000.0, trades=10, buys=5, sells=5))
     launch, _ = keyless_project("Launchpad", 8453, tvl=200_000, vol_day=9_857_000.0, buyers=15_000, sellers=15_000)   # 345x
     rfq = _onchain_project(conn, "Rfq", "0xrfq", wallets=4, vol_per_day=714_000, tvl=2_000_000)                       # 2.5x
     _optimism_ready(conn)
@@ -285,6 +290,12 @@ def test_wash_reasons_on_the_live_cases(conn, ctx):
     insert_hook(conn, "0xdust", 1, project_id=dust)
     insert_pool(conn, "0xdustp", 1, "0xdust", created=NOW)
     insert_snap(conn, "0xdustp", 1, END, 12, 40, 3)
+    # symmetric 10/10 bots, $1M of $1.237M, seen through the activity step (a 24h-wash candidate is fetched too)
+    bots = [{"attributes": {"tx_from_address": f"0x{w:040x}", "kind": kind, "volume_in_usd": "10000",
+                            "block_timestamp": "2026-10-06T01:00:00Z", "tx_hash": "0x" + "f" * 64}}
+            for w in range(10) for kind in ("buy", "sell") * 5]
+    ctx.extras["keyless_http"] = _FakeGT({f"/networks/robinhood/pools/{ouro_pool}/trades": {"data": bots}})
+    assert activity.run(conn, ctx)["wash_pools"] == 1
     out = score.run(conn, ctx)
     o = daily(conn, ouro)
     assert o.is_wash and o.wash_reason == "24h,vol_tvl,symmetric" and not o.is_spam and o.score_trending == 0 and not o.is_new
