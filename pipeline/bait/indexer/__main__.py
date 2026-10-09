@@ -28,13 +28,16 @@ log = logging.getLogger("bait.indexer")
 
 
 class Runner:
-    def __init__(self, engine, token: str | None, chains, client: httpx.Client, settings: Settings, should_stop=None):
+    def __init__(self, engine, token: str | None, chains, client: httpx.Client, settings: Settings, should_stop=None,
+                 migrate=None):
         self.engine = engine
         self.token = token
         self.mode, self.chains = plan(token, chains)
         self.client = client
         self.settings = settings
         self.should_stop = should_stop or (lambda: False)
+        self.migrate = migrate                         # -> bool; retried each loop until it succeeds
+        self._schema_ok = migrate is None
         self.prices = PriceBook(client)
         self.loops = 0
         self._pruned_on = None
@@ -44,6 +47,11 @@ class Runner:
     def run_once(self) -> dict[str, ChainStats]:
         self.loops += 1
         out: dict[str, ChainStats] = {}
+        if not self._schema_ok:
+            self._schema_ok = self.migrate()
+            if not self._schema_ok:
+                log.warning("schema migration waiting on a table lock; no chain synced this loop, retrying next loop")
+                return out
         for ch in self.chains:
             if self.should_stop():
                 log.info("stop requested: leaving the loop before chain=%s", ch.slug)
@@ -111,9 +119,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     interval = float(os.environ.get("INDEXER_INTERVAL", "") or 60)
     engine = db.make_engine(args.database_url)
-    db.create_all(engine)
-    db.add_missing_columns(engine)
-    db.add_missing_indexes(engine)
+
+    def migrate() -> bool:
+        """Additive schema; DDL only for what is missing, under a lock timeout. False = a table lock was not granted."""
+        try:
+            db.create_all(engine)
+            db.add_missing_columns(engine)
+            db.add_missing_indexes(engine)
+            return True
+        except db.SchemaLocked:
+            return False
+
     token = env("HYPERSYNC_API_TOKEN")
     client = httpx.Client(follow_redirects=True)
     stop = {"flag": False}
@@ -123,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         stop["flag"] = True
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    runner = Runner(engine, token, chains, client, Settings.from_env(), should_stop=lambda: stop["flag"])
+    runner = Runner(engine, token, chains, client, Settings.from_env(), should_stop=lambda: stop["flag"], migrate=migrate)
     if runner.mode == "rpc":
         log.warning("HYPERSYNC_API_TOKEN not set: RPC fallback on %d chains (%s), new Initialize logs only, no backfill and "
                     "no swaps. Full coverage (HyperSync on %d chains: pool history, swaps, wallets, volume) needs the token.",

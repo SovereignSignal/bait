@@ -5,6 +5,7 @@ JSONB on Postgres, JSON on SQLite so tests run in memory. Upsert helper picks th
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
@@ -340,9 +341,47 @@ ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
 ]
 
 
-def add_missing_indexes(engine: sa.Engine, indexes: Iterable[tuple[str, str, str]] = ADDITIVE_INDEXES) -> list[str]:
-    """CREATE INDEX IF NOT EXISTS for each (both dialects support it). Tables that do not exist are skipped."""
+class SchemaLocked(RuntimeError):
+    """An additive migration could not take its table lock within lock_timeout. Retry later: a DDL statement queued behind
+    a long transaction blocks every reader of the table behind it (web reads, the nightly step)."""
+
+
+def _pg_existing(engine: sa.Engine, sql: str) -> set:
+    """Catalog read only: no lock on user tables."""
+    with engine.connect() as conn:
+        return {tuple(r) for r in conn.execute(sa.text(sql))}
+
+
+def _pg_ddl(engine: sa.Engine, sql: str, lock_timeout: str, what: str) -> None:
+    """One DDL statement in its own transaction under SET LOCAL lock_timeout; a lock timeout becomes SchemaLocked."""
+    if not re.fullmatch(r"\d+(ms|s)", lock_timeout):
+        raise ValueError(f"lock_timeout {lock_timeout!r}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
+            conn.execute(sa.text(sql))
+    except sa.exc.DBAPIError as e:
+        if getattr(e.orig, "sqlstate", None) == "55P03":  # lock_not_available
+            logging.getLogger("bait").warning("schema: %s not applied, table lock not granted within %s; retrying later",
+                                              what, lock_timeout)
+            raise SchemaLocked(what) from e
+        raise
+
+
+def add_missing_indexes(engine: sa.Engine, indexes: Iterable[tuple[str, str, str]] = ADDITIVE_INDEXES,
+                        lock_timeout: str = "5s") -> list[str]:
+    """Create the indexes that do not exist yet; tables that do not exist are skipped. Postgres: pg_indexes is read first
+    and CREATE INDEX runs only for a missing index, under lock_timeout (CREATE INDEX IF NOT EXISTS takes a SHARE lock
+    even when the index exists); raises SchemaLocked on a lock timeout. SQLite: CREATE INDEX IF NOT EXISTS."""
     done: list[str] = []
+    if engine.dialect.name == "postgresql":
+        tables = {t for (t,) in _pg_existing(engine, "SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")}
+        have = {n for (n,) in _pg_existing(engine, "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")}
+        for name, table, cols in indexes:
+            if table in tables and name not in have:
+                _pg_ddl(engine, f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ({cols})', lock_timeout, f"index {name}")
+                done.append(name)
+        return done
     with engine.begin() as conn:
         insp = sa.inspect(conn)
         for name, table, cols in indexes:
@@ -366,19 +405,27 @@ def backfill_address_flags(conn: sa.Connection) -> int:
     return len(todo)
 
 
-def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS) -> list[str]:
-    """Idempotent additive migration. Postgres: ADD COLUMN IF NOT EXISTS. SQLite: PRAGMA table_info, then ALTER only
-    the missing ones. Tables that do not exist are skipped (create_all owns them). Returns "table.column" added
-    (on Postgres: attempted)."""
+def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS,
+                        lock_timeout: str = "5s") -> list[str]:
+    """Idempotent additive migration; returns "table.column" added. Tables that do not exist are skipped (create_all owns
+    them). Postgres: information_schema.columns is read first and ALTER runs only for a missing column, under
+    lock_timeout (ADD COLUMN IF NOT EXISTS takes ACCESS EXCLUSIVE even when the column exists); raises SchemaLocked on a
+    lock timeout. SQLite: PRAGMA table_info, then ALTER only the missing ones."""
     added: list[str] = []
+    if engine.dialect.name == "postgresql":
+        have = _pg_existing(engine, "SELECT table_name, column_name FROM information_schema.columns "
+                                    "WHERE table_schema = current_schema()")
+        tables = {t for t, _ in have}
+        for table, column, sqltype in columns:
+            if table in tables and (table, column) not in have:
+                _pg_ddl(engine, f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {sqltype}', lock_timeout,
+                        f"{table}.{column}")
+                added.append(f"{table}.{column}")
+        return added
     with engine.begin() as conn:
         insp = sa.inspect(conn)
         for table, column, sqltype in columns:
             if not insp.has_table(table):
-                continue
-            if conn.dialect.name == "postgresql":
-                conn.execute(sa.text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {sqltype}'))
-                added.append(f"{table}.{column}")
                 continue
             have = {r[1] for r in conn.execute(sa.text(f'PRAGMA table_info("{table}")'))}
             if column not in have:
