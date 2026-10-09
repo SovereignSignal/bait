@@ -123,6 +123,7 @@ def test_wash_7d_from_indexer_one_wallet_hundreds_of_millions(conn, ctx):
     wash = _onchain_project(conn, "Desk", "0xdp", wallets=1, vol_per_day=60_000_000)
     busy = _onchain_project(conn, "Busy", "0xbp", wallets=11, vol_per_day=60_000_000)     # 11 distinct wallets: not wash
     small = _onchain_project(conn, "Small", "0xsp", wallets=1, vol_per_day=100_000)       # $700K < $1M: not wash
+    _optimism_ready(conn)
     out = score.run(conn, ctx)
     assert daily(conn, wash).is_spam and daily(conn, wash).score_trending == 0.0
     assert not daily(conn, busy).is_spam and not daily(conn, small).is_spam
@@ -132,3 +133,32 @@ def test_wash_7d_from_indexer_one_wallet_hundreds_of_millions(conn, ctx):
 def test_is_wash_7d_thresholds():
     from bait.rules import is_wash_7d
     assert is_wash_7d(1_000_000, 10) and not is_wash_7d(999_999, 1) and not is_wash_7d(5_000_000, 11)
+
+
+def _optimism_ready(conn, swap_time=NOW):
+    conn.execute(sa.insert(db.indexer_state).values(chain_id=10, initialize_block=1, swap_block=1, head_block=1, backfilled=True,
+                                                    updated_at=NOW, swap_block_time=swap_time))
+
+
+def test_wash_7d_ignores_a_chain_whose_swaps_are_not_caught_up(conn, ctx):
+    wash = _onchain_project(conn, "Desk", "0xdp", wallets=1, vol_per_day=60_000_000)
+    _optimism_ready(conn, swap_time=NOW - timedelta(days=2))
+    out = score.run(conn, ctx)
+    assert out["wash_7d"] == 0 and not daily(conn, wash).is_spam
+
+
+def test_held_back_pool_with_null_volume_is_left_out_of_both_weeks(conn, ctx):
+    # Two pools of one project. The normal one did $1,000 in each week. The other's on-chain volume became unknown during
+    # this week (onchain wrote NULL cumulative volume from that day on): it must not read as $0 this week next to its
+    # $5,000 last week, which would fake a crash in the trending ratio.
+    p = insert_project(conn, "Mixed", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xm", 8453, project_id=p, name="Mixed")
+    for pool, prev_week, cur in (("0xnormal", 1_000, 2_000), ("0xheld", 5_000, None)):
+        insert_pool(conn, pool, 8453, "0xm", created=NOW - timedelta(days=60))
+        insert_snap(conn, pool, 8453, DAY - timedelta(days=14), 0, 0, 0)
+        insert_snap(conn, pool, 8453, DAY - timedelta(days=7), 0, prev_week, 10)
+        insert_snap(conn, pool, 8453, DAY, 0, cur, 20)
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xheld", chain_id=8453, day=DAY, vol_24h=None, traders_24h=3))
+    score.run(conn, ctx)
+    d = daily(conn, p)
+    assert (d.vol_7d, d.vol_7d_prev) == (1_000, 1_000)
