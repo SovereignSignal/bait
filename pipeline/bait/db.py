@@ -5,6 +5,7 @@ JSONB on Postgres, JSON on SQLite so tests run in memory. Upsert helper picks th
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
@@ -107,6 +108,7 @@ pool_stats = sa.Table(
     sa.Column("sells_24h", sa.Integer),
     sa.Column("buyers_24h", sa.Integer),
     sa.Column("sellers_24h", sa.Integer),
+    sa.Column("vol_source", sa.Text),          # 'onchain' | 'hook' | 'unpriced'; NULL = keyless (0010)
 )
 
 # Who trades each hooked pool: top wallets by volume from the last ~300 trades (step "activity"). Kept 14 days.
@@ -256,6 +258,7 @@ pool_daily_onchain = sa.Table(
     sa.Column("swaps", sa.Integer, nullable=False, server_default="0"),
     sa.Column("wallets", sa.Integer, nullable=False, server_default="0"),
     sa.Column("volume_usd", sa.Float, nullable=False, server_default="0"),
+    sa.Column("unpriced_swaps", sa.Integer, nullable=False, server_default="0"),
     sa.Index("pool_daily_onchain_day_idx", "day"),
 )
 
@@ -275,7 +278,17 @@ indexer_state = sa.Table(
     sa.Column("initialize_block", sa.BigInteger),
     sa.Column("swap_block", sa.BigInteger),
     sa.Column("head_block", sa.BigInteger),
+    sa.Column("swap_block_time", TS),          # block time the swap cursor reached (lower bound)
     sa.Column("backfilled", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("updated_at", TS),
+)
+
+# Nightly onchain step's copy watermark (0010). Owned by the pipeline, not the indexer, so the step's long transaction never
+# holds a row lock that the indexer's cursor updates would wait on.
+onchain_watermarks = sa.Table(
+    "onchain_watermarks", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("pools_block", sa.BigInteger),
     sa.Column("updated_at", TS),
 )
 # --- /indexer ---
@@ -330,6 +343,9 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("hooks", "regroup", "boolean NOT NULL DEFAULT false"),
     ("hooks", "is_proxy", "boolean"),
     ("hooks", "proxy_kind", "text"),
+    ("indexer_state", "swap_block_time", "timestamptz"),
+    ("pool_daily_onchain", "unpriced_swaps", "integer NOT NULL DEFAULT 0"),
+    ("pool_stats", "vol_source", "text"),
 ]
 
 
@@ -338,12 +354,51 @@ ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
     ("v4_pools_block_time_idx", "v4_pools", "block_time DESC NULLS LAST, block_number DESC"),
     ("pool_stats_day_idx", "pool_stats", "day"),
     ("pool_top_wallets_day_idx", "pool_top_wallets", "day"),
+    ("v4_pools_chain_block_idx", "v4_pools", "chain_id, block_number, pool_id"),
 ]
 
 
-def add_missing_indexes(engine: sa.Engine, indexes: Iterable[tuple[str, str, str]] = ADDITIVE_INDEXES) -> list[str]:
-    """CREATE INDEX IF NOT EXISTS for each (both dialects support it). Tables that do not exist are skipped."""
+class SchemaLocked(RuntimeError):
+    """An additive migration could not take its table lock within lock_timeout. Retry later: a DDL statement queued behind
+    a long transaction blocks every reader of the table behind it (web reads, the nightly step)."""
+
+
+def _pg_existing(engine: sa.Engine, sql: str) -> set:
+    """Catalog read only: no lock on user tables."""
+    with engine.connect() as conn:
+        return {tuple(r) for r in conn.execute(sa.text(sql))}
+
+
+def _pg_ddl(engine: sa.Engine, sql: str, lock_timeout: str, what: str) -> None:
+    """One DDL statement in its own transaction under SET LOCAL lock_timeout; a lock timeout becomes SchemaLocked."""
+    if not re.fullmatch(r"\d+(ms|s)", lock_timeout):
+        raise ValueError(f"lock_timeout {lock_timeout!r}")
+    try:
+        with engine.begin() as conn:
+            conn.execute(sa.text(f"SET LOCAL lock_timeout = '{lock_timeout}'"))
+            conn.execute(sa.text(sql))
+    except sa.exc.DBAPIError as e:
+        if getattr(e.orig, "sqlstate", None) == "55P03":  # lock_not_available
+            logging.getLogger("bait").warning("schema: %s not applied, table lock not granted within %s; retrying later",
+                                              what, lock_timeout)
+            raise SchemaLocked(what) from e
+        raise
+
+
+def add_missing_indexes(engine: sa.Engine, indexes: Iterable[tuple[str, str, str]] = ADDITIVE_INDEXES,
+                        lock_timeout: str = "5s") -> list[str]:
+    """Create the indexes that do not exist yet; tables that do not exist are skipped. Postgres: pg_indexes is read first
+    and CREATE INDEX runs only for a missing index, under lock_timeout (CREATE INDEX IF NOT EXISTS takes a SHARE lock
+    even when the index exists); raises SchemaLocked on a lock timeout. SQLite: CREATE INDEX IF NOT EXISTS."""
     done: list[str] = []
+    if engine.dialect.name == "postgresql":
+        tables = {t for (t,) in _pg_existing(engine, "SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")}
+        have = {n for (n,) in _pg_existing(engine, "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()")}
+        for name, table, cols in indexes:
+            if table in tables and name not in have:
+                _pg_ddl(engine, f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ({cols})', lock_timeout, f"index {name}")
+                done.append(name)
+        return done
     with engine.begin() as conn:
         insp = sa.inspect(conn)
         for name, table, cols in indexes:
@@ -367,19 +422,43 @@ def backfill_address_flags(conn: sa.Connection) -> int:
     return len(todo)
 
 
-def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS) -> list[str]:
-    """Idempotent additive migration. Postgres: ADD COLUMN IF NOT EXISTS. SQLite: PRAGMA table_info, then ALTER only
-    the missing ones. Tables that do not exist are skipped (create_all owns them). Returns "table.column" added
-    (on Postgres: attempted)."""
+def missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS) -> list[str]:
+    """Read-only: "table.column" of the additive columns whose table exists but the column does not (catalog reads)."""
+    if engine.dialect.name == "postgresql":
+        have = _pg_existing(engine, "SELECT table_name, column_name FROM information_schema.columns "
+                                    "WHERE table_schema = current_schema()")
+        tables = {t for t, _ in have}
+        return [f"{t}.{c}" for t, c, _ in columns if t in tables and (t, c) not in have]
+    out = []
+    with engine.connect() as conn:
+        insp = sa.inspect(conn)
+        for t, c, _ in columns:
+            if insp.has_table(t) and c not in {r[1] for r in conn.execute(sa.text(f'PRAGMA table_info("{t}")'))}:
+                out.append(f"{t}.{c}")
+    return out
+
+
+def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS,
+                        lock_timeout: str = "5s") -> list[str]:
+    """Idempotent additive migration; returns "table.column" added. Tables that do not exist are skipped (create_all owns
+    them). Postgres: information_schema.columns is read first and ALTER runs only for a missing column, under
+    lock_timeout (ADD COLUMN IF NOT EXISTS takes ACCESS EXCLUSIVE even when the column exists); raises SchemaLocked on a
+    lock timeout. SQLite: PRAGMA table_info, then ALTER only the missing ones."""
     added: list[str] = []
+    if engine.dialect.name == "postgresql":
+        have = _pg_existing(engine, "SELECT table_name, column_name FROM information_schema.columns "
+                                    "WHERE table_schema = current_schema()")
+        tables = {t for t, _ in have}
+        for table, column, sqltype in columns:
+            if table in tables and (table, column) not in have:
+                _pg_ddl(engine, f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {sqltype}', lock_timeout,
+                        f"{table}.{column}")
+                added.append(f"{table}.{column}")
+        return added
     with engine.begin() as conn:
         insp = sa.inspect(conn)
         for table, column, sqltype in columns:
             if not insp.has_table(table):
-                continue
-            if conn.dialect.name == "postgresql":
-                conn.execute(sa.text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {sqltype}'))
-                added.append(f"{table}.{column}")
                 continue
             have = {r[1] for r in conn.execute(sa.text(f'PRAGMA table_info("{table}")'))}
             if column not in have:
@@ -398,20 +477,35 @@ def savepoint(conn: sa.Connection):
 RUN_LOCK_KEY = "bait-run"
 
 
-def try_run_lock(engine: sa.Engine) -> sa.Connection | None:
-    """One nightly run at a time. Postgres: session-level advisory lock held by the returned connection; close it
-    to release. Returns None when another runner holds it. Other dialects: no lock, returns an open connection.
+_LOCK_ENGINES: dict = {}
 
-    The lock connection comes from a throwaway NullPool engine: a pooled connection would go back to the pool on
-    close() with its session (and so the lock) still alive."""
+
+def try_advisory_lock(engine: sa.Engine, key: str) -> sa.Connection | None:
+    """Session-level pg_try_advisory_lock(hashtext(key)) on a dedicated connection; close() releases it. None when another
+    session holds it. Other dialects: no lock, an open connection. The connection comes from a NullPool engine (cached per
+    URL): a pooled connection would go back to the pool on close() with its session, and so the lock, still alive. The
+    transaction is committed at once: the lock survives it and the session is not left idle in transaction."""
     if engine.dialect.name != "postgresql":
         return engine.connect()
-    conn = sa.create_engine(engine.url, poolclass=sa.pool.NullPool, future=True).connect()
-    got = conn.execute(sa.text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": RUN_LOCK_KEY}).scalar_one()
+    lock_engine = _LOCK_ENGINES.get(engine.url)
+    if lock_engine is None:
+        lock_engine = _LOCK_ENGINES[engine.url] = sa.create_engine(engine.url, poolclass=sa.pool.NullPool, future=True)
+    conn = lock_engine.connect()
+    try:
+        got = conn.execute(sa.text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": key}).scalar_one()
+        conn.commit()
+    except Exception:
+        conn.close()
+        raise
     if got:
         return conn
     conn.close()
     return None
+
+
+def try_run_lock(engine: sa.Engine) -> sa.Connection | None:
+    """One nightly run at a time; see try_advisory_lock."""
+    return try_advisory_lock(engine, RUN_LOCK_KEY)
 
 
 def upsert(conn: sa.Connection, table: sa.Table, rows: Sequence[dict], keys: Iterable[str],

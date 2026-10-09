@@ -229,8 +229,9 @@ v4 pool on every chain it covers shows up as soon as it is initialized, with exa
   pools from 14 days back, then live, aggregated per UTC day: swaps, unique wallets (transaction `from`, not the router
   that is the Swap `sender`) and USD volume (`pool_daily_onchain`, wallets per day in `pool_wallet_day`, 30 days).
   Per-chain cursors in `indexer_state`, committed with each batch, so restarts resume exactly.
-- **Volume is approximate by design:** valued at current DefiLlama prices, not prices at swap time; unpriced tokens
-  count as swaps with $0. TVL is not computed (GeckoTerminal/subgraph reserve is kept).
+- **Volume is approximate by design:** valued at current DefiLlama prices, not prices at swap time; unpriced swaps are
+  counted (`unpriced_swaps`), and a mostly-unpriced pool-day or a custom-accounting hook keeps the keyless number. TVL is
+  not computed (GeckoTerminal/subgraph reserve is kept).
 - **Into the feed:** nightly step `onchain` (after activity) adds unlisted hooks (capped per night), upserts `pools`,
   and for fully backfilled, fresh chains replaces keyless usage with on-chain numbers in `pool_snapshots` (cumulative
   series for the 7d math) and `pool_stats` (24h volume + wallets for the wash rule). The web's "Just launched" list reads
@@ -250,7 +251,8 @@ shortlist instead of up to 400 names.
 ## Data issues backlog (from a UF backtest on Bait data, 2026-10-08)
 
 - HyperSync token is free tier (~15 requests per window); the indexer needs all of it. One-off scans need a second token.
-- Swap history keeps 14 days; add a per-pool per-month aggregate kept forever for all-time / monthly views.
+- Swap history starts 14 days before each chain's swap phase and `pool_daily_onchain` is never pruned; add a per-pool
+  per-month aggregate for all-time / monthly views.
 - Swap.fee is decoded but not stored; store fee_usd per pool-day (real LP fees incl. dynamic fees).
 - Dormant wash: Labs' Dune hook explorer (query 5685626) attributes ~$225B of $272B all-time volume to a few dead
   ...888 pools (1-4 pools, $0 in 7 days). Before showing all-time totals, exclude all-time > $1B with <= 4 pools and

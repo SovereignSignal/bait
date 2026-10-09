@@ -35,6 +35,16 @@ def flags_from_address(address: str) -> dict[str, bool]:
     return {name: bool(bits >> bit & 1) for name, bit in PERMISSION_BITS}
 
 
+# v4 PoolManager emits Swap with the pool's own delta, before hook deltas. A beforeSwapReturnsDelta hook can settle part or
+# all of the trade itself (custom curve, NoOp), so the event understates it, often to 0/0. afterSwapReturnsDelta only
+# adjusts the unspecified side after the pool swapped: the event's pool leg is real volume, so bit 2 is not included.
+CUSTOM_ACCOUNTING_BITS = 1 << 3
+
+
+def custom_accounting(address: str) -> bool:
+    return bool(int(address, 16) & CUSTOM_ACCOUNTING_BITS)
+
+
 def eligibility(hook: dict, pool_fee: int | None = None) -> str:
     """Routing eligibility by Bait's rule: 'eligible' | 'ineligible' | 'unknown'. Permissions come from the address;
     dynamic fee from the pool fee when given, else properties.dynamicFee when present, else unknown."""

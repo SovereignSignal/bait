@@ -33,9 +33,9 @@ export default async function BuildingPage({ searchParams }: { searchParams: Pro
 
   return (
     <div className={t.shell}>
-      <main className={r.app}>
+      <main className={r.app} id="main" tabIndex={-1}>
         <RadarList items={items} kind={kind} now={now} />
-        <section className={r.side} aria-label="Just launched">
+        <section className={r.side} id="launches" aria-label="Just launched">
           <JustLaunched initial={launches} now={Date.now()} />
           <div className={`panel ${r.about}`}>
             <h2>What is on the radar</h2>
@@ -49,7 +49,6 @@ export default async function BuildingPage({ searchParams }: { searchParams: Pro
                 <Link key={k} className={r.kind} href={radarHref(k)}>
                   <span className="mut">{label}</span>
                   <b className="num">{int(counts.get(k) ?? 0)}</b>
-                  <span>on the radar</span>
                 </Link>
               ))}
             </div>

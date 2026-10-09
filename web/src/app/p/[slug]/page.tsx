@@ -35,5 +35,5 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
     notFound();
   }
   const sample = usingFixtures();
-  return <Terminal rows={rows} moverRows={movers(rows)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} />;
+  return <Terminal rows={rows} moverRows={movers(rows, 60)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} />;
 }
