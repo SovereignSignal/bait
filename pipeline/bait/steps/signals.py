@@ -116,6 +116,12 @@ def _needs_blurb(conn, p) -> bool:
     return latest is not None and as_utc(latest) > as_utc(p.blurb_at)
 
 
+def _parallel_facts(enrichment) -> dict | None:
+    """Parallel output for the blurb prompt; a {"_failed": ...} tombstone is not a fact."""
+    par = (enrichment or {}).get("parallel")
+    return None if not par or "_failed" in par else par
+
+
 def _blurb_ctx(conn, p, daily) -> dict:
     sig = {r.kind: r.value for r in conn.execute(sa.select(signals.c.kind, signals.c.value).where(signals.c.project_id == p.id))}
     rec = conn.execute(sa.select(receipts.c.title, receipts.c.source, receipts.c.published_at)
@@ -125,5 +131,5 @@ def _blurb_ctx(conn, p, daily) -> dict:
         "metrics": {"tvl_usd": daily.tvl_usd, "vol_7d": daily.vol_7d, "vol_7d_prev": daily.vol_7d_prev,
                     "swaps_7d": daily.swaps_7d, "pools_n": daily.pools_n, "is_new": daily.is_new},
         "signals": sig, "receipts": [dict(r._mapping) for r in rec],
-        "enrichment": (p.enrichment or {}).get("parallel"),
+        "enrichment": _parallel_facts(p.enrichment),
     }
