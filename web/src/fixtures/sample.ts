@@ -118,7 +118,8 @@ function wallets(raw: Raw, chainId: ChainId, h: number): WalletView[] {
     left -= v;
     const trades = 3 + ((h >> i) % 40);
     const buys = Math.round(trades * (0.35 + ((h >> (i + 2)) % 50) / 100));
-    const labels = LABELS[(h + i) % LABELS.length];
+    // one deliberately long label list so the phone layout's overflow test has something to wrap
+    const labels = raw.name === "StablePairHook" && i === 0 ? ["Relay Protocol: EOA Bridge Relay Protocol mevrevolutionx.eth"] : LABELS[(h + i) % LABELS.length];
     out.push({
       address: addr(`${raw.name}:${i}`),
       chainId,
