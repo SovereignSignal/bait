@@ -162,3 +162,24 @@ def test_held_back_pool_with_null_volume_is_left_out_of_both_weeks(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, p)
     assert (d.vol_7d, d.vol_7d_prev) == (1_000, 1_000)
+
+
+def test_windows_schema_is_additive_on_an_existing_database():
+    e = db.make_engine("sqlite://")
+    with e.begin() as c:
+        c.execute(sa.text("CREATE TABLE project_daily (project_id integer, day date, tvl_usd float, vol_7d float, vol_7d_prev float, "
+                          "swaps_7d bigint, pools_n integer, score_trending float, is_new boolean NOT NULL DEFAULT 0, "
+                          "is_spam boolean NOT NULL DEFAULT 0, PRIMARY KEY (project_id, day))"))
+        c.execute(sa.text("INSERT INTO project_daily (project_id, day, is_spam) VALUES (1, '2026-10-05', 1)"))
+        c.execute(sa.text("CREATE TABLE pool_snapshots (pool_id text, chain_id integer, day date, tvl_usd float, "
+                          "volume_usd_cum float, tx_count_cum bigint, PRIMARY KEY (pool_id, chain_id, day))"))
+        c.execute(sa.text("CREATE TABLE pool_stats (pool_id text, chain_id integer, day date, vol_24h float, traders_24h integer, "
+                          "PRIMARY KEY (pool_id, chain_id, day))"))
+    db.create_all(e)
+    added = set(db.add_missing_columns(e))
+    assert {"project_daily.window_end", "project_daily.vol_24h", "project_daily.swaps_24h", "project_daily.wallets_24h",
+            "project_daily.wallets_exact", "project_daily.is_wash", "project_daily.wash_reason",
+            "pool_snapshots.volume_usd_day", "pool_snapshots.tx_count_day", "pool_snapshots.estimated",
+            "pool_stats.vol_24h_rolling", "pool_stats.wallets_24h", "pool_stats.window_end"} <= added
+    with e.connect() as c:
+        assert c.execute(sa.text("SELECT is_wash, wash_reason FROM project_daily")).one() == (0, None)
