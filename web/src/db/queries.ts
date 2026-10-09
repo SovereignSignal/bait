@@ -48,7 +48,7 @@ const EMPTY_USAGE: Usage = { vol24h: null, tx24h: null, wallets24h: null, buys24
 
 function derive(p: ProjectDetail): ProjectDetail {
   const primary = p.hooks[0];
-  const labels = primary ? flagLabels(primary.flags, primary.properties) : [];
+  const labels = primary ? flagLabels(primary.address, primary.flags, primary.properties) : [];
   const flagLine = p.isFactory && p.metrics.hooksN > 1 ? [`${p.metrics.hooksN.toLocaleString("en-US")} hooks`, "one per pool"] : labels;
   return {
     ...p,
