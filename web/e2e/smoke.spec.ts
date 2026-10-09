@@ -9,9 +9,24 @@ function watch(page: Page): string[] {
 }
 const phone = () => test.info().project.name === "phone";
 async function noHorizontalScroll(page: Page) {
-  // compare with the configured width: on a mobile viewport an overflowing page widens innerWidth itself
-  const width = page.viewportSize()!.width;
-  expect(await page.evaluate(() => document.documentElement.scrollWidth), "page scrolls horizontally").toBeLessThanOrEqual(width);
+  // the document must not be wider than the viewport (scrollWidth vs clientWidth, which excludes any scrollbar)
+  const { sw, cw } = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
+  expect(sw, "page scrolls horizontally").toBeLessThanOrEqual(cw);
+  // and nothing inside the Top wallets / Pools panels may poke out of the client width
+  const offenders = await page.evaluate(() => {
+    const cw = document.documentElement.clientWidth;
+    const out: string[] = [];
+    for (const h of Array.from(document.querySelectorAll("h2"))) {
+      if (!/^(Top wallets|Pools)/.test(h.textContent ?? "")) continue;
+      const panel = h.closest(".panel") ?? h.parentElement!;
+      for (const el of [panel, ...Array.from(panel.querySelectorAll("*"))]) {
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.right > cw + 0.5) out.push(`${h.textContent}: <${el.tagName.toLowerCase()} class="${el.getAttribute("class")}"> right=${Math.round(r.right)}`);
+      }
+    }
+    return out;
+  });
+  expect(offenders, "elements past the viewport edge").toEqual([]);
 }
 
 test("feed: tab labels, category chips, one h1", async ({ page }) => {
@@ -25,6 +40,17 @@ test("feed: tab labels, category chips, one h1", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   if (phone()) await noHorizontalScroll(page);
   expect(errs).toEqual([]);
+});
+
+test("phone pages never overflow the viewport", async ({ page }) => {
+  test.skip(!phone(), "phone only");
+  for (const width of [375, 360]) {
+    await page.setViewportSize({ width, height: 812 }); // 360 is the narrow Android case (the feed tabs once overflowed there by 4 px)
+    for (const path of ["/", "/p/stablepairhook", "/p/v4permissionedswaps"]) {
+      await page.goto(path);
+      await noHorizontalScroll(page);
+    }
+  }
 });
 
 test("In Uniswap app tab lists only the eligible fixture", async ({ page }) => {
