@@ -39,7 +39,8 @@ def test_score_hand_computed(conn, ctx):
     assert d.score_trending == pytest.approx(math.log1p(70_000) * 2.0)
     assert d.is_new is False           # pipeline first saw it 3d ago, but its pool is 60d old: not new
     assert d.is_spam is False
-    assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_7d": 0}
+    assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_24h": 0, "wash_7d": 0,
+                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):
@@ -103,11 +104,12 @@ def test_wash_rule_reads_persisted_pool_stats(conn, ctx):
     p = insert_project(conn, "Washy", first_seen=NOW - timedelta(days=60))
     insert_hook(conn, "0xw", 8453, project_id=p, name="Washy")
     insert_pool(conn, "0xwp", 8453, "0xw", created=NOW - timedelta(days=60))
-    insert_snap(conn, "0xwp", 8453, END, 0, 9_000_000, 0, vol_day=8_000_000.0)
+    insert_snap(conn, "0xwp", 8453, END, 0, 9_000_000, 100, vol_day=8_000_000.0)    # 100 swaps: not spam
     conn.execute(sa.insert(db.pool_stats).values(pool_id="0xwp", chain_id=8453, day=DAY, vol_24h=5_000_000, traders_24h=6))
     out = score.run(conn, ctx)
     d = daily(conn, p)
-    assert d.is_spam and d.score_trending == 0.0 and out["wash"] == 1
+    # TVL known to be $0 with $8M through at most 3 wallets: no liquidity as well
+    assert d.is_wash and not d.is_spam and d.wash_reason == "24h,no_liquidity" and d.score_trending == 0.0 and out["wash"] == 1
 
 
 def _onchain_project(conn, name, pool, wallets, vol_per_day, tvl=50_000):
@@ -131,8 +133,9 @@ def test_wash_7d_from_indexer_one_wallet_hundreds_of_millions(conn, ctx):
     small = _onchain_project(conn, "Small", "0xsp", wallets=1, vol_per_day=100_000)       # $700K < $1M: not wash
     _optimism_ready(conn)
     out = score.run(conn, ctx)
-    assert daily(conn, wash).is_spam and daily(conn, wash).score_trending == 0.0
-    assert not daily(conn, busy).is_spam and not daily(conn, small).is_spam
+    w = daily(conn, wash)
+    assert w.is_wash and not w.is_spam and w.wash_reason == "7d,vol_tvl" and w.score_trending == 0.0
+    assert not daily(conn, busy).is_wash and not daily(conn, small).is_wash
     assert out["wash_7d"] == 1
 
 
@@ -151,7 +154,7 @@ def test_wash_7d_ignores_a_chain_whose_swaps_are_not_caught_up(conn, ctx):
     wash = _onchain_project(conn, "Desk", "0xdp", wallets=1, vol_per_day=60_000_000)
     _optimism_ready(conn, swap_time=NOW - timedelta(days=2))
     out = score.run(conn, ctx)
-    assert out["wash_7d"] == 0 and not daily(conn, wash).is_spam
+    assert out["wash_7d"] == 0 and not daily(conn, wash).is_wash
 
 
 def test_held_back_pool_with_null_volume_is_left_out_of_both_weeks(conn, ctx):
@@ -257,3 +260,54 @@ def test_24h_wash_uses_a_wallet_lower_bound_not_buyers_plus_sellers(conn, ctx):
                                                  buyers_24h=13, sellers_24h=13))
     out = score.run(conn, ctx)
     assert out["wash"] == 1                        # 13 buyers + 13 sellers is at least 13 wallets, not 26 > 25
+
+
+def test_wash_reasons_on_the_live_cases(conn, ctx):
+    """10/9 audit cases: OUROBOROS/CRCL on Robinhood is flagged with its reasons; the Base launchpad family 0x0f48 and a
+    private RFQ hook are not; dust stays spam and is not called wash."""
+    def keyless_project(name, chain, tvl, vol_day, buyers, sellers, rolling=None):
+        p = insert_project(conn, name, first_seen=NOW - timedelta(days=60), slug=name.lower())
+        insert_hook(conn, f"0x{name.lower()}", chain, project_id=p, name=name)
+        pool = f"0x{name.lower()}p"
+        insert_pool(conn, pool, chain, f"0x{name.lower()}", created=NOW - timedelta(days=60))
+        series(conn, pool, chain, {END - timedelta(days=i): vol_day for i in range(7)}, tvl=tvl)
+        conn.execute(sa.insert(db.pool_stats).values(pool_id=pool, chain_id=chain, day=DAY, vol_24h=vol_day, vol_24h_rolling=rolling,
+                                                     traders_24h=buyers + sellers, buyers_24h=buyers, sellers_24h=sellers))
+        return p, pool
+    ouro, ouro_pool = keyless_project("Ouroboros", 4663, tvl=10_000, vol_day=1_237_000.0, buyers=13, sellers=13, rolling=1_237_000.0)
+    for w in range(10):       # symmetric 10/10 bots: $1M of $1.237M
+        conn.execute(sa.insert(db.pool_top_wallets).values(pool_id=ouro_pool, chain_id=4663, day=DAY, address=f"0xbot{w}",
+                                                           volume_usd=100_000.0, trades=10, buys=5, sells=5))
+    launch, _ = keyless_project("Launchpad", 8453, tvl=200_000, vol_day=9_857_000.0, buyers=15_000, sellers=15_000)   # 345x
+    rfq = _onchain_project(conn, "Rfq", "0xrfq", wallets=4, vol_per_day=714_000, tvl=2_000_000)                       # 2.5x
+    _optimism_ready(conn)
+    dust = insert_project(conn, "Dust", first_seen=NOW, slug="dust")
+    insert_hook(conn, "0xdust", 1, project_id=dust)
+    insert_pool(conn, "0xdustp", 1, "0xdust", created=NOW)
+    insert_snap(conn, "0xdustp", 1, END, 12, 40, 3)
+    out = score.run(conn, ctx)
+    o = daily(conn, ouro)
+    assert o.is_wash and o.wash_reason == "24h,vol_tvl,symmetric" and not o.is_spam and o.score_trending == 0 and not o.is_new
+    assert not daily(conn, launch).is_wash and not daily(conn, rfq).is_wash
+    assert daily(conn, dust).is_spam and not daily(conn, dust).is_wash
+    assert (out["wash"], out["wash_24h"], out["wash_7d"], out["wash_vol_tvl"], out["wash_no_liquidity"], out["wash_symmetric"]) \
+        == (1, 1, 0, 1, 0, 1)
+
+
+def test_no_liquidity_flags_the_optimism_0x69af_shape(conn, ctx):
+    """Optimism 0x69af...7fff: $436M in 7 days through 8 swaps from one wallet, its TVL known to be $0. The volume/TVL
+    ratio is undefined at $0, so without "no liquidity" the 7-day rule built for this case missed it."""
+    p = insert_project(conn, "Desk69", first_seen=NOW - timedelta(days=60), slug="desk69")
+    insert_hook(conn, "0x69af", 10, project_id=p, name="Desk69")
+    insert_pool(conn, "0x69afp", 10, "0x69af", created=NOW - timedelta(days=60))
+    days = [END - timedelta(days=i) for i in range(4)]                        # 8 swaps: two a day on four days
+    series(conn, "0x69afp", 10, {d: 109_000_000.0 for d in days}, tvl=0.0, tx={d: 2 for d in days})
+    for d in days:
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id="0x69afp", day=d, swaps=2, wallets=1,
+                                                             volume_usd=109_000_000.0))
+        conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id="0x69afp", day=d, address="0xdesk", swaps=2))
+    _optimism_ready(conn)
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_wash and d.wash_reason == "7d,no_liquidity" and d.score_trending == 0.0 and not d.is_new
+    assert (out["wash_7d"], out["wash_no_liquidity"], out["wash_vol_tvl"]) == (1, 1, 0)
