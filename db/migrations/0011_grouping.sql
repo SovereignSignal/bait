@@ -1,6 +1,8 @@
 -- Package 7: regrouping and project aliases (pipeline group step). The pipeline also creates these itself
 -- (db.create_all + db.add_missing_columns), so applying this file is optional on a database the pipeline has run on.
 ALTER TABLE hooks ADD COLUMN IF NOT EXISTS regroup boolean NOT NULL DEFAULT false;
+-- Proxy status from the bytecode (EIP-1967 slot, EIP-1167 clone) or the explorer; NULL = not fetched yet.
+ALTER TABLE hooks ADD COLUMN IF NOT EXISTS is_proxy boolean;
 
 CREATE TABLE IF NOT EXISTS project_aliases (
   old_slug    TEXT PRIMARY KEY,

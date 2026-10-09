@@ -41,3 +41,35 @@ def test_keyless_and_blockscout_write_the_same_code_hash():
     bs = Blockscout(http_client=httpx.Client(transport=httpx.MockTransport(
         lambda req: httpx.Response(200, json={"deployed_bytecode": code, "is_verified": False}, request=req))))
     assert K.code_hashes(Rpc(), {"base": {a}})[("base", a)] == bs.fetch_code(8453, a).code_hash == code_hash(code)
+
+
+SLOT = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+
+
+def test_code_facts_hash_and_proxy_flag_from_the_bytecode():
+    from bait import keyless as K
+    from bait.rules import code_hash
+    proxy, plain = "0x6080" + SLOT + "54", "0x6080604052"
+    a, b, c, d = ("0x" + ch * 40 for ch in "abcd")
+    codes = {a: proxy, b: plain, c: "0x"}                    # d: never answered
+
+    class Rpc:
+        def rpc_batch(self, url, calls):
+            return [{"id": x["id"], "result": codes[x["params"][0]]} for x in calls if x["params"][0] in codes]
+
+    got = K.code_facts(Rpc(), {"base": {a, b, c, d}})
+    assert got[("base", a)] == (code_hash(proxy), True) and got[("base", b)] == (code_hash(plain), False)
+    assert got[("base", c)] is None and ("base", d) not in got      # no code: definitive; unanswered: absent
+
+
+def test_blockscout_flags_proxies_from_bytecode_and_proxy_type():
+    import httpx
+    from bait.clients.blockscout import Blockscout
+
+    def bs(body):
+        return Blockscout(http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, json=body, request=req))))
+    a = "0x" + "1" * 40
+    assert bs({"deployed_bytecode": "0x6080" + SLOT}).fetch_code(8453, a).is_proxy is True
+    assert bs({"deployed_bytecode": "0x6080", "proxy_type": "eip1967"}).fetch_code(8453, a).is_proxy is True
+    assert bs({"deployed_bytecode": "0x6080"}).fetch_code(8453, a).is_proxy is False
