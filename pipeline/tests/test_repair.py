@@ -89,6 +89,26 @@ def test_backfill_writes_candles_to_unfilled_closed_days_and_never_the_running_d
     assert (d.vol_24h, d.vol_7d) == (200.0, 50.0 + 7.0 + 300.0 + 200.0)
 
 
+def test_backfill_logs_progress_for_every_outcome_and_stops_after_a_failure_streak(engine, caplog):
+    import logging
+    with engine.begin() as c:
+        _project(c, "noisy", "0xh1")
+        for i in range(60):
+            _pool(c, f"0xp{i}", "0xh1")
+            _snap(c, f"0xp{i}", DAY - 3 * D, cum=500.0 + i)
+    with caplog.at_level(logging.INFO, logger="bait"):
+        out = repair.backfill(engine, _ctx(FakeGT({f"0xp{i}": {} for i in range(60)})), since=2)   # empty: no candles
+    assert (out["done"], out["no_candles"], out["failed"], out["calls"]) == (0, 60, 0, 60)
+    assert "repair backfill-days: 50/60 pools, 0 filled, 50 no candles, 0 failed" in caplog.text
+    assert "left_at_failures" not in out
+    with caplog.at_level(logging.WARNING, logger="bait"):
+        out = repair.backfill(engine, _ctx(FakeGT({})), since=2)                                   # every call fails
+    assert (out["failed"], out["calls"], out["left_at_failures"]) == (repair.BACKFILL_FAIL_STREAK, repair.BACKFILL_FAIL_STREAK, 50)
+    assert "10 GeckoTerminal calls failed in a row, stopping with 50 pools left" in caplog.text
+    assert repair._incomplete(out) is True
+    assert repair._incomplete({"done": 3, "failed": 2}) is False
+
+
 def test_backfill_targets_busiest_first_skip_unscored_pools_and_unlisted_chains(engine):
     with engine.begin() as c:
         _project(c, "busy", "0xhb")

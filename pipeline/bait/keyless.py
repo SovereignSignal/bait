@@ -133,6 +133,7 @@ class Http:
                 return self._open(GT + path)
             except urllib.error.HTTPError as e:
                 if e.code == 429:
+                    warn(f"GT 429 {path}: retry {attempt + 1}/6 in {20 * (attempt + 1)}s")
                     time.sleep(20 * (attempt + 1))
                     continue
                 if e.code == 404:
@@ -142,6 +143,7 @@ class Http:
             except Exception as e:  # network blip
                 warn(f"GT error {e!r} {path}")
                 time.sleep(5)
+        warn(f"GT gave up after 6 attempts {path}")
         return None
 
     def rpc_batch(self, url: str, calls: list[dict]) -> list[dict]:
