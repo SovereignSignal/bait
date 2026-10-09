@@ -4,6 +4,7 @@ JSONB on Postgres, JSON on SQLite so tests run in memory. Upsert helper picks th
 """
 from __future__ import annotations
 
+import logging
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
@@ -264,6 +265,28 @@ indexer_state = sa.Table(
     sa.Column("updated_at", TS),
 )
 # --- /indexer ---
+
+run_receipts = sa.Table(
+    "run_receipts", metadata,
+    sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
+    sa.Column("day", sa.Date, nullable=False),
+    sa.Column("started_at", TS, nullable=False),
+    sa.Column("finished_at", TS, nullable=False),
+    sa.Column("exit_code", sa.Integer, nullable=False),
+    sa.Column("soft_errors", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("steps", JSONType, nullable=False),
+    sa.Column("code_sha", sa.Text),
+    sa.Column("notes", sa.Text),
+)
+
+
+def write_receipt(engine: sa.Engine, **fields) -> None:
+    """One row per run, on its own connection, after everything else; a failed step must not lose it."""
+    try:
+        with engine.begin() as c:
+            c.execute(sa.insert(run_receipts).values(**fields))
+    except Exception:  # the receipt is for monitoring; never turn a finished run into a crash
+        logging.getLogger("bait").exception("receipt write failed")
 
 
 def make_engine(url: str | None = None) -> sa.Engine:
