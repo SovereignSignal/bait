@@ -268,9 +268,16 @@ v4 pool on every chain it covers shows up as soon as it is initialized, with exa
   priced swap of at least `INDEXER_LATE_INSERT_MIN_USD` ($10; unpriced never qualifies) and stops at
   `INDEXER_SAMPLED_POOLS_PER_HOOK` (1,000) per hook. Nothing is lost past both caps: those swaps and wallets are kept per day
   on the hook's aggregate pool `hook:<address>` (and in `swaps_total` / `volume_usd_total`), which the nightly step turns
-  into a series and `pool_stats` with `vol_source = 'hook_total'`, so the project's volume, swaps and wallets stay true. The
-  residual cost is bounded: at most 2,000 + 1,000 rows per hook, and every late row cost its creator a real $10 swap.
-  Existing excess is trimmed once by `python -m bait.indexer prune-pools`.
+  into a series and `pool_stats` with `vol_source = 'hook_total'`, so the project's displayed volume, swaps and wallets stay
+  true. Row growth is bounded at 2,000 + 1,000 rows per hook. The $10 minimum is not a real cost: a $10 swap against your
+  own liquidity costs only gas and the hook's fees, so filling a hook's 1,000 sampled slots is cheap. Slots are first-come
+  and permanent for now; the follow-up is slot rotation (by rolling volume, or demoting sampled rows that went idle).
+  No wash rule can judge folded pools: the aggregate loses per-pool concentration (one wallet cycling one junk pool looks
+  like ordinary activity spread over many). So folded usage counts toward a project's displayed totals and toward whether
+  its volume is known, but never toward `score_trending`.
+  `INDEXER_POOLS_PER_HOOK` and `INDEXER_TOPIC_FILTER_MAX` are coupled: a chain with any capped hook always scans swaps
+  (topic mode only asks for stored pool ids), so a cap at or below the topic limit moves a small chain to scan mode once
+  one hook reaches it. Existing excess is trimmed once by `python -m bait.indexer prune-pools`.
 - **Without the token:** the indexer degrades to following new Initialize logs over the public RPCs on 10 chains (no
   history, no swaps) and says so in its startup log.
 
@@ -289,6 +296,9 @@ shortlist instead of up to 400 names.
 - Swap history starts 14 days before each chain's swap phase and `pool_daily_onchain` is never pruned; add a per-pool
   per-month aggregate for all-time / monthly views.
 - Swap.fee is decoded but not stored; store fee_usd per pool-day (real LP fees incl. dynamic fees).
+- Indexer memory: the per-chain pool resolver keeps up to 50K full pool rows (`recent`) and 1M unhooked pool ids
+  (`absent`); store compact keys instead when the indexer's memory matters.
+- Sampled slot rotation (see "Per-hook cap"): slots are first-come and permanent today.
 - Dormant wash: Labs' Dune hook explorer (query 5685626) attributes ~$225B of $272B all-time volume to a few dead
   ...888 pools (1-4 pools, $0 in 7 days). Before showing all-time totals, exclude all-time > $1B with <= 4 pools and
   $0 7d. Bunni (761 pools) and EulerSwap (1,241 pools) show ~$0 in 7 days: never rank by all-time.
