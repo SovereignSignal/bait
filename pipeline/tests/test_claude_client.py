@@ -49,3 +49,29 @@ def test_what_line_schema_and_refusal():
     client, _ = fake_client({}, stop="refusal")
     with pytest.raises(RuntimeError, match="refusal"):
         Claude(client=client).what_line({"name": "x"})
+
+
+def test_prose_estimate_is_the_check_the_meter_sees():
+    from bait.clients import claude as C
+    from bait.costs import Budgets, Meter
+
+    class Spy(Meter):
+        def __init__(self):
+            super().__init__(None, budgets=Budgets(100.0, 100.0, {}))
+            self.checked = []
+
+        def check(self, provider, est_usd):
+            self.checked.append(est_usd)
+
+    ctx = {"name": "Bunni", "metrics": {"vol_7d": 1.0}}
+    client, m = fake_client({"why_blurb": "One. Two."})
+    c = Claude(client=client)
+    c.meter = Spy()
+    c.why_blurb(ctx)
+    client2, _ = fake_client({"what_line": "Does a thing.", "category": "other"})
+    c2 = Claude(client=client2)
+    c2.meter = c.meter
+    c2.what_line(ctx)
+    assert m.kwargs["messages"][0]["content"] == C.why_blurb_prompt(ctx)
+    assert c.meter.checked == [C.prose_estimate(C.why_blurb_prompt(ctx)), C.prose_estimate(C.what_line_prompt(ctx))]
+    assert C.prose_estimate("x" * 12_000) == pytest.approx(((12_000 + len(C.SYSTEM)) // 3 + 50) * 2 / 1e6 + 600 * 10 / 1e6)
