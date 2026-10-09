@@ -18,7 +18,7 @@ import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
-import { toRow } from "@/lib/present";
+import { digestItem, toRow } from "@/lib/present";
 import type {
   Category,
   ChainId,
@@ -279,13 +279,7 @@ async function loadAll(): Promise<ProjectDetail[]> {
 function toDigest(row: typeof t.digests.$inferSelect): DigestView {
   const week = String(row.weekOf);
   const b = row.body;
-  const card = (kind: DigestItem["kind"]) => (c: t.DigestCard): DigestItem => ({
-    slug: c.slug,
-    name: c.name,
-    kind,
-    line: c.what_line ?? "",
-    vol7d: c.vol_7d ?? 0,
-  });
+  const card = (kind: DigestItem["kind"]) => (c: t.DigestCard): DigestItem => digestItem(c, kind);
   const fresh = (b.new ?? []).map(card("new"));
   const hot = (b.trending ?? []).map(card("trending"));
   const totals = b.totals ?? { projects: 0, tvl_usd: 0, vol_7d: 0 };

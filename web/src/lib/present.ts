@@ -2,7 +2,7 @@
 import { CHAINS } from "./chains";
 import { weekDelta } from "./feed";
 import { clip, fmtDelta, int, usd } from "./format";
-import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type ProjectSummary, type RowView } from "./types";
+import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
   return ids.map((c) => CHAINS[c]?.name ?? `Chain ${c}`).join(sep);
@@ -101,4 +101,12 @@ const WASH_TEXT: Record<string, string> = {
 export function washLine(reason: string | null): string {
   const parts = (reason ?? "").split(",").map((r) => WASH_TEXT[r.trim()]).filter(Boolean);
   return parts.length ? `Wash-like volume: ${parts.join("; ")}.` : "Wash-like volume.";
+}
+
+/** One digest card (digests.body, pipeline shape) as the week page renders it; an unknown 7-day volume stays null. */
+export function digestItem(
+  c: { slug: string; name: string; what_line: string | null; vol_7d: number | null },
+  kind: DigestItem["kind"],
+): DigestItem {
+  return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
 }
