@@ -1,7 +1,7 @@
 """On-chain indexer: decoding, HyperSync request shape, cursor resume, aggregation, prices, RPC fallback. No network:
 HyperSync, RPC and DefiLlama are httpx.MockTransport fakes."""
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -482,3 +482,35 @@ def test_caught_up_quiet_chain_anchors_swap_block_time_at_the_head(engine):
     _, _, _, st = _tables(engine)
     end = HEAD - BASE.lag + 1                         # newest swap is block 2500; the anchor reads block end-1
     assert db.as_utc(st.swap_block_time) == core.utc(T0 + (end - 1) * BT)
+
+
+class NoSwapBlocks(FakeHyperSync):
+    """Swap pages arrive without the joined blocks."""
+
+    def __call__(self, request):
+        r = super().__call__(request)
+        q = json.loads(request.content) if request.content else {}
+        if "transaction" not in q.get("field_selection", {}):
+            return r
+        body = r.json()
+        for b in body["data"]:
+            b["blocks"] = []
+        return httpx.Response(200, json=body)
+
+
+def test_swap_logs_without_block_timestamp_fail_the_page_instead_of_vanishing(engine):
+    _seed_pool_and_cursor(engine)
+    with pytest.raises(RuntimeError, match="without a block timestamp"):
+        core.sync_hypersync(engine, BASE, _hs(NoSwapBlocks()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    _, daily, _, st = _tables(engine)
+    assert st.swap_block == 1000 and daily == {}
+
+
+def test_swap_window_start_moves_up_when_the_swap_phase_begins_days_later(engine):
+    fake = FakeHyperSync()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=0), now=NOW)   # first run: block 1000 (09-22)
+    later = NOW + timedelta(days=2)                                     # Initialize backfill took two more days
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=2), now=later)
+    _, daily, _, st = _tables(engine)
+    assert (st.initialize_block, st.swap_block, daily) == (1400, 3880, {})                  # block 3880 = 09-24 00:00
+    assert db.as_utc(st.swap_block_time) == datetime(2026, 9, 24, tzinfo=timezone.utc)
