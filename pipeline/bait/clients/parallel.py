@@ -50,7 +50,7 @@ class Parallel:
         from ..costs import parallel_usd
         price = parallel_usd(self.processor)
         self.meter.check("parallel", price)
-        run = http.post_json(self.c, "https://api.parallel.ai/v1/tasks/runs", headers=self.headers, json={
+        run = http.post_json_paid(self.c, "https://api.parallel.ai/v1/tasks/runs", headers=self.headers, json={
             "input": f"Uniswap v4 hook project '{project_name}'. Known facts: {hints}",
             "task_spec": {"output_schema": OUTPUT_SCHEMA},
             "processor": self.processor,
