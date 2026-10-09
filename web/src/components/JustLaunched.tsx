@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { anyChainColor, anyChainName, anyExplorerTxUrl } from "@/lib/chains";
 import { NONE, paletteColor, since } from "@/lib/format";
-import { launchFee, launchLabel, launchPair } from "@/lib/radar";
+import { collapseLaunches, launchFee, launchLabel, launchPair } from "@/lib/radar";
 import type { LaunchView } from "@/lib/types";
 import s from "./Radar.module.css";
 
@@ -90,8 +90,8 @@ export function JustLaunched({
         </div>
       ) : (
         <ul className={`${s.lList} ${open ? s.open : ""}`}>
-          {launches.map((l) => (
-            <LaunchRow key={`${l.chainId}:${l.poolId}`} l={l} now={now} />
+          {collapseLaunches(launches).map(({ l, more }) => (
+            <LaunchRow key={`${l.chainId}:${l.poolId}`} l={l} more={more} now={now} />
           ))}
         </ul>
       )}
@@ -104,7 +104,7 @@ export function JustLaunched({
   );
 }
 
-function LaunchRow({ l, now }: { l: LaunchView; now: number }) {
+function LaunchRow({ l, more, now }: { l: LaunchView; more: number; now: number }) {
   const label = launchLabel(l);
   const tx = l.txHash ? anyExplorerTxUrl(l.chainId, l.txHash) : null;
   const chain = anyChainName(l.chainId);
@@ -127,6 +127,7 @@ function LaunchRow({ l, now }: { l: LaunchView; now: number }) {
           )}
           <span className={s.lSub}>
             {launchPair(l)} · {launchFee(l.fee)} · {chain}
+            {more > 0 && ` · +${more} more pool${more === 1 ? "" : "s"}`}
           </span>
         </span>
         <span className={s.lRight}>

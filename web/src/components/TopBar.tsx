@@ -94,6 +94,9 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
         <Link href="/week" aria-current={pathname?.startsWith("/week") ? "page" : undefined}>
           Weekly
         </Link>
+        <Link href="/about" aria-current={pathname === "/about" ? "page" : undefined}>
+          How it works
+        </Link>
       </nav>
       <Suspense fallback={<ChainSelectView chains={chains} value="" onChange={() => {}} />}>
         <ChainSelect chains={chains} />

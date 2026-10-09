@@ -127,11 +127,11 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           <b>{p.flagLabels.join(", ") || "none listed"}</b>
           <span>Hooks in project</span>
           <b className="num">{int(p.metrics.hooksN)}</b>
-          <span>Today vs 7d pace</span>
+          <span>Today vs daily avg</span>
           <b className="num">{p.usage.vol24h == null ? NONE : `${share}%`}</b>
         </div>
         <div className={s.bar}>
-          <i style={{ width: `${share}%` }} />
+          <i className={share >= 100 ? s.full : undefined} style={{ width: `${share}%` }} />
         </div>
       </div>
 
