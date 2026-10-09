@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 from datetime import date, datetime, timezone
@@ -21,6 +22,13 @@ from .steps import onchain  # on-chain indexer -> web tables
 STEPS = {"ingest": ingest.run, "snapshot": snapshot.run, "activity": activity.run, "group": group.run, "enrich": enrich.run,
          "score": score.run, "signals": signals.run, "digest": digest.run,
          "radar": radar.run, "onchain": onchain.run}
+
+
+def _redact(msg: str) -> str:
+    """Receipts are served publicly by /api/health; keep URLs (API keys, DB hosts) out of them."""
+    msg = re.sub(r"(https?://)[^\s'\"]+", r"\1<redacted>", msg)
+    msg = re.sub(r"(postgres(?:ql)?(?:\+\w+)?://)[^\s'\"]+", r"\1<redacted>", msg)
+    return msg[:200]
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -103,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
                     counts = STEPS[name](conn, ctx)
             except Exception as e:
                 log.exception("step=%s FAILED after %.1fs", name, time.monotonic() - t0)
-                steps_out[name] = {"failed": (str(e).splitlines() or [type(e).__name__])[0]}
+                steps_out[name] = {"failed": type(e).__name__, "detail": _redact((str(e).splitlines() or [""])[0])}
                 meter.flush()
                 log.info("run spend $%.4f (paid API calls this run; ledger: api_spend)", meter.run_usd)
                 rc = 1

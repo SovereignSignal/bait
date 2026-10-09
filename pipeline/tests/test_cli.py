@@ -1,3 +1,5 @@
+import json
+
 import sqlalchemy as sa
 
 from bait import db
@@ -40,11 +42,12 @@ def test_run_writes_a_receipt_even_when_a_step_fails(tmp_path, monkeypatch):
     from bait import __main__ as cli
     url = f"sqlite:///{tmp_path}/r.sqlite"
     monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc1234")
-    monkeypatch.setitem(cli.STEPS, "snapshot", lambda conn, ctx: (_ for _ in ()).throw(RuntimeError("gecko down")))
+    monkeypatch.setitem(cli.STEPS, "snapshot", lambda conn, ctx: (_ for _ in ()).throw(RuntimeError("fetch https://api.example/v1?key=SECRET failed")))
     rc = cli.main(["run", "--day", "2026-10-06", "--hooklist-file", FIXTURE, "--database-url", url, "--steps", "ingest,snapshot"])
     assert rc == 1
     e = db.make_engine(url)
     with e.connect() as c:
         r = c.execute(sa.select(db.run_receipts)).one()
     assert r.exit_code == 1 and r.code_sha == "abc1234" and r.steps["ingest"]["hooks"] == 300
-    assert "gecko down" in r.steps["snapshot"]["failed"]
+    assert r.steps["snapshot"]["failed"] == "RuntimeError"
+    assert "SECRET" not in json.dumps(r.steps)
