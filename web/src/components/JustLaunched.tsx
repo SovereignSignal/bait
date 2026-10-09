@@ -4,7 +4,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { anyChainColor, anyChainName, anyExplorerTxUrl } from "@/lib/chains";
-import { paletteColor, since } from "@/lib/format";
+import { NONE, paletteColor, since } from "@/lib/format";
 import { launchFee, launchLabel, launchPair } from "@/lib/radar";
 import type { LaunchView } from "@/lib/types";
 import s from "./Radar.module.css";
@@ -124,7 +124,7 @@ function LaunchRow({ l, now }: { l: LaunchView; now: number }) {
           </span>
         </span>
         <span className={s.lRight}>
-          <span className="num mut">{l.blockTime ? since(l.blockTime, now) : "–"}</span>
+          <span className="num mut">{l.blockTime ? since(l.blockTime, now) : NONE}</span>
           {tx && (
             <a href={tx} target="_blank" rel="noopener" title={`Open the initialize transaction on ${chain}`}>
               tx ↗

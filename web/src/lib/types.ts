@@ -207,6 +207,7 @@ export interface ProjectDetail extends ProjectSummary {
 export interface RowView {
   slug: string;
   name: string;
+  whatLine: string;
   color: string;
   category: Category;
   secondaryCategories: Category[];

@@ -1,7 +1,7 @@
 // Project detail column (server): header, stats, daily volume, pools, activity, top wallets, why.
 import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { weekDelta } from "@/lib/feed";
-import { ago, age, feeLabel, int, pair, shortAddr, since, sourceLabel, usd } from "@/lib/format";
+import { ago, age, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd } from "@/lib/format";
 import { categoryLine, chainNames } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
@@ -29,7 +29,7 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
   const swaps = u.buys24h != null && u.sells24h != null ? { k: "Swaps 24h", v: u.buys24h + u.sells24h } : { k: "Txs 24h", v: u.tx24h };
   const stats: Array<{ k: string; v: string; cls?: string }> = [
     { k: "7d volume", v: usd(p.metrics.vol7d) },
-    { k: "vs last week", v: d == null ? (p.isNew ? "new" : "—") : `${d >= 0 ? "+" : ""}${Math.round(d)}%`, cls: d == null ? undefined : d >= 0 ? "up" : "down" },
+    { k: "vs last week", v: d == null ? (p.isNew ? "new" : NONE) : fmtDelta(d), cls: d == null ? undefined : d >= 0 ? "up" : "down" },
     { k: "TVL", v: usd(p.metrics.tvlUsd) },
     { k: "Pools", v: int(p.metrics.poolsN || p.pools.length) },
     { k: "Wallets 24h", v: int(u.wallets24h) },
@@ -330,10 +330,10 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
                           <span className="up">{int(w.buys ?? 0)}</span>/<span className="down">{int(w.sells ?? 0)}</span>
                         </span>
                       ) : (
-                        "–"
+                        NONE
                       )}
                     </td>
-                    <td className="num mut3">{w.lastTradeAt ? `${since(w.lastTradeAt, now)} ago` : "–"}</td>
+                    <td className="num mut3">{w.lastTradeAt ? `${since(w.lastTradeAt, now)} ago` : NONE}</td>
                   </tr>
                 );
               })}
