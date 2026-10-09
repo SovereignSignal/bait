@@ -5,7 +5,8 @@ One window convention (DESIGN.md "Windows"). The run on `day` reports the UTC da
 per-day columns of pool_snapshots (volume_usd_day, tx_count_day); the row for `day` itself is still running and is
 never read.
 - Volume: a day without a row adds $0 (the pool was not listed, or did not trade). A pool whose cumulative volume at
-  window_end is NULL (the onchain step could not measure it) is left out of every volume window, not read as $0.
+  window_end is NULL (the onchain step could not measure it) is left out of every volume window, not read as $0; when
+  that is every pool of a project, its vol_24h / vol_7d / vol_7d_prev are NULL.
 - Swaps: a pool's count is known when every day of the window is (days before the pool was created count as 0; a pool
   with no volume in the window adds 0). Otherwise swaps_7d / swaps_24h are NULL, never a 7-day number built from one day.
 Wash (rules.WASH_REASONS) is its own flag: listed in All with a badge, never ranked; is_spam is only rules.is_spam.
@@ -68,6 +69,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if cur.volume_usd_cum is None:
             unknown_vol.add(key)
         else:
+            a["vol_known"] = True
             for name, w in (("vol24", w24), ("vol7", w7), ("vol7p", wp)):
                 v = _vol(rows, w)
                 a[name] += v
@@ -95,10 +97,13 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     for pid, fs in first_seen.items():
         a = agg.get(pid) or _empty()
         wash = pid in reasons
+        # every pool's volume unknown (p5 held it back): the project's volume is unknown, never $0
+        known = a["vol_known"] or not a["pools"]
         young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
         rows.append({
             "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"],
-            "vol_24h": a["vol24"], "vol_7d": a["vol7"], "vol_7d_prev": a["vol7p"],
+            "vol_24h": a["vol24"] if known else None, "vol_7d": a["vol7"] if known else None,
+            "vol_7d_prev": a["vol7p"] if known else None,
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
             "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
             "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"], a["vol7p"]),
@@ -119,7 +124,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
 def _empty() -> dict:
     return {"tvl": 0.0, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
-            "tx24_known": True, "tx7_known": True, "stats": [], "life": 0.0}
+            "tx24_known": True, "tx7_known": True, "stats": [], "life": 0.0,
+            "vol_known": False}
 
 
 def _vol(rows: dict, w: tuple[date, date]) -> float:

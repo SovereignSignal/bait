@@ -321,3 +321,16 @@ def test_24h_rule_spares_a_private_rfq_hook_with_real_liquidity(conn, ctx):
                                                  wallets_24h=4, vol_source="onchain"))
     score.run(conn, ctx)
     assert not daily(conn, rfq).is_wash
+
+
+def test_a_project_whose_only_pool_has_unknown_volume_stores_null_volume_not_zero(conn, ctx):
+    """Package 5 held this pool's volume back (NULL cumulative): the project's volume is unknown, never $0."""
+    p = insert_project(conn, "Held", first_seen=NOW - timedelta(days=60), slug="held")
+    insert_hook(conn, "0xh", 8453, project_id=p, name="Held")
+    insert_pool(conn, "0xhp", 8453, "0xh", created=NOW - timedelta(days=60))
+    insert_snap(conn, "0xhp", 8453, END - timedelta(days=7), 5_000, 100.0, 10, vol_day=100.0, tx_day=10)
+    insert_snap(conn, "0xhp", 8453, END, 5_000, None, 20, vol_day=None, tx_day=10)
+    score.run(conn, ctx)
+    d = daily(conn, p)
+    assert (d.vol_24h, d.vol_7d, d.vol_7d_prev) == (None, None, None)
+    assert d.score_trending == 0.0 and d.pools_n == 1 and d.tvl_usd == 5_000
