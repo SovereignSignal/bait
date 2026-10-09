@@ -90,5 +90,10 @@ a.trade:hover { background: var(--hover); }
   .whereSub { display: block; margin-top: 2px; font-size: 12px; color: var(--fg2); }
   .star { width: 44px; height: 44px; }
   .tw { display: none; }
-  .stack { display: block; }
+  .stack { display: block; min-width: 0; overflow-x: hidden; }
+  .stack li { min-width: 0; overflow-wrap: anywhere; }
+  .stackSub { white-space: normal; }
+  .stack .wallet { align-items: flex-start; }
+  .stack .wallet .tTags { flex: 1 1 0; min-width: 0; flex-wrap: wrap; overflow-wrap: anywhere; white-space: normal; }
+  .stack .wallet .tTags > span { white-space: normal; min-width: 0; }
 }

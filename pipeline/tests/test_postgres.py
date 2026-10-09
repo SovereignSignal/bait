@@ -294,3 +294,30 @@ def test_prune_pools_runs_in_batches_under_the_chain_lock(pg_engine):
         left = {r[0] for r in c.execute(sa.select(db.v4_pools.c.pool_id))}
         assert left == {f"0x{i:064x}" for i in (2, 8, 9, 10)}
         assert c.execute(sa.select(db.hook_pool_counts.c.pools_total)).scalar_one() == 10
+
+def test_repair_backfill_backup_and_restore_on_postgres(pg_engine):
+    import os
+
+    from bait import repair
+    from bait.__main__ import main
+    from tests.test_repair import D, FakeGT, _ctx, _old_row, _pool, _project, _rows, _snap
+    with pg_engine.begin() as c:
+        p = _project(c, "pg", "0xhpg")
+        _pool(c, "0xppg", "0xhpg")
+        _snap(c, "0xppg", DAY - 3 * D, cum=100.0)
+        _snap(c, "0xppg", DAY - 1 * D, vol_day=9.0, est=True, cum=110.0)
+        _old_row(c, p, DAY)
+    out = repair.backfill(pg_engine, _ctx(FakeGT({"0xppg": {DAY - 3 * D: 30.0, DAY - 2 * D: 20.0}})), since=2)
+    assert (out["rows_updated"], out["rows_inserted"]) == (2, 1)
+    r = _rows(pg_engine, "0xppg")
+    assert [r[DAY - i * D].volume_usd_day for i in (3, 2, 1)] == [30.0, 20.0, 0.0]
+    repair.rescore(pg_engine, [DAY], NOW, echo=lambda s: None)
+    with pg_engine.begin() as c:
+        assert c.execute(sa.select(db.project_daily.c.window_end)).scalar_one() == DAY - D
+        assert repair.restore_day(c, DAY) == 1
+        assert c.execute(sa.select(db.project_daily.c.window_end)).scalar_one() is None
+    held = db.try_run_lock(pg_engine)
+    try:
+        assert main(["repair", "rescore", "--database-url", os.environ["TEST_DATABASE_URL"]]) == 3
+    finally:
+        held.close()
