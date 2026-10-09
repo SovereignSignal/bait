@@ -1,3 +1,5 @@
+import json
+
 import sqlalchemy as sa
 
 from bait import db
@@ -18,6 +20,8 @@ def test_cli_end_to_end_sqlite_idempotent(tmp_path, monkeypatch):
         assert c.execute(sa.select(sa.func.count()).select_from(db.projects)).scalar_one() == 91
         assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily)).scalar_one() == 91
         assert c.execute(sa.select(sa.func.count()).select_from(db.digests)).scalar_one() == 1
+        receipts = c.execute(sa.select(db.run_receipts)).all()
+    assert len(receipts) == 2 and all(r.exit_code == 0 for r in receipts)
 
 
 def test_cli_rejects_unknown_step_and_chain(tmp_path):
@@ -32,3 +36,18 @@ def test_run_exits_3_when_lock_is_held(monkeypatch, tmp_path):
     rc = main(["run", "--database-url", f"sqlite:///{tmp_path}/x.sqlite", "--steps", "ingest",
                "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
     assert rc == 3
+
+
+def test_run_writes_a_receipt_even_when_a_step_fails(tmp_path, monkeypatch):
+    from bait import __main__ as cli
+    url = f"sqlite:///{tmp_path}/r.sqlite"
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc1234")
+    monkeypatch.setitem(cli.STEPS, "snapshot", lambda conn, ctx: (_ for _ in ()).throw(RuntimeError("fetch https://api.example/v1?key=SECRET failed")))
+    rc = cli.main(["run", "--day", "2026-10-06", "--hooklist-file", FIXTURE, "--database-url", url, "--steps", "ingest,snapshot"])
+    assert rc == 1
+    e = db.make_engine(url)
+    with e.connect() as c:
+        r = c.execute(sa.select(db.run_receipts)).one()
+    assert r.exit_code == 1 and r.code_sha == "abc1234" and r.steps["ingest"]["hooks"] == 300
+    assert r.steps["snapshot"]["failed"] == "RuntimeError"
+    assert "SECRET" not in json.dumps(r.steps)
