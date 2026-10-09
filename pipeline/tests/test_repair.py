@@ -472,3 +472,21 @@ def test_restore_puts_back_every_backed_up_day_whatever_today_is_and_even_after_
         assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily).where(db.project_daily.c.is_spam.is_(True))).scalar_one() == 15
     assert [r.notes for r in _receipts(e)] == ["repair rescore-restore", "repair rescore-restore"]
     assert main(["repair", "rescore", "--database-url", url]) == repair.EXIT_PRECONDITION   # a re-score is not exempt
+
+
+def test_backfill_keeps_estimates_before_the_first_candle_and_never_fills_unknown_volume(engine):
+    with engine.begin() as c:
+        _project(c, "edge", "0xhe")
+        _pool(c, "0xpe", "0xhe")
+        _snap(c, "0xpe", DAY - 6 * D, vol_day=500.0, est=True, cum=10.0)   # an estimate before the first candle: kept
+        _snap(c, "0xpe", DAY - 5 * D, cum=20.0)                             # no per-day value before the first candle: $0
+        _snap(c, "0xpe", DAY - 3 * D, vol_day=9.0, est=True, cum=None)      # an estimate where volume is unknown: kept
+        _snap(c, "0xpe", DAY - 2 * D, vol_day=7.0, est=True, cum=30.0)      # an estimate after the first candle, no candle: $0
+        _project(c, "unknown", "0xhu")
+        _pool(c, "0xpu", "0xhu")
+        _snap(c, "0xpu", DAY - 3 * D, vol_day=9.0, est=True, cum=None)      # only unknown-volume estimates: not a target
+        assert [t[0] for t in repair.backfill_targets(c, DAY, since=2)[0]] == ["0xpe"]
+    repair.backfill(engine, _ctx(FakeGT({"0xpe": {DAY - 4 * D: 100.0}})), since=2)
+    r = _rows(engine, "0xpe")
+    assert [(r[DAY - i * D].volume_usd_day, r[DAY - i * D].estimated) for i in (6, 5, 4, 3, 2)] == [
+        (500.0, True), (0.0, False), (100.0, False), (9.0, True), (0.0, False)]
