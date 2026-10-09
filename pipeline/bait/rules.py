@@ -80,9 +80,9 @@ def normalize_name(name: str | None) -> str:
 # names many unrelated teams deploy unchanged. Matched on the lowercased alphanumerics, with an optional "hook(s)" and
 # version suffix ("Limit Order Hook V2" -> "limitorderhookv2"). Applies to hooklist and verified-source names. Bare
 # words that real projects use as names (Curve, Vault, Order, Base, Points, Arb) are deliberately not here; their
-# multi-word template forms (LimitOrder, DynamicFee, ...) are.
+# multi-word template forms (BaseHook, LimitOrder, DynamicFee, ...) are.
 GENERIC_STEMS = (
-    "v4", "uniswapv4", "uniswap", "any", "custom", "my", "mynew", "test", "counter", "swapfee", "fee", "platform",
+    "basehook", "basetesthooks", "v4", "uniswapv4", "uniswap", "any", "custom", "my", "mynew", "test", "counter", "swapfee", "fee", "platform",
     "limitorder", "dynamicfee", "antisandwich", "liquiditypenalty", "fullrange", "twamm", "geomeanoracle",
     "blacklist", "whitelist", "arbitrage", "grid", "example", "demo", "sample")
 GENERIC = re.compile(r"^(?:(?:" + "|".join(GENERIC_STEMS) + r")(?:hooks?)?|hooks?)(?:v?\d+)?$"
