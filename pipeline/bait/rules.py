@@ -1,6 +1,7 @@
 """Pure functions: routable rule, name normalization, scoring math. No I/O. Tested directly."""
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from datetime import date, datetime, timedelta
@@ -78,6 +79,18 @@ def normalize_name(name: str | None) -> str:
 def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return s or "project"
+
+
+def code_hash(code_hex: str | None) -> str | None:
+    """Canonical bytecode fingerprint: "0x" + sha256 of the deployed bytes, lowercase hex. None for no code or non-hex.
+    Every writer (keyless RPC, Blockscout) goes through here so grouping rule 2 compares like with like."""
+    s = (code_hex or "").strip().lower().removeprefix("0x")
+    if not s:
+        return None
+    try:
+        return "0x" + hashlib.sha256(bytes.fromhex(s)).hexdigest()
+    except ValueError:
+        return None
 
 
 def score_trending(vol_7d: float, vol_7d_prev: float) -> float:

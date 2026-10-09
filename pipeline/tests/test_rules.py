@@ -100,3 +100,13 @@ def test_flags_from_address_decodes_all_fourteen_bits():
 def test_eligibility_unknown_without_pool_fee_or_dynamic_key():
     h = {"hook": {"address": "0x5555000000000000000000000000000000000080"}, "properties": {}}
     assert eligibility(h) == "unknown" and eligibility(h, 3000) == "eligible" and eligibility(h, 0x800000) == "ineligible"
+
+
+def test_code_hash_is_0x_sha256_of_the_bytes():
+    import hashlib
+    from bait.rules import code_hash
+    want = "0x" + hashlib.sha256(bytes.fromhex("6080604052")).hexdigest()
+    assert code_hash("0x6080604052") == code_hash("6080604052") == code_hash("0X6080604052") == want
+    assert len(want) == 66
+    for empty in (None, "", "0x", "0xzz"):
+        assert code_hash(empty) is None

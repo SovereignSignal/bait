@@ -1,12 +1,12 @@
 """Blockscout: deployed bytecode (for code_hash) and verified source. Chain-conditional; some instances 403 bots."""
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 
 import httpx
 
 from ..config import CHAIN_BY_ID, env
+from ..rules import code_hash as canonical_code_hash
 from . import http
 
 
@@ -51,7 +51,7 @@ class Blockscout:
             return self._from_eth_get_code(base, address)
         src = d.get("source_code") or ""
         return CodeInfo(
-            code_hash=_hash(code),
+            code_hash=canonical_code_hash(code),
             verified=bool(d.get("is_verified")),
             name=d.get("name"),
             compiler=d.get("compiler_version"),
@@ -68,8 +68,5 @@ class Blockscout:
         code = d.get("result") or ""
         if not isinstance(code, str) or not code.startswith("0x") or code == "0x":
             return None
-        return CodeInfo(code_hash=_hash(code))
+        return CodeInfo(code_hash=canonical_code_hash(code))
 
-
-def _hash(code_hex: str) -> str:
-    return "0x" + hashlib.sha256(bytes.fromhex(code_hex[2:] if code_hex.startswith("0x") else code_hex)).hexdigest()
