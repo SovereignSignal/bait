@@ -57,11 +57,26 @@ export function isRoutable(
   return eligibility(address, flags, properties) === "eligible";
 }
 
-/** A project routes if at least one of its hooks does. (Task 3 replaces this with the per-pool version.) */
+/**
+ * A project routes if at least one of its pools does. A hook with known pools is judged per pool (that pool's fee
+ * decides dynamic fee); a hook with none falls back to its own properties. Ineligible only when every hook is
+ * ineligible on its own (0x91 or delta bits) or every known pool is dynamic; anything else short of eligible is unknown.
+ */
 export function projectRoutable(
-  hooks: Array<{ address: string; flags: Partial<HookFlags>; properties: Partial<HookProperties> }>,
-): boolean {
-  return hooks.some((h) => isRoutable(h.address, h.flags, h.properties));
+  hooks: Array<{ address: string; properties: Partial<HookProperties> | null | undefined }>,
+  pools: Array<{ hookAddress: string; fee: number | null | undefined }>,
+): Eligibility {
+  const results: Eligibility[] = [];
+  for (const h of hooks) {
+    const own = eligibility(h.address, null, h.properties);
+    if (own === "ineligible") { results.push(own); continue; }
+    const hp = pools.filter((p) => p.hookAddress.toLowerCase() === h.address.toLowerCase() && p.fee != null);
+    if (hp.length === 0) { results.push(own); continue; } // "eligible" via properties, or "unknown"
+    results.push(...hp.map((p) => eligibility(h.address, null, h.properties, p.fee)));
+  }
+  if (results.includes("eligible")) return "eligible";
+  if (results.length && results.every((r) => r === "ineligible")) return "ineligible";
+  return "unknown";
 }
 
 const FLAG_SHORT: Array<[keyof HookFlags, string]> = [

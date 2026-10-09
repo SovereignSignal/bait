@@ -39,8 +39,12 @@ test("permissionsFromAddress decodes the low 14 bits", () => {
   assert.deepEqual(Object.entries(two).filter(([, v]) => v).map(([k]) => k).sort(), ["beforeInitialize", "beforeSwap"]);
 });
 
-test("projectRoutable is true when any hook routes", () => {
-  const hooks = cases.map((c) => ({ address: c.address, flags: c.flags, properties: c.properties }));
-  assert.equal(projectRoutable(hooks), true);
-  assert.equal(projectRoutable(hooks.filter((_, i) => !isRoutable(cases[i].address, cases[i].flags, cases[i].properties))), false);
+test("projectRoutable evaluates hook and pool together", () => {
+  const clean = "0x5555000000000000000000000000000000000080";
+  const delta = "0x4444000000000000000000000000000000000008";
+  assert.equal(projectRoutable([{ address: clean, properties: {} }], [{ hookAddress: clean, fee: 3000 }]), "eligible");
+  assert.equal(projectRoutable([{ address: clean, properties: {} }], [{ hookAddress: clean, fee: 8388608 }]), "ineligible");
+  assert.equal(projectRoutable([{ address: clean, properties: {} }], []), "unknown");
+  assert.equal(projectRoutable([{ address: delta, properties: {} }], [{ hookAddress: delta, fee: 3000 }]), "ineligible");
+  assert.equal(projectRoutable([{ address: delta, properties: {} }, { address: clean, properties: {} }], [{ hookAddress: clean, fee: 500 }]), "eligible");
 });

@@ -54,7 +54,7 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
             </div>
             <div className={s.badges}>
               <span className="b b-v">✓ Hooklist</span>
-              {p.signals.routable ? <span className="b b-g">Routes in Uniswap app</span> : <span className="b b-n">Not routable in app</span>}
+              {p.signals.routable === "eligible" ? <span className="b b-g">Routes in Uniswap app</span> : <span className="b b-n">Not routable in app</span>}
               {p.signals.auditCount > 0 ? <span className="b b-g">Audit linked</span> : <span className="b b-n">No audit linked</span>}
               {p.upgradeable && <span className="b b-a">Upgradeable</span>}
               {p.isNew && <span className="b b-p">New · {ago(p.firstSeenAt, now)}</span>}
