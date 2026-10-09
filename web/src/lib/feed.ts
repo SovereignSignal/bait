@@ -42,7 +42,8 @@ export function projectHref(slug: string, q?: Partial<FeedQuery>): string {
   return `/p/${slug}${q ? feedQs(q) : ""}`;
 }
 
-/** Week-over-week change in percent, or null when last week is too small to compare. */
+/** Week-over-week change in percent: vol7d (the 7 closed UTC days ending the day before the run) against vol7dPrev (the
+ * 7 before), or null when the earlier week is under $1K. */
 export function weekDelta(r: { vol7d: number; vol7dPrev: number }): number | null {
   return r.vol7dPrev >= 1000 ? (r.vol7d / r.vol7dPrev - 1) * 100 : null;
 }
@@ -52,7 +53,7 @@ export function inApp(r: { routable: Eligibility }): boolean {
   return r.routable === "eligible";
 }
 
-type FeedItem = Pick<RowView, "slug" | "isNew" | "firstSeenAt" | "scoreTrending" | "vol7d" | "tvlUsd" | "chains" | "category" | "secondaryCategories" | "routable" | "audited">;
+type FeedItem = Pick<RowView, "slug" | "isNew" | "isWash" | "firstSeenAt" | "scoreTrending" | "vol7d" | "tvlUsd" | "chains" | "category" | "secondaryCategories" | "routable" | "audited">;
 
 function matches(p: FeedItem, q: FeedQuery): boolean {
   if (q.chain && !p.chains.includes(q.chain)) return false;
@@ -63,17 +64,18 @@ function matches(p: FeedItem, q: FeedQuery): boolean {
 /** Trending order over every row (not the filtered view), so ranks stay stable across filters. */
 export function trendingOrder<T extends FeedItem>(all: T[]): T[] {
   return [...all]
-    .filter((p) => p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
+    .filter((p) => !p.isWash && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
     .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd)
     .slice(0, TRENDING_TOP_N);
 }
 
-/** Rows for a tab + filters. `all` must already exclude spam. Adds the 1-based trending rank. */
+/** Rows for a tab + filters. `all` must already exclude spam; wash-like rows are listed in All and In Uniswap app only.
+ * Adds the 1-based trending rank. */
 export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & { rank?: number }> {
   const trending = trendingOrder(all);
   const rankOf = new Map(trending.map((p, i) => [p.slug, i + 1]));
   let rows: T[];
-  if (q.tab === "new") rows = all.filter((p) => p.isNew).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
+  if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
   else if (q.tab === "verified") rows = all.filter(inApp).sort((a, b) => b.vol7d - a.vol7d);
   else rows = [...all].sort((a, b) => b.vol7d - a.vol7d);
@@ -99,7 +101,7 @@ export function movers(all: RowView[], n = 10): RowView[] {
     return p.vol7d * (d != null && d > 0 ? 1 + d / 100 : 1);
   };
   return all
-    .filter((p) => (p.isNew && p.vol7d > 0) || trending.has(p.slug))
+    .filter((p) => !p.isWash && ((p.isNew && p.vol7d > 0) || trending.has(p.slug)))
     .sort((a, b) => key(b) - key(a))
     .slice(0, n);
 }
