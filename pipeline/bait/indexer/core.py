@@ -36,11 +36,13 @@ class Settings:
     topic_filter_max: int = 2000     # up to this many hooked pools: filter Swap logs by pool id (topic1) server side
     topic_chunk: int = 500           # pool ids per Swap query in topic mode
     rpc_max_windows: int = 30        # RPC mode: eth_getLogs windows per chain per loop before jumping to the head
+    pools_per_hook: int = 2000       # v4_pools rows per (chain, hook); past it pools are counted, not stored (0 = no cap)
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(max_pages=_env_int("INDEXER_MAX_PAGES", 40), topic_filter_max=_env_int("INDEXER_TOPIC_FILTER_MAX", 2000),
-                   topic_chunk=max(1, _env_int("INDEXER_TOPIC_CHUNK", 500)), rpc_max_windows=_env_int("INDEXER_RPC_MAX_WINDOWS", 30))
+                   topic_chunk=max(1, _env_int("INDEXER_TOPIC_CHUNK", 500)), rpc_max_windows=_env_int("INDEXER_RPC_MAX_WINDOWS", 30),
+                   pools_per_hook=_env_int("INDEXER_POOLS_PER_HOOK", 2000))
 
 
 @dataclass
@@ -49,6 +51,7 @@ class ChainStats:
     init_lag: int | None = None
     swap_lag: int | None = None
     new_pools: int = 0
+    capped: int = 0                  # Initialize logs past the per-hook cap: counted in hook_pool_counts, not stored
     swaps: int = 0
     unpriced: int = 0
     pages: int = 0
@@ -185,9 +188,10 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
         nb = min(nb, end)
         rows = hooked_pools_from_page(chain.chain_id, logs, blocks)
         with engine.begin() as conn:
-            store.upsert_pools(conn, rows)
+            stored, over = store.store_pools(conn, chain.chain_id, rows, settings.pools_per_hook)   # before the upsert, same tx
             store.set_state(conn, chain.chain_id, initialize_block=nb, head_block=head)
-        st.new_pools += len(rows)
+        st.new_pools += len(stored)
+        st.capped += len(over)
         init_from = nb
 
     swap_from = state.swap_block
@@ -367,9 +371,9 @@ def sync_rpc(engine: sa.Engine, chain: IndexedChain, rpc: Rpc, window: int, sett
             for r in rs:
                 r["block_time"] = utc(num(b.get("timestamp")))
         with engine.begin() as conn:
-            store.upsert_pools(conn, rows)
+            stored, _ = store.store_pools(conn, chain.chain_id, rows, settings.pools_per_hook)
             store.set_state(conn, chain.chain_id, initialize_block=to + 1, head_block=head)
-        st.new_pools += len(rows)
+        st.new_pools += len(stored)
         cur = to + 1
     st.init_lag = max(end - cur, 0)
     return st
