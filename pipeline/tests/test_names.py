@@ -255,3 +255,14 @@ def test_a_generic_name_does_not_stop_the_lookup_and_stays_the_fallback():
     cn = ContractNames(None, http_client=only_raw)
     assert cn.lookup(4663, A(1))[:2] == ("ERC1967Proxy", "sourcify")                   # raw kept, like before
     assert cn.outcomes["sourcify:generic"] == 1 and cn.outcomes["blockscout:miss"] == 1
+
+
+def test_alias_slugs_are_taken_for_new_and_renamed_projects(conn, ctx):
+    from bait.steps.group import _create_project
+    old = insert_project(conn, "Old", NOW, slug="old")
+    names.add_alias(conn, "acme", old, "renamed", NOW)
+    other = insert_project(conn, "Other", NOW, slug="other")
+    assert names.unique_slug(conn, "Acme", other) == "acme-2"                         # would shadow the redirect
+    assert names.unique_slug(conn, "Acme", old) == "acme"                             # its own old slug is fine
+    pid = _create_project(conn, ctx, "Acme", "acme", None)
+    assert conn.execute(sa.select(db.projects.c.slug).where(db.projects.c.id == pid)).scalar_one() == "acme-2"

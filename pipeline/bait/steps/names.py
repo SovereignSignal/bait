@@ -157,6 +157,8 @@ def chain_label(chain_id: int) -> str:
 def unique_slug(conn, name: str, pid: int) -> str:
     base = slugify(name)
     taken = {r for r in conn.execute(sa.select(projects.c.slug).where(projects.c.slug.like(base + "%"), projects.c.id != pid)).scalars()}
+    taken |= set(conn.execute(sa.select(project_aliases.c.old_slug).where(      # a live slug would shadow the redirect
+        project_aliases.c.old_slug.like(base + "%"), project_aliases.c.project_id != pid)).scalars())
     slug, i = base, 2
     while slug in taken:
         slug, i = f"{base}-{i}", i + 1
