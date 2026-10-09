@@ -104,6 +104,7 @@ pool_stats = sa.Table(
     sa.Column("sells_24h", sa.Integer),
     sa.Column("buyers_24h", sa.Integer),
     sa.Column("sellers_24h", sa.Integer),
+    sa.Column("vol_source", sa.Text),          # 'onchain' | 'hook' | 'unpriced'; NULL = keyless (0010)
 )
 
 # Who trades each hooked pool: top wallets by volume from the last ~300 trades (step "activity"). Kept 14 days.
@@ -242,6 +243,7 @@ pool_daily_onchain = sa.Table(
     sa.Column("swaps", sa.Integer, nullable=False, server_default="0"),
     sa.Column("wallets", sa.Integer, nullable=False, server_default="0"),
     sa.Column("volume_usd", sa.Float, nullable=False, server_default="0"),
+    sa.Column("unpriced_swaps", sa.Integer, nullable=False, server_default="0"),
     sa.Index("pool_daily_onchain_day_idx", "day"),
 )
 
@@ -261,7 +263,17 @@ indexer_state = sa.Table(
     sa.Column("initialize_block", sa.BigInteger),
     sa.Column("swap_block", sa.BigInteger),
     sa.Column("head_block", sa.BigInteger),
+    sa.Column("swap_block_time", TS),          # block time the swap cursor reached (lower bound)
     sa.Column("backfilled", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("updated_at", TS),
+)
+
+# Nightly onchain step's copy watermark (0010). Owned by the pipeline, not the indexer, so the step's long transaction never
+# holds a row lock that the indexer's cursor updates would wait on.
+onchain_watermarks = sa.Table(
+    "onchain_watermarks", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("pools_block", sa.BigInteger),
     sa.Column("updated_at", TS),
 )
 # --- /indexer ---
@@ -313,6 +325,9 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("hooks", "contract_name", "text"),
     ("hooks", "name_checked_at", "timestamptz"),
     ("hooks", "hooklisted", "boolean"),
+    ("indexer_state", "swap_block_time", "timestamptz"),
+    ("pool_daily_onchain", "unpriced_swaps", "integer NOT NULL DEFAULT 0"),
+    ("pool_stats", "vol_source", "text"),
 ]
 
 
@@ -321,6 +336,7 @@ ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
     ("v4_pools_block_time_idx", "v4_pools", "block_time DESC NULLS LAST, block_number DESC"),
     ("pool_stats_day_idx", "pool_stats", "day"),
     ("pool_top_wallets_day_idx", "pool_top_wallets", "day"),
+    ("v4_pools_chain_block_idx", "v4_pools", "chain_id, block_number, pool_id"),
 ]
 
 

@@ -93,7 +93,8 @@ def test_additive_migration_on_sqlite_is_idempotent(tmp_path):
         c.execute(sa.text("INSERT INTO pool_stats VALUES ('0xp', 8453, '2026-10-06', 1.5, 7)"))
     db.create_all(e)                                     # leaves the existing table alone
     added = db.add_missing_columns(e)
-    assert added == ["pool_stats.buys_24h", "pool_stats.sells_24h", "pool_stats.buyers_24h", "pool_stats.sellers_24h"]
+    assert added == ["pool_stats.buys_24h", "pool_stats.sells_24h", "pool_stats.buyers_24h", "pool_stats.sellers_24h",
+                     "pool_stats.vol_source"]                                     # 0010
     assert db.add_missing_columns(e) == []               # second run is a no-op
     cols = {c["name"] for c in sa.inspect(e).get_columns("pool_stats")}
     assert {"buys_24h", "sells_24h", "buyers_24h", "sellers_24h", "vol_24h"} <= cols

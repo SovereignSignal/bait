@@ -412,3 +412,19 @@ def test_runner_one_chain_failing_does_not_stop_others(engine, monkeypatch, capl
     line = heartbeat(1, "hypersync", out)
     assert "ethereum:ERR(RuntimeError)" in line and "base:lag=1/2,new=3" in line and "new_pools=3" in line
     assert any("heartbeat loop=1" in m for m in caplog.messages)
+
+
+def test_additive_schema_upgrades_an_existing_indexer_database():
+    e = db.make_engine("sqlite://")
+    with e.begin() as c:
+        c.execute(sa.text("CREATE TABLE indexer_state (chain_id integer PRIMARY KEY, initialize_block bigint, swap_block bigint, "
+                          "head_block bigint, backfilled boolean NOT NULL DEFAULT 0, updated_at timestamp)"))
+        c.execute(sa.text("CREATE TABLE pool_daily_onchain (chain_id integer, pool_id text, day date, swaps integer NOT NULL DEFAULT 0, "
+                          "wallets integer NOT NULL DEFAULT 0, volume_usd float NOT NULL DEFAULT 0, PRIMARY KEY (chain_id, pool_id, day))"))
+        c.execute(sa.text("INSERT INTO pool_daily_onchain (chain_id, pool_id, day, swaps) VALUES (1, '0xp', '2026-10-01', 4)"))
+    db.create_all(e)
+    assert {"indexer_state.swap_block_time", "pool_daily_onchain.unpriced_swaps"} <= set(db.add_missing_columns(e))
+    assert "v4_pools_chain_block_idx" in db.add_missing_indexes(e)
+    with e.connect() as c:
+        assert c.execute(sa.text("SELECT unpriced_swaps FROM pool_daily_onchain")).scalar_one() == 0
+    assert "onchain_watermarks" in sa.inspect(e).get_table_names()
