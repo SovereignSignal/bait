@@ -77,3 +77,19 @@ def test_cli_needs_a_mode_and_a_dry_run_changes_nothing(tmp_path):
     assert main(["prune-pools", "--dry-run", "--keep", "4", "--chains", "base", "--database-url", url]) == 0
     with e.connect() as c:
         assert len(_ids(c)) == 10
+
+
+def test_a_stop_between_batches_says_stopped_early_and_the_cli_exits_4(engine, caplog, monkeypatch, tmp_path):
+    with engine.begin() as c:
+        _seed(c)
+    asked = []
+
+    def stop_after_first_batch():          # asked before the hook, before batch 1, then before batch 2
+        asked.append(1)
+        return len(asked) > 2
+    with caplog.at_level("INFO", logger="bait.indexer"):
+        out = prune.prune_pools(engine, keep=4, apply=True, chain_ids=[8453], batch=1, should_stop=stop_after_first_batch)
+    assert out["stopped"] and out["rows"] == 1 and any("stopped early" in m for m in caplog.messages)
+    monkeypatch.setattr(prune, "prune_pools", lambda *a, **k: {"locked": [8453], "stopped": True})
+    url = f"sqlite:///{tmp_path / 'bait.db'}"
+    assert main(["prune-pools", "--yes", "--database-url", url]) == 4
