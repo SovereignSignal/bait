@@ -24,3 +24,7 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# playwright
+web/test-results/
+web/playwright-report/

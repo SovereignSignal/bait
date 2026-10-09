@@ -2,7 +2,7 @@
 .head { display: flex; align-items: center; gap: 14px; padding: 16px; flex-wrap: wrap; }
 .title { min-width: 0; flex: 1; }
 .titleLine { display: flex; align-items: center; gap: 8px; }
-.head h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; font-weight: 700; overflow-wrap: break-word; }
+.head h1 { min-width: 0; margin: 0; font-size: 22px; letter-spacing: -.02em; font-weight: 700; overflow-wrap: break-word; }
 .what { margin: 6px 0 0; font-size: 15px; line-height: 1.45; color: var(--fg2); max-width: 70ch; text-wrap: pretty; }
 .whereSub { display: none; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
