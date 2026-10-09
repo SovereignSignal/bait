@@ -8,6 +8,7 @@
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
 import { receiptRelevant } from "@/lib/relevance";
 import { resolveSymbols } from "@/lib/symbols";
+import { createSwrCache } from "@/lib/swr-cache";
 import { isUnlisted, oldUnlistedSlugPattern, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
@@ -95,6 +96,9 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
     const p = usingFixtures() ? SAMPLE_PROJECTS.find((x) => x.slug === slug) : undefined;
     detail = p ? derive(p) : null;
   } else {
+    await refreshIfNewDay(db);
+    // Unknown slugs never reach the cache: random URLs cannot fill it.
+    if (!(await getAllSlugs()).includes(slug)) return null;
     const rows = await safe("getProject", () => cached(`project:${slug}`, () => loadFromDb(db, { slug, full: true })), []);
     detail = rows[0] ?? null;
   }
@@ -209,21 +213,25 @@ export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T):
   }
 }
 
-// ---------- one-hour in-process cache for the heavy reads (single replica on Railway) ----------
-const TTL_MS = 3_600_000;
-const MEMO_MAX = 500;
-const memo = new Map<string, { at: number; value: Promise<unknown> }>();
+// ---------- one-hour stale-while-revalidate cache for the heavy reads (single replica on Railway) ----------
+const cache = createSwrCache<unknown>({ ttlMs: 3_600_000, max: 400 });
 function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const hit = memo.get(key);
+  return cache.get(key, fn) as Promise<T>;
+}
+
+let lastDaySeen: string | null = null;
+let lastProbe = 0;
+/** Cheap probe: when the pipeline has scored a new day, drop every cached read so the site refreshes within a minute. */
+async function refreshIfNewDay(db: NonNullable<ReturnType<typeof getDb>>): Promise<void> {
   const now = Date.now();
-  if (hit && now - hit.at < TTL_MS) return hit.value as Promise<T>;
-  if (memo.size >= MEMO_MAX) for (const [k, v] of memo) if (now - v.at >= TTL_MS) memo.delete(k);
-  const value = fn().catch((e) => {
-    memo.delete(key);
-    throw e;
-  });
-  memo.set(key, { at: now, value });
-  return value;
+  if (now - lastProbe < 60_000) return;
+  lastProbe = now;
+  const r = await safe("probe:maxday", async () => (await db.execute<{ d: string | null }>(sql`select max(day)::text as d from project_daily`)) as unknown, null);
+  const d = ((Array.isArray(r) ? r[0] : (r as { rows?: unknown[] } | null)?.rows?.[0]) as { d?: string | null } | undefined)?.d ?? null;
+  if (d && d !== lastDaySeen) {
+    if (lastDaySeen !== null) cache.invalidate();
+    lastDaySeen = d;
+  }
 }
 
 // ---------- loading ----------
@@ -231,6 +239,7 @@ function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
 async function loadAll(): Promise<ProjectDetail[]> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_PROJECTS.map(derive) : [];
+  await refreshIfNewDay(db);
   return safe("loadAll", () => cached("loadAll", () => loadFromDb(db, { full: false })), []);
 }
 
