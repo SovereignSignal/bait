@@ -867,3 +867,30 @@ def test_late_insert_settings_from_env(monkeypatch):
     monkeypatch.setenv("INDEXER_SAMPLED_POOLS_PER_HOOK", "7")
     s = core.Settings.from_env()
     assert (s.late_min_usd, s.sampled_per_hook) == (25.5, 7) and (core.Settings().late_min_usd, core.Settings().sampled_per_hook) == (10.0, 1000)
+
+
+def test_a_held_page_commits_while_initialize_churn_evicts_the_recent_cache(engine, monkeypatch):
+    """Reviewer's scenario: a tiny recent cache, one id per lookup chunk, a budget of 2 calls, and 5 new capped pools per
+    loop from the Initialize phase. Looked-up keys must survive that churn, or the same chunks are asked every loop."""
+    global HEAD
+    monkeypatch.setattr(core.PoolResolver, "RECENT_MAX", 4)
+    fake = FakeHyperSync()
+    held = [pid(0x200 + n) for n in range(4)]
+    fake.inits += [init_log(p, ZERO, USDC, HOOK, 1600 + n) for n, p in enumerate(held)]
+    fake.swaps += [(swap_log(p, 2000 + n, -(10 ** 17), 200 * 10 ** 6), W2) for n, p in enumerate(held)]
+    s = dict(pools_per_hook=1, topic_chunk=1, pool_lookups=2)
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, **s), now=NOW)   # Initialize only
+    resolver, old = core.PoolResolver(), HEAD
+    try:
+        for loop in range(12):
+            end = HEAD - BASE.lag + 1
+            fake.inits += [init_log(pid(0x300 + 5 * loop + n), ZERO, USDC, HOOK, end + n) for n in range(5)]
+            HEAD += 700
+            core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, **s), now=NOW, resolver=resolver)
+            if _tables(engine)[3].swap_block >= 2400:
+                break
+    finally:
+        HEAD = old
+    pools, daily, _, state = _tables(engine)
+    assert state.swap_block >= 2400 and loop < 8, loop
+    assert all(pools[p].sampled and daily[(p, date(2026, 9, 22))] == (1, 1, 200.0) for p in held)
