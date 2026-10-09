@@ -176,11 +176,12 @@ function Bars({ series }: { series: number[] }) {
   const pl = 4;
   const pr = 4;
   const pt = 12;
-  const pb = 22;
+  const pb = 4;
   const n = series.length;
   const max = Math.max(...series) || 1;
   const bw = (W - pl - pr) / n;
   return (
+    <>
     <svg className={s.bars} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Daily volume, last ${n} days, peak ${usd(max)}`}>
       <line className={s.gl} x1={pl} x2={W - pr} y1={pt} y2={pt} />
       <line className={s.gl} x1={pl} x2={W - pr} y1={H - pb} y2={H - pb} />
@@ -200,16 +201,13 @@ function Bars({ series }: { series: number[] }) {
           </rect>
         );
       })}
-      <text className={s.ax} x={pl} y={H - 6}>
-        {n}d ago
-      </text>
-      <text className={s.ax} x={W - pr} y={H - 6} textAnchor="end">
-        today
-      </text>
-      <text className={s.ax} x={W - pr} y={pt - 2} textAnchor="end">
-        peak {usd(max)}
-      </text>
     </svg>
+    <div className={s.axis}>
+      <span>{n}d ago</span>
+      <span>peak {usd(max)}</span>
+      <span>today</span>
+    </div>
+    </>
   );
 }
 
@@ -248,6 +246,22 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
           </tbody>
         </table>
       </div>
+      <ul className={s.stack}>
+        {shown.map((x) => (
+          <li key={`${x.chainId}:${x.poolId}`}>
+            <a href={poolDeepLink(x.chainId, x.poolId)} target="_blank" rel="noopener">
+              {poolPair(x)}
+            </a>
+            <span className="mut">
+              {" "}
+              · {CHAINS[x.chainId]?.name ?? x.chainId} · {feeLabel(x.fee)}
+            </span>
+            <div className={`${s.stackSub} num`}>
+              TVL {usd(x.tvlUsd)} · 24h {usd(x.vol24h)} · {int(x.wallets24h)} wallets
+            </div>
+          </li>
+        ))}
+      </ul>
       {Math.max(total, pools.length) > shown.length && (
         <div className={s.more}>
           Top {shown.length} of {int(Math.max(total, pools.length))} pools by TVL.
@@ -291,6 +305,30 @@ function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
   return out;
 }
 
+function WalletWho({ w }: { w: ProjectDetail["topWallets"][number] }) {
+  const href = explorerAddressUrl(w.chainId, w.address);
+  return (
+    <span className={s.wallet}>
+      <WalletAvatar address={w.address} size="sm" />
+      {href ? (
+        <a className="mono" href={href} target="_blank" rel="noopener">
+          {shortAddr(w.address)}
+        </a>
+      ) : (
+        <span className="mono">{shortAddr(w.address)}</span>
+      )}
+      <span className={s.tTags}>
+        {w.smartMoney && <span className="b b-p">◆ Smart money</span>}
+        {w.labels.slice(0, w.smartMoney ? 1 : 2).map((l) => (
+          <span key={l} className="b b-n">
+            {l}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
 function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
   return (
     <div className={`panel ${s.blk}`}>
@@ -314,28 +352,10 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
             </thead>
             <tbody>
               {p.topWallets.map((w) => {
-                const href = explorerAddressUrl(w.chainId, w.address);
                 return (
                   <tr key={`${w.chainId}:${w.address}`}>
                     <td>
-                      <span className={s.wallet}>
-                        <WalletAvatar address={w.address} size="sm" />
-                        {href ? (
-                          <a className="mono" href={href} target="_blank" rel="noopener">
-                            {shortAddr(w.address)}
-                          </a>
-                        ) : (
-                          <span className="mono">{shortAddr(w.address)}</span>
-                        )}
-                        <span className={s.tTags}>
-                          {w.smartMoney && <span className="b b-p">◆ Smart money</span>}
-                          {w.labels.slice(0, w.smartMoney ? 1 : 2).map((l) => (
-                            <span key={l} className="b b-n">
-                              {l}
-                            </span>
-                          ))}
-                        </span>
-                      </span>
+                      <WalletWho w={w} />
                     </td>
                     <td className="num">{usd(w.volumeUsd)}</td>
                     <td className="num">{int(w.trades)}</td>
@@ -355,6 +375,18 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
             </tbody>
           </table>
         </div>
+      )}
+      {p.topWallets.length > 0 && (
+        <ul className={s.stack}>
+          {p.topWallets.map((w) => (
+            <li key={`${w.chainId}:${w.address}`}>
+              <WalletWho w={w} />
+              <div className={`${s.stackSub} num`}>
+                {usd(w.volumeUsd)} · {int(w.trades)} trades · {int(w.buys ?? 0)}/{int(w.sells ?? 0)} · {w.lastTradeAt ? `${since(w.lastTradeAt, now)} ago` : NONE}
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

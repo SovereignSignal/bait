@@ -27,6 +27,7 @@ export function JustLaunched({
 }) {
   const [all, setLaunches] = useState(initial);
   const launches = chainId ? all.filter((l) => l.chainId === chainId) : all;
+  const [open, setOpen] = useState(false);
   const [now, setNow] = useState(serverNow);
   const box = useRef<HTMLDivElement>(null);
   const onScreen = useRef(true);
@@ -78,7 +79,7 @@ export function JustLaunched({
       <div className={s.lHead}>
         <span className={s.liveDot} aria-hidden="true" />
         Just launched · new hooked pools
-        {compact && <Link href="/building">Building →</Link>}
+        {compact && <Link href="/building#launches">All launches →</Link>}
       </div>
       {launches.length === 0 && all.length > 0 ? (
         <div className={s.note}>None of the latest {all.length} hooked pool launches are on this chain.</div>
@@ -88,11 +89,16 @@ export function JustLaunched({
           Initialize events, refreshed every minute.
         </div>
       ) : (
-        <ul className={s.lList}>
+        <ul className={`${s.lList} ${open ? s.open : ""}`}>
           {launches.map((l) => (
             <LaunchRow key={`${l.chainId}:${l.poolId}`} l={l} now={now} />
           ))}
         </ul>
+      )}
+      {!compact && launches.length > 5 && (
+        <button type="button" className={s.showAll} onClick={() => setOpen((o) => !o)}>
+          {open ? "Show fewer" : `All ${launches.length} launches →`}
+        </button>
       )}
     </div>
   );

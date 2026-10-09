@@ -75,7 +75,7 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
               input.current?.blur();
             }
           }}
-          placeholder="Search hooks, projects or addresses"
+          placeholder="Search hooks or 0x…"
           aria-label="Search hooks, projects or addresses"
           autoComplete="off"
           spellCheck={false}
@@ -98,7 +98,7 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
       <Suspense fallback={<ChainSelectView chains={chains} value="" onChange={() => {}} />}>
         <ChainSelect chains={chains} />
       </Suspense>
-      <a className={`${s.pill} ${s.pink}`} href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">
+      <a className={`${s.pill} ${s.pink} ${s.submit}`} href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">
         Submit a hook
       </a>
     </header>

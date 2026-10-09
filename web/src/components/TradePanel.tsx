@@ -4,6 +4,7 @@ import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
 import { pace } from "@/lib/present";
 import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
+import { WatchStar } from "./WatchStar";
 import s from "./Trade.module.css";
 
 function Token({ sym }: { sym: string }) {
@@ -36,6 +37,23 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
   const hook = (top?.hook ?? p.hooks[0]?.address ?? "").toLowerCase();
   const hookChain = top?.chainId ?? p.hooks[0]?.chainId;
   const hookHref = hook && hookChain != null ? explorerAddressUrl(hookChain, hook) : null;
+  const cta =
+    link && top
+      ? (() => {
+          const elig = top.eligibility;
+          const tvl = top.tvlUsd ?? 0;
+          const ok = elig === "eligible" && tvl >= 1000 && s0 !== "?" && s1 !== "?";
+          const reason =
+            elig === "ineligible"
+              ? "This hook does not route in the Uniswap app; trading happens through the project's own interface."
+              : elig === "unknown"
+                ? "Routing in the Uniswap app is unknown for this pool."
+                : tvl < 1000
+                  ? `No liquidity in this pool (${tvl < 1 ? "$0" : "under $1K"} TVL). Volume may not be organic.`
+                  : "One of the tokens could not be identified.";
+          return { ok, reason, label: ok ? "Swap on Uniswap" : "View pool on Uniswap" };
+        })()
+      : null;
   const share = pace(p.usage.vol24h, p.metrics.vol7d);
   const u = p.usage;
   const hasBs = u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0;
@@ -60,33 +78,14 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           <span>Through</span>
           <b>{p.name}</b>
         </div>
-        {link &&
-          top &&
-          (() => {
-            const elig = top.eligibility;
-            const tvl = top.tvlUsd ?? 0;
-            const ok = elig === "eligible" && tvl >= 1000 && s0 !== "?" && s1 !== "?";
-            const reason =
-              elig === "ineligible"
-                ? "This hook does not route in the Uniswap app; trading happens through the project's own interface."
-                : elig === "unknown"
-                  ? "Routing in the Uniswap app is unknown for this pool."
-                  : tvl < 1000
-                    ? `No liquidity in this pool (${tvl < 1 ? "$0" : "under $1K"} TVL). Volume may not be organic.`
-                    : "One of the tokens could not be identified.";
-            return ok ? (
-              <a className={s.cta} href={link} target="_blank" rel="noopener">
-                Swap on Uniswap
-              </a>
-            ) : (
-              <>
-                <a className={`${s.cta} ${s.alt}`} href={link} target="_blank" rel="noopener">
-                  View pool on Uniswap
-                </a>
-                <div className={s.note}>{reason}</div>
-              </>
-            );
-          })()}
+        {cta && link && (
+          <>
+            <a className={`${s.cta} ${s.inCard} ${cta.ok ? "" : s.alt}`} href={link} target="_blank" rel="noopener">
+              {cta.label}
+            </a>
+            {!cta.ok && <div className={s.note}>{cta.reason}</div>}
+          </>
+        )}
       </div>
 
       {hasBs && (
@@ -135,6 +134,15 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           <i style={{ width: `${share}%` }} />
         </div>
       </div>
+
+      {cta && link && (
+        <div className={s.sticky}>
+          <WatchStar slug={p.slug} name={p.name} className={s.stickyStar} />
+          <a className={`${s.cta} ${cta.ok ? "" : s.alt}`} href={link} target="_blank" rel="noopener">
+            {cta.label}
+          </a>
+        </div>
+      )}
     </>
   );
 }

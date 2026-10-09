@@ -64,7 +64,7 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .listTitle { display: none; }
 
 /* dock */
-.dock { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; justify-content: space-around; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: rgba(10,10,19,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
+.dock { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; justify-content: space-around; align-items: center; height: calc(60px + env(safe-area-inset-bottom, 0px)); padding: 0 16px env(safe-area-inset-bottom, 0px); background: rgba(10,10,19,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
 .dock button, .dock a { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--fg3); font-weight: 600; min-width: 52px; }
 .dock [aria-current="true"], .dock [aria-current="page"] { color: var(--fg); }
 
@@ -88,6 +88,13 @@ select.pill option { background: var(--panel); color: var(--fg); }
   .shell[data-view="detail"] .list, .shell[data-view="detail"] .movers { display: none; }
   .back { display: inline-flex; align-items: center; gap: 6px; color: var(--fg2); font-weight: 600; padding: 2px 2px 0; }
   .dock { display: flex; }
+  .shell[data-view="detail"] .app { padding-bottom: 160px; }
+  .tab, .watchTab { min-height: 44px; display: inline-flex; align-items: center; }
+  .chip { padding: 9px 12px; }
+  .dock > * { min-height: 44px; justify-content: center; }
+  .back { min-height: 44px; }
+  .submit, .kbd { display: none; }
+  .search input { font-size: 16px; }
   .shell[data-view="list"] .listTitle { display: block; position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 }
 

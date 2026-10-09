@@ -87,6 +87,16 @@ export default function AboutPage() {
             <li>Bait is a personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</li>
           </ul>
         </section>
+        <section className="block">
+          <h2>Submit a hook</h2>
+          <p>
+            To get a hook listed, open a pull request on the{" "}
+            <a className="inline" href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">
+              Uniswap hooklist
+            </a>{" "}
+            repository.
+          </p>
+        </section>
         <Footer />
       </main>
     </>

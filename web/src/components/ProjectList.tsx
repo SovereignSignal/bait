@@ -3,7 +3,7 @@
 // tab / category / chain come from the URL, search and watchlist from TerminalProvider.
 import Link from "next/link";
 import { useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
 import { applyTab, availableCategories, emptyCopy, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
@@ -208,10 +208,21 @@ export function BackLink() {
 }
 
 export function BackLinkView({ query = DEFAULT_QUERY }: { query?: FeedQuery }) {
+  const t = useTerminal();
+  const router = useRouter();
   const chain = query.chain && CHAINS[query.chain] ? query.chain : undefined;
   return (
-    <Link className={s.back} href={feedHref({ ...query, chain })}>
-      ← All hooks
+    <Link
+      className={s.back}
+      href={feedHref({ ...query, chain })}
+      onClick={(e) => {
+        if (t.fromFeed()) {
+          e.preventDefault();
+          router.back();
+        }
+      }}
+    >
+      ← {TABS.find(([id]) => id === query.tab)?.[1] ?? "Feed"}
     </Link>
   );
 }
