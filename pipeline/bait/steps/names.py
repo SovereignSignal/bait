@@ -1,7 +1,8 @@
 """Name unlisted hooks from verified source (runs at the end of the group step; free APIs only).
 
-1. Lookup: hooks with no hooklist name, in an "Unlisted hook" project, not checked in the last RECHECK_DAYS, busiest
-   first, at most NAMES_MAX per run. Stores hooks.contract_name (raw, even when generic) + hooks.name_checked_at.
+1. Lookup: hooks in an "Unlisted hook" project (no hooklist name, or a template/proxy one), not checked in the last
+   RECHECK_DAYS, busiest first, at most NAMES_MAX per run. Stores hooks.contract_name (a proxy's implementation name
+   when known, else raw even when generic) + hooks.name_checked_at. Transient failures are not stamped.
 2. Rename: an "Unlisted hook" project whose hooks carry a useful contract name takes that name. Projects are keyed
    per chain ("contract:<chain>:<norm>"). Same contract name on one chain merges only with evidence (shared code_hash
    or deployer, rules.merge_evidence); without it the later project gets a short-address suffix. Two teams that both
@@ -17,7 +18,7 @@ from datetime import timedelta
 
 import sqlalchemy as sa
 
-from ..clients.contract_names import useful_name
+from ..clients.contract_names import LookupTransient, useful_name
 from ..config import CHAIN_BY_ID
 from ..indexer.chains import CHAIN_BY_ID as INDEXED_BY_ID
 from ..db import hooks, project_aliases, project_daily, projects, receipts, signals, upsert
@@ -26,6 +27,7 @@ from . import RunContext, log
 
 UNLISTED = "Unlisted hook%"
 RECHECK_DAYS = 14
+_TRANSIENT = object()
 
 
 def names_max() -> int:
@@ -41,6 +43,7 @@ def run(conn: sa.Connection, ctx: RunContext, out: dict) -> None:
     out.setdefault("projects_renamed", 0)
     out.setdefault("projects_merged", 0)
     out.setdefault("names_split", 0)
+    out.setdefault("names_transient", 0)
     client = ctx.client("names")
     if client is not None:
         _lookup(conn, ctx, client, out)
@@ -57,7 +60,7 @@ def _lookup(conn, ctx: RunContext, client, out: dict) -> None:
     q = (sa.select(hooks.c.chain_id, hooks.c.address)
          .join(projects, projects.c.id == hooks.c.project_id)
          .outerjoin(vol, vol.c.project_id == hooks.c.project_id)
-         .where(projects.c.name.like(UNLISTED), sa.or_(hooks.c.name.is_(None), hooks.c.name == ""),
+         .where(projects.c.name.like(UNLISTED),            # no useful hooklist name: none, or a template/proxy one
                 hooks.c.contract_name.is_(None),
                 sa.or_(hooks.c.name_checked_at.is_(None), hooks.c.name_checked_at < stale))
          .order_by(sa.func.coalesce(vol.c.vol_7d, 0).desc(), hooks.c.chain_id, hooks.c.address)
@@ -65,16 +68,27 @@ def _lookup(conn, ctx: RunContext, client, out: dict) -> None:
     todo = conn.execute(q).all()
     if not todo:
         return
+
+    def one(h):
+        try:
+            return client.lookup(h.chain_id, h.address)
+        except LookupTransient:
+            return _TRANSIENT
+
     with ThreadPoolExecutor(max_workers=6) as ex:     # network only; all writes stay on this thread
-        found = list(ex.map(lambda h: client.lookup(h.chain_id, h.address), todo))
+        found = list(ex.map(one, todo))
     for h, res in zip(todo, found):
+        if res is _TRANSIENT:
+            out["names_transient"] += 1               # not a miss: no name_checked_at, asked again next run
+            continue
         vals = {"name_checked_at": ctx.now}
         if res:
             vals.update(contract_name=res[0], verified_source=True)
             out["names_found"] += 1
         conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == h.address, hooks.c.chain_id == h.chain_id))
     out["names_checked"] += len(todo)
-    log.info("names: checked %d unlisted hooks, %d have verified source names", len(todo), out["names_found"])
+    log.info("names: checked %d unlisted hooks, %d named, %d transient; per source %s", len(todo), out["names_found"],
+             out["names_transient"], dict(sorted(getattr(client, "outcomes", {}).items())))
 
 
 def _rename(conn, out: dict, now) -> None:

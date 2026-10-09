@@ -7,6 +7,9 @@ Returns None when no source has verified code. Unverified contracts have no name
 """
 from __future__ import annotations
 
+import threading
+from collections import Counter
+
 import httpx
 
 from ..config import CHAIN_BY_ID, env
@@ -16,49 +19,91 @@ from . import http
 ROUTESCAN_CHAINS = {43114}
 
 
+class LookupTransient(Exception):
+    """No source had a name and at least one failed in a way that may clear (network, 429, 5xx): ask again next run."""
+
+
+class _Transient(Exception):
+    pass
+
+
+class _Skip(Exception):
+    pass
+
+
+def _impl_name(impls) -> str | None:
+    """First useful implementation name of a proxy (Sourcify proxyResolution, Blockscout implementations)."""
+    for i in impls or []:
+        if n := useful_name((i or {}).get("name")):
+            return n
+    return None
+
+
+def _blockscout_name(d: dict | None) -> str | None:
+    d = d or {}
+    return _impl_name(d.get("implementations")) or (d.get("name") if d.get("is_verified", True) else None)
+
+
 class ContractNames:
     def __init__(self, blockscout_key: str | None = None, http_client=None):
         self.c = http_client or http.client(timeout=20.0)
         self.key = blockscout_key
+        self.outcomes: Counter = Counter()        # "source:hit|miss|error|skipped|bad_payload", logged per run
+        self._lock = threading.Lock()
 
     @classmethod
     def from_env(cls, http_client=None):
         return cls(env("BLOCKSCOUT_API_KEY"), http_client)   # always usable; the key only widens coverage
 
     def lookup(self, chain_id: int, address: str) -> tuple[str, str] | None:
-        """(name, source) for verified code, else None. Never raises."""
+        """(name, source) for verified code (a proxy's implementation name when known), else None. Raises
+        LookupTransient when nothing was found and a source failed transiently."""
+        transient = False
         for source, fn in (("sourcify", self._sourcify), ("blockscout_pro", self._blockscout_pro),
                            ("blockscout", self._blockscout), ("routescan", self._routescan)):
+            outcome = None
             try:
                 name = fn(chain_id, address)
-            except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError, AttributeError):
-                name = None
+            except _Skip:
+                name, outcome = None, "skipped"
+            except (httpx.HTTPError, _Transient):
+                name, outcome, transient = None, "error", True
+            except (ValueError, KeyError, TypeError, IndexError, AttributeError):
+                name, outcome = None, "bad_payload"
+            with self._lock:
+                self.outcomes[f"{source}:{outcome or ('hit' if name else 'miss')}"] += 1
             if name:
                 return name.strip(), source
+        if transient:
+            raise LookupTransient(f"{chain_id}:{address}")
         return None
 
     def _get(self, url: str, params: dict | None = None) -> dict | None:
         r = self.c.get(url, params=params or {})
+        if r.status_code == 429 or r.status_code >= 500:
+            raise _Transient(r.status_code)
         if r.status_code != 200:
-            return None
+            return None       # 404 unverified; 403 Cloudflare challenge is persistent, so it is a miss, not a retry
         return r.json()
 
     def _sourcify(self, chain_id: int, address: str) -> str | None:
-        d = self._get(f"https://sourcify.dev/server/v2/contract/{chain_id}/{address}", {"fields": "compilation"})
-        return ((d or {}).get("compilation") or {}).get("name")
+        d = self._get(f"https://sourcify.dev/server/v2/contract/{chain_id}/{address}",
+                      {"fields": "compilation.name,proxyResolution"}) or {}
+        return _impl_name((d.get("proxyResolution") or {}).get("implementations")) or (d.get("compilation") or {}).get("name")
 
     def _blockscout_pro(self, chain_id: int, address: str) -> str | None:
-        if not self.key or not (CHAIN_BY_ID.get(chain_id) and CHAIN_BY_ID[chain_id].blockscout):
+        if not (CHAIN_BY_ID.get(chain_id) and CHAIN_BY_ID[chain_id].blockscout):
             return None
-        d = self._get(f"https://api.blockscout.com/{chain_id}/api/v2/smart-contracts/{address}", {"apikey": self.key})
-        return (d or {}).get("name") if (d or {}).get("is_verified", True) else None
+        if not self.key:
+            raise _Skip
+        return _blockscout_name(self._get(f"https://api.blockscout.com/{chain_id}/api/v2/smart-contracts/{address}",
+                                          {"apikey": self.key}))
 
     def _blockscout(self, chain_id: int, address: str) -> str | None:
         ch = CHAIN_BY_ID.get(chain_id)
         if not ch or not ch.blockscout:
             return None
-        d = self._get(f"{ch.blockscout}/api/v2/smart-contracts/{address}")
-        return (d or {}).get("name") if (d or {}).get("is_verified", True) else None
+        return _blockscout_name(self._get(f"{ch.blockscout}/api/v2/smart-contracts/{address}"))
 
     def _routescan(self, chain_id: int, address: str) -> str | None:
         if chain_id not in ROUTESCAN_CHAINS:
