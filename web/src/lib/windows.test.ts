@@ -5,7 +5,7 @@ import { pace, walletsText, washLine } from "./present";
 import type { RowView } from "./types";
 
 const row = (over: Partial<RowView>): RowView => ({
-  slug: "x", name: "X", color: "#000", category: "other", secondaryCategories: [], chains: [8453],
+  slug: "x", name: "X", whatLine: "", color: "#000", category: "other", secondaryCategories: [], chains: [8453],
   firstSeenAt: "2026-10-01T00:00:00Z", isNew: false, isWash: false, scoreTrending: 0, vol7d: 0, vol7dPrev: 0, vol24h: null,
   tvlUsd: 0, routable: "unknown", audited: false, hooks: [], ...over,
 });

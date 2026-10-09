@@ -4,8 +4,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { anyChainColor, anyChainName, anyExplorerTxUrl } from "@/lib/chains";
-import { paletteColor, since } from "@/lib/format";
-import { launchFee, launchLabel, launchPair } from "@/lib/radar";
+import { NONE, paletteColor, since } from "@/lib/format";
+import { collapseLaunches, launchFee, launchLabel, launchPair } from "@/lib/radar";
 import type { LaunchView } from "@/lib/types";
 import s from "./Radar.module.css";
 
@@ -27,6 +27,7 @@ export function JustLaunched({
 }) {
   const [all, setLaunches] = useState(initial);
   const launches = chainId ? all.filter((l) => l.chainId === chainId) : all;
+  const [open, setOpen] = useState(false);
   const [now, setNow] = useState(serverNow);
   const box = useRef<HTMLDivElement>(null);
   const onScreen = useRef(true);
@@ -78,7 +79,7 @@ export function JustLaunched({
       <div className={s.lHead}>
         <span className={s.liveDot} aria-hidden="true" />
         Just launched · new hooked pools
-        {compact && <Link href="/building">Building →</Link>}
+        {compact && <Link href="/building#launches">All launches →</Link>}
       </div>
       {launches.length === 0 && all.length > 0 ? (
         <div className={s.note}>None of the latest {all.length} hooked pool launches are on this chain.</div>
@@ -88,17 +89,22 @@ export function JustLaunched({
           Initialize events, refreshed every minute.
         </div>
       ) : (
-        <ul className={s.lList}>
-          {launches.map((l) => (
-            <LaunchRow key={`${l.chainId}:${l.poolId}`} l={l} now={now} />
+        <ul className={`${s.lList} ${open ? s.open : ""}`}>
+          {collapseLaunches(launches).map(({ l, more }) => (
+            <LaunchRow key={`${l.chainId}:${l.poolId}`} l={l} more={more} now={now} />
           ))}
         </ul>
+      )}
+      {!compact && launches.length > 5 && (
+        <button type="button" className={s.showAll} onClick={() => setOpen((o) => !o)}>
+          {open ? "Show fewer" : `All ${launches.length} launches →`}
+        </button>
       )}
     </div>
   );
 }
 
-function LaunchRow({ l, now }: { l: LaunchView; now: number }) {
+function LaunchRow({ l, more, now }: { l: LaunchView; more: number; now: number }) {
   const label = launchLabel(l);
   const tx = l.txHash ? anyExplorerTxUrl(l.chainId, l.txHash) : null;
   const chain = anyChainName(l.chainId);
@@ -121,10 +127,11 @@ function LaunchRow({ l, now }: { l: LaunchView; now: number }) {
           )}
           <span className={s.lSub}>
             {launchPair(l)} · {launchFee(l.fee)} · {chain}
+            {more > 0 && ` · +${more} more pool${more === 1 ? "" : "s"}`}
           </span>
         </span>
         <span className={s.lRight}>
-          <span className="num mut">{l.blockTime ? since(l.blockTime, now) : "–"}</span>
+          <span className="num mut">{l.blockTime ? since(l.blockTime, now) : NONE}</span>
           {tx && (
             <a href={tx} target="_blank" rel="noopener" title={`Open the initialize transaction on ${chain}`}>
               tx ↗

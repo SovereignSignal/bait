@@ -11,14 +11,16 @@ UPDATE_COLS = ["name", "description", "flags", "properties", "verified_source", 
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
-    out = {"hooks": 0, "new": 0, "updated": 0, "invalid": 0, "errors": 0, "delisted": 0}
+    out = {"hooks": 0, "new": 0, "updated": 0, "invalid": 0, "errors": 0, "delisted": 0, "regroup": 0}
     try:
         entries, out["invalid"] = hooklist.load_entries(path=ctx.hooklist_file)
     except Exception as e:  # registry unreachable: keep last night's hooks, let the other steps run
         out["errors"] = 1
         log.error("ingest: hooklist unavailable, keeping existing hooks: %s", e)
         return out
-    existing = {(r.address, r.chain_id) for r in conn.execute(sa.select(hooks.c.address, hooks.c.chain_id))}
+    prev = {(r.address, r.chain_id): r for r in conn.execute(
+        sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.name, hooks.c.hooklisted, hooks.c.project_id))}
+    existing = set(prev)
     rows, seen = [], set()
     for e in entries:
         key = (e.hook.address.lower(), e.hook.chainId)
@@ -39,6 +41,15 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         conn.execute(sa.update(hooks).values(hooklisted=False)
                      .where(sa.tuple_(hooks.c.address, hooks.c.chain_id).in_(stale[i:i + 500])))
     out["delisted"] = len(stale)
+    # A hook grouped before the registry knew it ("Unlisted hook ..." or its verified-source name) is regrouped by the
+    # group step once the registry names it or lists it.
+    named = {(r["address"], r["chain_id"]): r["name"] for r in rows}
+    regroup = [k for k, nm in named.items() if (p := prev.get(k)) is not None and p.project_id is not None
+               and ((nm and not (p.name or "").strip()) or p.hooklisted is False)]
+    for i in range(0, len(regroup), 500):
+        conn.execute(sa.update(hooks).values(regroup=True)
+                     .where(sa.tuple_(hooks.c.address, hooks.c.chain_id).in_(regroup[i:i + 500])))
+    out["regroup"] = len(regroup)
     new = [r for r in rows if (r["address"], r["chain_id"]) not in existing]
     out.update(hooks=len(rows), new=len(new), updated=len(rows) - len(new))
     if new:

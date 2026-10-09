@@ -2,11 +2,12 @@
 // The terminal's left column and the movers strip. Rows ship to the client once;
 // tab / category / chain come from the URL, search and watchlist from TerminalProvider.
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
-import { applyTab, availableCategories, feedHref, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
-import { ago, usd } from "@/lib/format";
-import { categoryShort, chainNames, deltaText } from "@/lib/present";
+import { applyTab, availableCategories, emptyCopy, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
+import { ago, NONE, usd } from "@/lib/format";
+import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
 import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
 import { StarIcon } from "./Icons";
@@ -29,24 +30,24 @@ function Delta({ r }: { r: RowView }) {
     );
   if (r.isNew) return <span className="b b-p">New</span>;
   const d = deltaText(r);
-  if (!d) return <span className="mut3">—</span>;
+  if (!d) return <span className="mut3">{NONE}</span>;
   return <span className={d.up ? "up" : "down"}>{d.text}</span>;
 }
 
 // ---------- list ----------
 
-type ListProps = { rows: RowView[]; selected?: string; now: number; launches?: LaunchView[]; launchesNow?: number };
+type ListProps = { rows: RowView[]; selected?: string; view: "list" | "detail"; now: number; launches?: LaunchView[]; launchesNow?: number };
 
 export function ProjectList(props: ListProps) {
   return <ProjectListView {...props} query={useFeedQuery()} />;
 }
 
 /** Suspense fallback on statically rendered pages (no URL yet): the default tab. */
-export function ProjectListFallback(props: { rows: RowView[]; selected?: string; now: number }) {
+export function ProjectListFallback(props: { rows: RowView[]; selected?: string; view: "list" | "detail"; now: number }) {
   return <ProjectListView {...props} query={DEFAULT_QUERY} />;
 }
 
-function ProjectListView({ rows, selected, now, query, launches, launchesNow }: ListProps & { query: FeedQuery }) {
+function ProjectListView({ rows, selected, view, now, query, launches, launchesNow }: ListProps & { query: FeedQuery }) {
   const t = useTerminal();
   const watching = t.watchOnly;
   const cats = availableCategories(rows);
@@ -56,17 +57,22 @@ function ProjectListView({ rows, selected, now, query, launches, launchesNow }: 
     ? rows.filter((r) => t.watchlist.includes(r.slug)).sort((a, b) => b.vol7d - a.vol7d)
     : applyTab(rows, searching ? { ...query, tab: "all" } : query);
   list = searchRows(list, t.q);
+  const topHref = searching && list[0] ? projectHref(list[0].slug, query) : null;
+  const { setTopMatch } = t;
+  useEffect(() => {
+    setTopMatch(topHref);
+    return () => setTopMatch(null);
+  }, [topHref, setTopMatch]);
   const tabForRows = watching || searching ? "all" : query.tab;
 
   return (
     <aside className={`panel ${s.list}`} aria-label="Hook projects">
-      <div className={s.tabs} role="tablist">
+      <nav className={s.tabs} aria-label="Feed views">
         {TABS.map(([id, label]) => (
           <Link
             key={id}
             className={s.tab}
-            role="tab"
-            aria-selected={!watching && !searching && query.tab === id}
+            aria-current={!watching && !searching && query.tab === id ? "page" : undefined}
             href={feedHref({ ...query, tab: id })}
             onClick={() => t.setWatchOnly(false)}
           >
@@ -83,7 +89,7 @@ function ProjectListView({ rows, selected, now, query, launches, launchesNow }: 
           <StarIcon size={14} filled={watching} />
           <span className="num">{t.watchlist.length}</span>
         </button>
-      </div>
+      </nav>
       {!watching && (
         <div className={s.cats} role="group" aria-label="Category">
           <Link className={s.chip} aria-current={!query.category} href={feedHref({ ...query, category: undefined })}>
@@ -108,38 +114,54 @@ function ProjectListView({ rows, selected, now, query, launches, launchesNow }: 
         {launches && query.tab === "new" && !watching && !searching && <JustLaunched initial={launches} now={launchesNow ?? now} chainId={query.chain} compact />}
         {list.length === 0 ? (
           <div className="empty">
-            {watching ? "Star a project to keep it here. Saved on this device only." : rows.length ? "Nothing matches this filter." : "Nothing indexed yet."}
+            {watching ? (
+              "Star a project to keep it here. Saved on this device only."
+            ) : searching ? (
+              "Try a token symbol or 0x address."
+            ) : rows.length ? (
+              <>
+                <p>{emptyCopy(query)}</p>
+                <p>
+                  {query.category && <Link href={feedHref({ ...query, category: undefined })}>Clear category</Link>}
+                  {query.category && query.chain && " · "}
+                  {query.chain && <Link href={feedHref({ ...query, chain: undefined })}>All chains</Link>}
+                </p>
+              </>
+            ) : (
+              "Nothing indexed yet."
+            )}
           </div>
         ) : (
-          list.map((r, i) => (
-            <Link key={r.slug} className={s.row} href={projectHref(r.slug, query)} aria-current={r.slug === selected ? "true" : undefined}>
-              <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} />
-              <div className={s.meta}>
-                <div className={s.n}>
-                  {tabForRows === "trending" && <span className={`${s.rank} num`}>{r.rank ?? i + 1}</span>}
-                  {r.name}
+          list.map((r, i) => {
+            const m = rowMetric(r, tabForRows === "new");
+            const sub = r.whatLine || [r.category !== "other" ? categoryShort(r.category) : "", chainNames(r.chains)].filter(Boolean).join(" · ");
+            return (
+              <Link
+                key={r.slug}
+                className={s.row}
+                href={projectHref(r.slug, query)}
+                aria-label={rowLabel(r, tabForRows === "trending" ? (r.rank ?? i + 1) : undefined, m)}
+                data-selected={r.slug === selected ? "true" : undefined}
+                aria-current={r.slug === selected && view === "detail" ? "page" : undefined}
+              >
+                <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} />
+                <div className={s.meta}>
+                  <div className={s.n}>
+                    {tabForRows === "trending" && <span className={`${s.rank} num`} aria-hidden="true">{r.rank ?? i + 1}</span>}
+                    {r.name}
+                  </div>
+                  <div className={s.s}>{sub}</div>
                 </div>
-                <div className={s.s}>
-                  {categoryShort(r.category)} · {chainNames(r.chains)}
+                <div className={s.r}>
+                  <div className={`${s.v} num`}>
+                    {usd(m.v)}
+                    <span className={s.win}>{m.win}</span>
+                  </div>
+                  <div className={`${s.d} num ${tabForRows === "new" ? "mut" : ""}`}>{tabForRows === "new" ? ago(r.firstSeenAt, now) : <Delta r={r} />}</div>
                 </div>
-              </div>
-              <div className={s.r}>
-                {tabForRows === "new" ? (
-                  <>
-                    <div className={`${s.v} num`}>{usd(r.vol24h ?? 0)}</div>
-                    <div className={`${s.d} mut`}>24h · {ago(r.firstSeenAt, now)}</div>
-                  </>
-                ) : (
-                  <>
-                    <div className={`${s.v} num`}>{usd(r.vol7d)}</div>
-                    <div className={`${s.d} num`}>
-                      <Delta r={r} />
-                    </div>
-                  </>
-                )}
-              </div>
-            </Link>
-          ))
+              </Link>
+            );
+          })
         )}
       </div>
     </aside>
@@ -157,23 +179,30 @@ export function MoversFallback({ rows }: { rows: RowView[] }) {
 }
 
 function MoversView({ rows, query }: { rows: RowView[]; query: FeedQuery }) {
-  if (!rows.length) return null;
+  const shown = moversFor(rows, query.chain);
+  if (!shown.length) return null;
   return (
     <section className={s.movers} aria-label="Top movers this week">
-      {rows.map((r) => (
-        <Link key={r.slug} className={s.mover} href={projectHref(r.slug, query)}>
-          <span className={s.who}>
-            <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} size="sm" />
-            {r.name}
-          </span>
-          <span className={s.what}>
-            <span className={`${s.big} num`}>{usd(r.isNew ? (r.vol24h ?? r.vol7d) : r.vol7d)}</span>
-            <span className={`${s.delta} num`}>
-              <Delta r={r} />
+      {shown.map((r) => {
+        const m = rowMetric(r, r.isNew);
+        return (
+          <Link key={r.slug} className={s.mover} href={projectHref(r.slug, query)}>
+            <span className={s.who}>
+              <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} size="sm" />
+              {r.name}
             </span>
-          </span>
-        </Link>
-      ))}
+            <span className={s.what}>
+              <span className={`${s.big} num`}>
+                {usd(m.v)}
+                <span className={s.win}>{m.win}</span>
+              </span>
+              <span className={`${s.delta} num`}>
+                <Delta r={r} />
+              </span>
+            </span>
+          </Link>
+        );
+      })}
     </section>
   );
 }
@@ -185,10 +214,21 @@ export function BackLink() {
 }
 
 export function BackLinkView({ query = DEFAULT_QUERY }: { query?: FeedQuery }) {
+  const t = useTerminal();
+  const router = useRouter();
   const chain = query.chain && CHAINS[query.chain] ? query.chain : undefined;
   return (
-    <Link className={s.back} href={feedHref({ ...query, chain })}>
-      ← All hooks
+    <Link
+      className={s.back}
+      href={feedHref({ ...query, chain })}
+      onClick={(e) => {
+        if (t.fromFeed()) {
+          e.preventDefault();
+          router.back();
+        }
+      }}
+    >
+      ← {TABS.find(([id]) => id === query.tab)?.[1] ?? "Feed"}
     </Link>
   );
 }

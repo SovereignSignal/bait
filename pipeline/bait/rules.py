@@ -1,6 +1,7 @@
 """Pure functions: routable rule, name normalization, scoring math. No I/O. Tested directly."""
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from datetime import date, datetime, timedelta
@@ -85,9 +86,110 @@ def normalize_name(name: str | None) -> str:
     return s
 
 
+# Names that say nothing about the project: proxies, template defaults, and the OpenZeppelin uniswap-hooks and v4 example
+# names many unrelated teams deploy unchanged. Matched on the lowercased alphanumerics, with an optional "hook(s)" and
+# version suffix ("Limit Order Hook V2" -> "limitorderhookv2"). Applies to hooklist and verified-source names. Bare
+# words that real projects use as names (Curve, Vault, Order, Base, Points, Arb) are deliberately not here; their
+# template forms (BaseHook, ArbHook, CurveHook, LimitOrder, DynamicFee, ...) are.
+GENERIC_STEMS = (
+    "basehook", "basetesthooks", "arbhook", "curvehook", "v4", "uniswapv4", "uniswap", "any", "custom", "my", "mynew", "test", "counter", "swapfee", "fee", "platform",
+    "limitorder", "dynamicfee", "antisandwich", "liquiditypenalty", "fullrange", "twamm", "geomeanoracle",
+    "blacklist", "whitelist", "arbitrage", "grid", "example", "demo", "sample")
+GENERIC = re.compile(r"^(?:(?:" + "|".join(GENERIC_STEMS) + r")(?:hooks?)?|hooks?)(?:v?\d+)?$"
+                     r"|^.*proxy.*$|^(?:implementation|main|contract)$")
+
+# Deterministic CREATE2 deployers (Arachnid, ImmutableCreate2Factory, CreateX) deploy for everyone: not team evidence.
+SHARED_DEPLOYERS = frozenset({
+    "0x4e59b44847b379578588920ca78fbf26c0b4956c",
+    "0x0000000000ffe8b47b3e2130213b802212439497",
+    "0xba5ed099633d3b313e4d5f7bdc1305d3c28ba5ed",
+})
+
+
+def useful_name(name: str | None, max_len: int | None = 60) -> str | None:
+    """The name stripped, or None when it is empty, generic, or (verified-source names) longer than max_len."""
+    n = (name or "").strip()
+    flat = re.sub(r"[^a-z0-9]", "", n.lower())
+    if not flat or (max_len and len(n) > max_len) or GENERIC.match(flat):
+        return None
+    return n
+
+
+EIP1967_IMPL_SLOT = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+EIP1167_PREFIX = "363d3d373d3d3d363d73"
+
+
+ERC1967_MAX_BYTES = 2048
+FORWARDER_MAX_BYTES = 1024
+DELEGATECALL = "f4"
+
+
+def proxy_kind(code_hex: str | None) -> str | None:
+    """The proxy shape of a runtime, or None. "eip1167": the whole runtime is a 45-byte minimal clone (a hook that only
+    embeds the clone code, like OpenZeppelin Clones, is not). "eip1967": reads the implementation slot and is small
+    (< 2,048 bytes); a UUPS implementation also carries the slot constant but is a full contract. "unknown": a runtime
+    under 1,024 bytes with a DELEGATECALL byte that fits neither shape, likely a hand-rolled forwarder."""
+    s = (code_hex or "").lower().removeprefix("0x")
+    if s.startswith(EIP1167_PREFIX) and len(s) == 90:
+        return "eip1167"
+    if EIP1967_IMPL_SLOT in s and len(s) < 2 * ERC1967_MAX_BYTES:
+        return "eip1967"
+    if len(s) < 2 * FORWARDER_MAX_BYTES and any(s[i:i + 2] == DELEGATECALL for i in range(0, len(s), 2)):
+        return "unknown"
+    return None
+
+
+def proxy_flag(kind: str | None) -> bool | None:
+    """hooks.is_proxy for a proxy_kind: None ("unknown") keeps its hash out of evidence without calling it a proxy."""
+    return None if kind == "unknown" else kind is not None
+
+
+def is_proxy_code(code_hex: str | None) -> bool:
+    return proxy_kind(code_hex) in ("eip1167", "eip1967")
+
+
+def code_evidence(r) -> str | None:
+    """The code_hash when it can join hooks: known not to be a proxy (hooks.is_proxy is False), or an EIP-1167 clone,
+    whose bytecode embeds the implementation address (same hash, same implementation). Other proxy bytecode is shared
+    by unrelated deployments; unknown status (bytecode not fetched yet) is not evidence either."""
+    if not r.code_hash:
+        return None
+    if getattr(r, "is_proxy", None) is False or getattr(r, "proxy_kind", None) == "eip1167":
+        return r.code_hash
+    return None
+
+
+def merge_evidence(a, b) -> str | None:
+    """Why two sets of hooks are one project, or None. A shared name, hooklist or verified-source, is only a candidate;
+    evidence is shared non-proxy bytecode or a shared deployer that is not a CREATE2 factory."""
+    def hashes(rows):
+        return {c for r in rows if (c := code_evidence(r))}
+
+    def deployers(rows):
+        return {r.deployer for r in rows if r.deployer and r.deployer not in SHARED_DEPLOYERS}
+
+    if hashes(a) & hashes(b):
+        return "code_hash"
+    if deployers(a) & deployers(b):
+        return "deployer"
+    return None
+
+
 def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return s or "project"
+
+
+def code_hash(code_hex: str | None) -> str | None:
+    """Canonical bytecode fingerprint: "0x" + sha256 of the deployed bytes, lowercase hex. None for no code or non-hex.
+    Every writer (keyless RPC, Blockscout) goes through here so grouping rule 2 compares like with like."""
+    s = (code_hex or "").strip().lower().removeprefix("0x")
+    if not s:
+        return None
+    try:
+        return "0x" + hashlib.sha256(bytes.fromhex(s)).hexdigest()
+    except ValueError:
+        return None
 
 
 def score_trending(vol_7d: float, vol_7d_prev: float) -> float:

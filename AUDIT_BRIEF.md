@@ -61,7 +61,6 @@ The live site reads the real database; use it for UX review.
 - Only a handful of projects have "what it does" lines yet; enrichment fills about 40 per night.
 - No all-time totals and no dormant all-time wash rule yet (see DESIGN.md "Wash rules, status").
 - Swap history is kept 14 days; no long-term monthly aggregates; Swap.fee is not stored.
-- Exit code 1 on soft errors makes Railway show a run as "Crashed" even when it completed.
 - Author vs integrator labeling is ambiguous (DESIGN.md "Data issues backlog").
 
 ## What to send back
