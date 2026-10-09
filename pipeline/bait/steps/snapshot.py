@@ -1,8 +1,8 @@
-"""Step 2: per chain with a confirmed subgraph, paginate hooked pools -> pools + pool_snapshots(day)."""
+"""Step 2: per chain with a confirmed subgraph, paginate hooked pools -> pools + pool_snapshots(day - 1); keyless for the rest."""
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
@@ -152,6 +152,11 @@ def _snapshot_chain(conn, ctx, g, ch) -> int:
             log.warning("snapshot chain=%s subgraph hasIndexingErrors=true block=%s", ch.slug, meta.get("block", {}).get("number"))
     except Exception as e:
         log.warning("snapshot chain=%s _meta unavailable: %s", ch.slug, e)
+    # The cumulative is read at run time (06:00 UTC): it is written as the closed day `end`, about 6 h late (estimated).
+    end = ctx.day - timedelta(days=1)
+    prev = {r.pool_id: r for r in conn.execute(
+        sa.select(pool_snapshots.c.pool_id, pool_snapshots.c.volume_usd_cum, pool_snapshots.c.tx_count_cum)
+        .where(pool_snapshots.c.chain_id == ch.chain_id, pool_snapshots.c.day == end - timedelta(days=1)))}
     pool_rows, snap_rows = [], []
     for p in g.hooked_pools(ch.subgraph_id):
         pid = p["id"].lower()
@@ -161,10 +166,12 @@ def _snapshot_chain(conn, ctx, g, ch) -> int:
             "fee": _int(p.get("feeTier")), "tick_spacing": _int(p.get("tickSpacing")),
             "created_at": datetime.fromtimestamp(int(p["createdAtTimestamp"]), tz=timezone.utc) if p.get("createdAtTimestamp") else None,
         })
+        vol, txs, b = _float(p.get("volumeUSD")), _int(p.get("txCount")), prev.get(pid)
         snap_rows.append({
-            "pool_id": pid, "chain_id": ch.chain_id, "day": ctx.day,
-            "tvl_usd": _float(p.get("totalValueLockedUSD")), "volume_usd_cum": _float(p.get("volumeUSD")),
-            "tx_count_cum": _int(p.get("txCount")),
+            "pool_id": pid, "chain_id": ch.chain_id, "day": end, "tvl_usd": _float(p.get("totalValueLockedUSD")),
+            "volume_usd_cum": vol, "tx_count_cum": txs,   # txCount includes liquidity modifications
+            "volume_usd_day": _delta(vol, b.volume_usd_cum if b else None),
+            "tx_count_day": _delta(txs, b.tx_count_cum if b else None), "estimated": True,
         })
     for i in range(0, len(pool_rows), 500):
         upsert(conn, pools, pool_rows[i:i + 500], keys=["pool_id", "chain_id"])
@@ -178,3 +185,8 @@ def _int(v):
 
 def _float(v):
     return float(v) if v not in (None, "") else None
+
+
+def _delta(cur, before):
+    """That day's amount from two cumulatives; None (unknown) when either is missing, never the all-time total."""
+    return None if cur is None or before is None else max(cur - before, 0)
