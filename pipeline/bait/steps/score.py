@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from ..db import (as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
+from ..db import (as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
 from ..rules import (WASH_REASONS, WASH_SHARE, corroborated, custom_accounting, is_new, is_spam, is_symmetric, is_wash_7d, is_wash_24h, is_wash_no_liquidity,
                      is_wash_vol_tvl, score_trending, wallets_lower_bound)
@@ -91,7 +91,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             if not known and not quiet.get(vol_name, False):
                 a[name + "_known"] = False
 
-    ready = ready_chains(conn, ctx)
+    ready = _ready(conn, ctx, end)
     reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom)
     wallets = _wallets(conn, day, end, ready, pool_project)
 
@@ -133,6 +133,18 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         log.info("score: %d wash-like projects (%s)", len(reasons), " ".join(f"{k}={v}" for k, v in counts.items()))
     return {"projects": len(rows), "with_pools": len(agg), "new": sum(r["is_new"] for r in rows),
             "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(reasons), **counts}
+
+
+def _ready(conn, ctx: RunContext, end: date) -> list[int]:
+    """Chains whose on-chain days through `end` are complete. The nightly run (day = today) uses onchain.ready_chains,
+    freshness included. A re-score of a past day (package 9) must not depend on the indexer's freshness at re-score time:
+    backfilled and the swap cursor's block time past the end of `end` is enough."""
+    if ctx.day >= ctx.now.astimezone(timezone.utc).date():
+        return ready_chains(conn, ctx)
+    boundary = datetime.combine(end + _D, datetime.min.time(), tzinfo=timezone.utc)
+    return [st.chain_id for st in conn.execute(sa.select(indexer_state).order_by(indexer_state.c.chain_id))
+            if (not ctx.chains or st.chain_id in ctx.chains) and st.backfilled
+            and st.swap_block_time is not None and as_utc(st.swap_block_time) >= boundary]
 
 
 def _custom(hook: str | None) -> bool:
