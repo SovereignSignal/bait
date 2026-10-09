@@ -1,5 +1,5 @@
 """Package 9: python -m bait repair. GeckoTerminal and Claude are fakes; nothing here touches the network or spends."""
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
@@ -288,7 +288,19 @@ def _today():
     return datetime.now(timezone.utc).date()
 
 
-def _cli_db(tmp_path, nightly_rc=0, p8=True):
+def _at(monkeypatch, hh, mm=0):
+    """Pin the repair's clock to today hh:mm UTC (the CLI databases are dated today)."""
+    at = datetime.combine(_today(), dtime(hh, mm), tzinfo=timezone.utc)
+    monkeypatch.setattr(repair, "_utcnow", lambda: at)
+    return at
+
+
+def _nightly(e, day, rc=0):
+    with e.begin() as c:
+        c.execute(sa.insert(db.run_receipts).values(day=day, started_at=NOW, finished_at=NOW, exit_code=rc, soft_errors=0, steps={}))
+
+
+def _cli_db(tmp_path, nightly_rc=0, p8=True, nightly_day=None):
     url = f"sqlite:///{tmp_path}/r.sqlite"
     e = db.make_engine(url)
     db.create_all(e)
@@ -301,7 +313,8 @@ def _cli_db(tmp_path, nightly_rc=0, p8=True):
         if p8:
             _snap(c, "0xpc", t, vol_day=1.0, est=True, cum=101.0)
         _old_row(c, p, t)
-        c.execute(sa.insert(db.run_receipts).values(day=t, started_at=NOW, finished_at=NOW, exit_code=nightly_rc, soft_errors=0, steps={}))
+    if nightly_rc is not None:
+        _nightly(e, nightly_day or t, nightly_rc)
     return url, e
 
 
@@ -312,12 +325,14 @@ def _receipts(e):
 
 def test_repair_respects_the_run_lock_the_since_range_and_a_failed_nightly(tmp_path, monkeypatch):
     from bait.__main__ import main
+    _at(monkeypatch, 12)
     url, e = _cli_db(tmp_path)
     assert main(["repair", "rescore", "--since", "16", "--database-url", url]) == 2
     assert main(["repair", "prose", "--dry-run", "--database-url", url]) == 2          # neither --what-lines nor --blurbs
     monkeypatch.setattr(db, "try_run_lock", lambda engine: None)
     assert main(["repair", "rescore", "--database-url", url]) == 3
     monkeypatch.undo()
+    _at(monkeypatch, 12)
     (tmp_path / "failed").mkdir()
     url2, e2 = _cli_db(tmp_path / "failed", nightly_rc=1)
     assert main(["repair", "rescore", "--database-url", url2]) == repair.EXIT_PRECONDITION
@@ -328,8 +343,9 @@ def test_repair_respects_the_run_lock_the_since_range_and_a_failed_nightly(tmp_p
     assert _receipts(e) == [] and _receipts(e2) == [] and _receipts(e3) == []
 
 
-def test_repair_all_dry_run_prints_the_plan_and_writes_nothing(tmp_path, capsys):
+def test_repair_all_dry_run_prints_the_plan_and_writes_nothing(tmp_path, monkeypatch, capsys):
     from bait.__main__ import main
+    _at(monkeypatch, 12)
     url, e = _cli_db(tmp_path)
     assert main(["repair", "all", "--since", "14", "--dry-run", "--database-url", url]) == 0
     text = capsys.readouterr().out
@@ -343,6 +359,7 @@ def test_repair_all_dry_run_prints_the_plan_and_writes_nothing(tmp_path, capsys)
 
 def test_repair_all_yes_runs_the_free_steps_with_a_receipt_each_and_stops_before_prose(tmp_path, monkeypatch, capsys):
     from bait.__main__ import main
+    _at(monkeypatch, 12)
     url, e = _cli_db(tmp_path)
     t = _today()
     monkeypatch.setattr(repair, "keyless_http", lambda ctx: FakeGT({"0xpc": {t - 3 * D: 123.0}}))
@@ -353,3 +370,30 @@ def test_repair_all_yes_runs_the_free_steps_with_a_receipt_each_and_stops_before
     assert all(r.exit_code == 0 and r.soft_errors == 0 and r.day == t for r in got)
     assert got[0].steps["backfill-days"]["rows_updated"] == 1
     assert _rows(e, "0xpc")[t - 3 * D].volume_usd_day == 123.0
+
+
+def test_repair_receipts_carry_the_latest_nightly_day_never_their_own(tmp_path, monkeypatch):
+    # /api/health reads the latest receipt: a repair dated today with exit 0 would pass for a nightly that never ran
+    from bait.__main__ import main
+    _at(monkeypatch, 12)
+    url, e = _cli_db(tmp_path, nightly_day=_today() - D)              # today's nightly has not written
+    assert main(["repair", "rescore", "--database-url", url]) == 0
+    assert [(r.notes, r.day) for r in _receipts(e)] == [("repair rescore", _today() - D)]
+    (tmp_path / "none").mkdir()
+    url2, e2 = _cli_db(tmp_path / "none", nightly_rc=None)             # no nightly receipt at all
+    assert main(["repair", "rescore", "--database-url", url2]) == 0
+    assert _receipts(e2)[0].day == repair.NO_NIGHTLY_DAY
+
+
+def test_repair_refuses_between_0530_and_0800_utc_until_todays_nightly_has_written(tmp_path, monkeypatch):
+    from bait.__main__ import main
+    url, e = _cli_db(tmp_path, nightly_day=_today() - D)
+    _at(monkeypatch, 7)
+    assert main(["repair", "rescore", "--database-url", url]) == repair.EXIT_PRECONDITION
+    assert _receipts(e) == []
+    _nightly(e, _today())                                              # the nightly is done: a repair may follow it
+    assert main(["repair", "rescore", "--database-url", url]) == 0
+    _at(monkeypatch, 8)                                                # past the health deadline the guard is off
+    (tmp_path / "late").mkdir()
+    url2, _ = _cli_db(tmp_path / "late", nightly_day=_today() - D)
+    assert main(["repair", "rescore", "--database-url", url2]) == 0

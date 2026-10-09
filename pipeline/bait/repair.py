@@ -39,6 +39,10 @@ P8_MERGED_AT = datetime(2026, 10, 9, 15, 29, 25, tzinfo=timezone.utc)
 NET_BY_CHAIN = {cid: net for net, (cid, *_rest) in K.CHAINS.items()}
 SLUG_BY_CHAIN = {cid: slug for _net, (cid, slug, *_rest) in K.CHAINS.items()}
 EXIT_PRECONDITION = 5
+# /api/health reads the latest receipt and expects the nightly's day. A repair receipt carries the latest nightly's day,
+# never its own; with no nightly receipt at all it carries this, which health reports as stale.
+NO_NIGHTLY_DAY = date(1970, 1, 1)
+MORNING = (dtime(5, 30), dtime(8, 0))   # from the stop time before the 06:00 nightly to health's 08:00 deadline
 
 _D = timedelta(days=1)
 _COLS = [c.name for c in project_daily.c]
@@ -629,16 +633,34 @@ def deadline_at(hhmm: str | None, now: datetime) -> datetime | None:
 
 
 def _receipt(engine, name: str, started: datetime, rc: int, out: dict) -> None:
-    # soft_errors stays 0: /api/health reads the latest receipt, and a repair's GeckoTerminal misses are not a failed nightly
-    db.write_receipt(engine, day=started.date(), started_at=started, finished_at=_utcnow(), exit_code=rc, soft_errors=0,
-                     steps={name: out}, code_sha=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), notes=f"repair {name}")
+    """/api/health reads the latest receipt as the nightly's, so a repair receipt carries the latest nightly's day, never
+    its own (a repair dated today would pass for a nightly that never ran), and soft_errors 0 (a repair's GeckoTerminal
+    misses are not a nightly's errors)."""
+    last = _latest_nightly(engine)
+    db.write_receipt(engine, day=last.day if last is not None else NO_NIGHTLY_DAY, started_at=started,
+                     finished_at=_utcnow(), exit_code=rc, soft_errors=0, steps={name: out},
+                     code_sha=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), notes=f"repair {name}")
+
+
+def _latest_nightly(engine):
+    with engine.connect() as c:
+        return c.execute(sa.select(run_receipts).where(run_receipts.c.notes.is_(None))
+                         .order_by(run_receipts.c.finished_at.desc()).limit(1)).first()
 
 
 def _failed_nightly(engine):
-    with engine.connect() as c:
-        r = c.execute(sa.select(run_receipts).where(run_receipts.c.notes.is_(None))
-                      .order_by(run_receipts.c.finished_at.desc()).limit(1)).first()
+    r = _latest_nightly(engine)
     return r if r is not None and r.exit_code != 0 else None
+
+
+def _waiting_for_nightly(engine, now: datetime) -> bool:
+    """05:30-08:00 UTC with no nightly receipt for today: the nightly is due or running, and a repair must not hold the
+    lock it needs or write a receipt before it."""
+    if not MORNING[0] <= now.time() < MORNING[1]:
+        return False
+    with engine.connect() as c:
+        return not c.execute(sa.select(sa.func.count()).select_from(run_receipts).where(
+            run_receipts.c.notes.is_(None), run_receipts.c.day == now.date())).scalar_one()
 
 
 def _spacing() -> float:
@@ -677,6 +699,10 @@ def main(args: argparse.Namespace, engine) -> int:
         log.error("another bait run holds the run lock (the nightly?); repair not started")
         return 3
     try:
+        if _waiting_for_nightly(engine, now):
+            log.error("%s UTC and no nightly receipt for %s yet: the nightly comes first; run the repair after it",
+                      now.strftime("%H:%M"), today)
+            return EXIT_PRECONDITION
         bad = _failed_nightly(engine)
         if bad is not None:
             log.error("the last nightly receipt (day %s) exited %s; fix or rerun the nightly first, so a repair receipt "
