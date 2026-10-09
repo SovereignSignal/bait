@@ -244,3 +244,10 @@ def test_a_project_that_moved_a_million_is_never_spam():
     assert is_spam([(0, 8)], volume=436_000_000) is False             # ...but $436M moved (Optimism 0x69af)
     assert is_spam([(0, 8)], volume=999_999) is True
     assert is_spam([], volume=5_000_000) is True                      # no pools is still spam
+
+
+def test_symmetric_needs_repeated_round_trips_or_several_wallets():
+    assert not is_symmetric([(50_000.0, 1, 1)] * 2, 90_000)          # two wallets, one round trip each: could be anyone
+    assert not is_symmetric([(50_000.0, 2, 2)] * 4, 190_000)         # four wallets, two round trips each
+    assert is_symmetric([(50_000.0, 3, 3)] * 2, 90_000)              # three round trips each
+    assert is_symmetric([(20_000.0, 1, 1)] * 5, 190_000)             # five wallets

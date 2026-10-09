@@ -310,15 +310,20 @@ def is_wash_no_liquidity(vol_7d: float, tvl: float | None, wallets: int | None, 
 # same number of times and carry more than half its volume.
 SYMMETRIC_TOP = 10
 SYMMETRIC_SHARE = 0.5
+SYMMETRIC_MIN_WALLETS = 5           # a pattern needs at least 5 such wallets...
+SYMMETRIC_MIN_ROUND_TRIPS = 3       # ...or each of them buying and selling at least 3 times
 
 
 def is_symmetric(top: list[tuple[float, int, int]], vol_24h: float | None) -> bool:
-    """top: (volume_usd, buys, sells) per wallet, any order. The top 10 by volume (at least 2) are judged; vol_24h is the
-    pool's rolling 24h volume, the window the trades come from."""
+    """top: (volume_usd, buys, sells) per wallet, any order. The top 10 by volume (at least 2) are judged: at least 5
+    wallets, or each with >= 3 round trips, so two people who bought and sold once are not bots. vol_24h is the pool's
+    rolling 24h volume, the window the trades come from."""
     if not vol_24h or vol_24h < WASH_SIGNAL_MIN_VOL:
         return False
     t = sorted(top, key=lambda x: -x[0])[:SYMMETRIC_TOP]
-    return len(t) >= 2 and all(b == s and b > 0 for _, b, s in t) and sum(v for v, _, _ in t) > SYMMETRIC_SHARE * vol_24h
+    pattern = len(t) >= SYMMETRIC_MIN_WALLETS or all(b >= SYMMETRIC_MIN_ROUND_TRIPS for _, b, _ in t)
+    return (len(t) >= 2 and pattern and all(b == s and b > 0 for _, b, s in t)
+            and sum(v for v, _, _ in t) > SYMMETRIC_SHARE * vol_24h)
 
 
 def is_alive(last_commit_at: datetime | None, latest_exa_hit: datetime | None, now: datetime) -> bool:
