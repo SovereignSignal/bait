@@ -291,7 +291,8 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
             unknown = bad_from[pid] is not None and d >= bad_from[pid]
             snap_rows.append({"pool_id": pid, "chain_id": cid, "day": d, "tvl_usd": tvl.get(pid),
                               "volume_usd_cum": None if unknown else cum_v, "tx_count_cum": cum_n,
-                              "volume_usd_day": None if unknown else v, "tx_count_day": n, "estimated": False})
+                              "volume_usd_day": None if unknown else v, "tx_count_day": n,
+                              "estimated": d >= ctx.day})   # the running day is partial
             d += timedelta(days=1)
     if replace:
         # Rewrites the series from `start` on. The seed day only resets the legacy cumulative (its daily values stay) and
