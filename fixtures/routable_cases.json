@@ -1,47 +1,15 @@
 {
-  "_comment": "Shared fixture for the routable rule (DESIGN.md: not 0x91 prefix AND none of beforeSwapReturnsDelta / afterSwapReturnsDelta / afterAddLiquidityReturnsDelta / afterRemoveLiquidityReturnsDelta AND not dynamicFee). Asserted by pipeline/tests/test_routable_shared.py and web/src/lib/routable.test.ts; both must agree on every case.",
+  "_comment": "Shared fixture for the three-state routing eligibility rule (DESIGN.md). Permissions come from the low 14 address bits, not the declared flags (the flags field is informational). Ineligible: 0x91 prefix, or any returnsDelta bit set. Dynamic fee: poolFee & 0x800000 when poolFee is given, else properties.dynamicFee when that key is present; neither known gives unknown. Asserted by pipeline/tests/test_routable_shared.py and web/src/lib/routable.test.ts; both must agree on every case.",
   "cases": [
-    {
-      "name": "plain lifecycle flags, no deltas, static fee",
-      "address": "0x19aa000000000000000000000000000000000000",
-      "flags": {"beforeSwap": true, "afterSwap": true, "afterInitialize": true, "beforeSwapReturnsDelta": false, "afterSwapReturnsDelta": false, "afterAddLiquidityReturnsDelta": false, "afterRemoveLiquidityReturnsDelta": false},
-      "properties": {"dynamicFee": false, "upgradeable": true},
-      "routable": true
-    },
-    {
-      "name": "0x91 prefix, uppercase hex, otherwise clean",
-      "address": "0X91AA000000000000000000000000000000000000",
-      "flags": {"beforeSwap": true},
-      "properties": {"dynamicFee": false},
-      "routable": false
-    },
-    {
-      "name": "beforeSwapReturnsDelta (published rule)",
-      "address": "0x0000fe59823933ac763611a69c88f91d45f81888",
-      "flags": {"beforeSwap": true, "beforeSwapReturnsDelta": true},
-      "properties": {"dynamicFee": false},
-      "routable": false
-    },
-    {
-      "name": "afterSwapReturnsDelta (published rule)",
-      "address": "0x2222000000000000000000000000000000000000",
-      "flags": {"afterSwap": true, "afterSwapReturnsDelta": true},
-      "properties": {},
-      "routable": false
-    },
-    {
-      "name": "afterRemoveLiquidityReturnsDelta (house rule, stricter than Labs)",
-      "address": "0x3333000000000000000000000000000000000000",
-      "flags": {"afterRemoveLiquidity": true, "afterRemoveLiquidityReturnsDelta": true},
-      "properties": {"dynamicFee": false},
-      "routable": false
-    },
-    {
-      "name": "dynamicFee property, no delta flags",
-      "address": "0x4444000000000000000000000000000000000000",
-      "flags": {"beforeSwap": true, "afterInitialize": true},
-      "properties": {"dynamicFee": true},
-      "routable": false
-    }
+    {"name": "plain lifecycle flags, no deltas, static fee", "address": "0x19aa000000000000000000000000000000000000", "flags": {"beforeSwap": true, "afterSwap": true, "afterInitialize": true, "beforeSwapReturnsDelta": false, "afterSwapReturnsDelta": false, "afterAddLiquidityReturnsDelta": false, "afterRemoveLiquidityReturnsDelta": false}, "properties": {"dynamicFee": false, "upgradeable": true}, "eligibility": "eligible"},
+    {"name": "0x91 prefix, uppercase hex, otherwise clean", "address": "0X91AA000000000000000000000000000000000000", "flags": {"beforeSwap": true}, "properties": {"dynamicFee": false}, "eligibility": "ineligible"},
+    {"name": "beforeSwapReturnsDelta (published rule)", "address": "0x0000fe59823933ac763611a69c88f91d45f81888", "flags": {"beforeSwap": true, "beforeSwapReturnsDelta": true}, "properties": {"dynamicFee": false}, "eligibility": "ineligible"},
+    {"name": "afterSwapReturnsDelta (published rule)", "address": "0x2222000000000000000000000000000000000004", "flags": {"afterSwap": true, "afterSwapReturnsDelta": true}, "properties": {}, "eligibility": "ineligible"},
+    {"name": "afterRemoveLiquidityReturnsDelta (house rule, stricter than Labs)", "address": "0x3333000000000000000000000000000000000001", "flags": {"afterRemoveLiquidity": true, "afterRemoveLiquidityReturnsDelta": true}, "properties": {"dynamicFee": false}, "eligibility": "ineligible"},
+    {"name": "dynamicFee property, no delta flags", "address": "0x4444000000000000000000000000000000000000", "flags": {"beforeSwap": true, "afterInitialize": true}, "properties": {"dynamicFee": true}, "eligibility": "ineligible"},
+    {"name": "empty metadata, address bit 3 set (beforeSwapReturnsDelta)", "address": "0x4444000000000000000000000000000000000008", "flags": {}, "properties": {}, "eligibility": "ineligible"},
+    {"name": "empty metadata, clean bits (beforeSwap only), static pool fee", "address": "0x5555000000000000000000000000000000000080", "flags": {}, "properties": {}, "poolFee": 3000, "eligibility": "eligible"},
+    {"name": "clean bits, dynamic pool fee bit 0x800000", "address": "0x5555000000000000000000000000000000000080", "flags": {}, "properties": {}, "poolFee": 8388608, "eligibility": "ineligible"},
+    {"name": "clean bits, no pool fee, no dynamicFee key: unknown", "address": "0x5555000000000000000000000000000000000080", "flags": {}, "properties": {}, "eligibility": "unknown"}
   ]
 }

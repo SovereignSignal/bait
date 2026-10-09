@@ -13,7 +13,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
 import { SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
-import { flagLabels, projectRoutable } from "@/lib/routable";
+import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
@@ -48,14 +48,19 @@ const EMPTY_USAGE: Usage = { vol24h: null, tx24h: null, wallets24h: null, buys24
 
 function derive(p: ProjectDetail): ProjectDetail {
   const primary = p.hooks[0];
-  const labels = primary ? flagLabels(primary.flags, primary.properties) : [];
+  const labels = primary ? flagLabels(primary.address, primary.flags, primary.properties) : [];
   const flagLine = p.isFactory && p.metrics.hooksN > 1 ? [`${p.metrics.hooksN.toLocaleString("en-US")} hooks`, "one per pool"] : labels;
   return {
     ...p,
     flagLabels: flagLine,
+    hooklisted: p.hooks.some((h) => h.hooklisted === true),
+    pools: p.pools.map((pool) => ({
+      ...pool,
+      eligibility: eligibility(pool.hookAddress, null, p.hooks.find((h) => h.address.toLowerCase() === pool.hookAddress.toLowerCase() && h.chainId === pool.chainId)?.properties ?? {}, pool.fee),
+    })),
     signals: {
       ...p.signals,
-      routable: projectRoutable(p.hooks),
+      routable: projectRoutable(p.hooks, p.pools),
       smartMoneyLps: nansenCovers(p.chains) ? (p.signals.smartMoneyLps ?? 0) : null,
     },
   };
@@ -471,6 +476,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
         chains,
         flagLabels: [],
         verified: hs.some((h) => h.verifiedSource),
+        hooklisted: hs.some((h) => h.hooklisted === true),
         upgradeable: hs.some((h) => !!h.properties.upgradeable),
         metrics: {
           tvlUsd: d?.tvlUsd ?? 0,
@@ -484,7 +490,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
           smartMoneyLps: (nansen?.labeled ?? []).filter((x) => isSmartMoney(x.labels)).length,
           lastCommitAt: gh?.last_commit_at ?? null,
           lastExaHitAt: exa?.latest ?? null,
-          routable: false,
+          routable: "unknown", // derive() computes it from hooks and pools
           auditCount: auditUrls.size,
         },
         receipts: recs,
@@ -582,6 +588,7 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         tx7d: Math.max(0, num(r.tx7d) ?? 0),
         vol24h: snapVol != null ? Math.max(0, snapVol) : st ? num(st.vol_24h) : null,
         wallets24h: st ? num(st.traders_24h) : null,
+        eligibility: "unknown" as const, // derive() evaluates it against the hook and this pool's fee
       };
     });
   // Pools found only by the indexer have no symbols: fill them (cached; never blocks the page on failure).
@@ -685,6 +692,7 @@ function toHook(h: typeof t.hooks.$inferSelect): HookView {
     properties: (h.properties ?? {}) as HookView["properties"],
     verifiedSource: h.verifiedSource ?? false,
     auditUrl: h.auditUrl,
+    hooklisted: h.hooklisted ?? null,
     deployer: h.deployer,
     firstSeenAt: h.firstSeenAt.toISOString(),
   };

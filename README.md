@@ -65,7 +65,7 @@ is unset.
    Postgres-only tests (savepoints, the run lock) skip unless `TEST_DATABASE_URL` is set:
    `eval "$(pipeline/scripts/pg-test-cluster.sh start)"` starts a throwaway cluster and prints the export.
 
-   `fixtures/routable_cases.json` is the shared routable-rule fixture; `pipeline/tests/test_routable_shared.py`
+   `fixtures/routable_cases.json` is the shared routing-eligibility fixture; `pipeline/tests/test_routable_shared.py`
    and `web/src/lib/routable.test.ts` (`npm test`) both assert it so the two implementations cannot drift.
 
    `run-pipeline-local.sh` loads `.env`, cds into `pipeline/` and runs
@@ -128,8 +128,9 @@ Railway variables and your local `.env`, never in the repo.
   fallback is v2.
 - The v4 pool deep link `app.uniswap.org/explore/pools/<chain>/<poolId>` with a bytes32 poolId
   is unconfirmed in a browser.
-- Routable rule in code is stricter than the published Labs rule (adds the two liquidity-delta
-  flags); `NON_ROUTABLE_FLAGS` in `pipeline/bait/rules.py` is where to relax it.
+- Routing eligibility (eligible / ineligible / unknown, from the address bits and the pool fee) is stricter than the
+  published Labs rule (adds the two liquidity-delta bits); `NON_ROUTABLE_FLAGS` in `pipeline/bait/rules.py` is where
+  to relax it. The web tab formerly called Verified is now "In Uniswap app".
 
-Disclaimers on every project page: not audited by us; flags shown as published; the routable
+Disclaimers on every project page: not audited by us; flags come from the hook address; the routing
 badge is a rule, not a guarantee.

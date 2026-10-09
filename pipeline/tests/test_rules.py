@@ -3,10 +3,10 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from bait.rules import is_dynamic_fee, is_new, is_spam, normalize_name, routable, score_trending, slugify
+from bait.rules import eligibility, flags_from_address, is_dynamic_fee, is_new, is_spam, normalize_name, routable, score_trending, slugify
 
 
-def hook(address="0xabc0000000000000000000000000000000000001", flags=None, dynamic=False):
+def hook(address="0xabc0000000000000000000000000000000000080", flags=None, dynamic=False):
     return {"hook": {"address": address}, "flags": flags or {}, "properties": {"dynamicFee": dynamic}}
 
 
@@ -20,13 +20,14 @@ def test_routable_rejects_0x91_prefix_case_insensitive():
     assert routable(hook(address="0x19aa000000000000000000000000000000000000")) is True
 
 
-@pytest.mark.parametrize("flag", [
-    "beforeSwapReturnsDelta", "afterSwapReturnsDelta",
-    "afterAddLiquidityReturnsDelta", "afterRemoveLiquidityReturnsDelta",   # DESIGN.md house rule, stricter than Labs
+@pytest.mark.parametrize("flag,bit", [
+    ("beforeSwapReturnsDelta", 3), ("afterSwapReturnsDelta", 2),
+    ("afterAddLiquidityReturnsDelta", 1), ("afterRemoveLiquidityReturnsDelta", 0),   # DESIGN.md house rule, stricter than Labs
 ])
-def test_routable_rejects_delta_flags(flag):
-    assert routable(hook(flags={flag: True})) is False
-    assert routable(hook(flags={flag: False})) is True
+def test_routable_rejects_delta_address_bits(flag, bit):
+    base = 0xabc0000000000000000000000000000000000080
+    assert routable(hook(address=hex(base | 1 << bit))) is False
+    assert routable(hook(address=hex(base), flags={flag: True})) is True     # declared flags are informational; the bits win
 
 
 def test_routable_rejects_dynamic_fee():
@@ -86,3 +87,16 @@ def test_is_spam():
     assert is_spam([(50, 3), (99.9, 9)]) is True
     assert is_spam([(50, 3), (100, 0)]) is False
     assert is_spam([(0, 10)]) is False
+
+
+def test_flags_from_address_decodes_all_fourteen_bits():
+    f = flags_from_address("0x69af000000000000000000000000000000003fff")
+    assert all(f.values()) and len(f) == 14
+    g = flags_from_address("0x720e000000000000000000000000000000002080")      # beforeInitialize + beforeSwap
+    assert {k for k, v in g.items() if v} == {"beforeInitialize", "beforeSwap"}
+    assert flags_from_address("0X0000000000000000000000000000000000000000") == {k: False for k in g}
+
+
+def test_eligibility_unknown_without_pool_fee_or_dynamic_key():
+    h = {"hook": {"address": "0x5555000000000000000000000000000000000080"}, "properties": {}}
+    assert eligibility(h) == "unknown" and eligibility(h, 3000) == "eligible" and eligibility(h, 0x800000) == "ineligible"
