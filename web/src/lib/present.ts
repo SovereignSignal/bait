@@ -1,6 +1,7 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
 import { CHAINS } from "./chains";
 import { weekDelta } from "./feed";
+import { int } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
@@ -57,8 +58,28 @@ export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
   };
 }
 
-/** Today's pace against the 7-day run rate, 0..100. */
+/** The rolling 24 h (GeckoTerminal, at the run) against the daily average of the last 7 closed UTC days, 0..100. */
 export function pace(vol24h: number | null, vol7d: number): number {
   if (vol24h == null || vol7d <= 0) return 0;
   return Math.min(100, Math.round(((vol24h * 7) / vol7d) * 100));
+}
+
+/** "1,142" for a distinct count, "≤ 1,142" for an upper bound (buyers + sellers, or pools added together). */
+export function walletsText(n: number | null, exact: boolean | null): string {
+  if (n == null) return int(n);
+  return exact === false ? `≤ ${int(n)}` : int(n);
+}
+
+// Keep in step with pipeline/bait/rules.py (WASH_REASONS and the thresholds).
+const WASH_TEXT: Record<string, string> = {
+  "24h": "$250K+ in a day through 25 or fewer wallets",
+  "7d": "$1M+ in 7 days through 10 or fewer wallets",
+  vol_tvl: "7-day volume over 300x its liquidity from fewer than 50 wallets",
+  no_liquidity: "$1M+ in 7 days through a pool with $1K or less of liquidity",
+  symmetric: "its top wallets buy and sell in equal counts and carry most of the volume",
+};
+
+export function washLine(reason: string | null): string {
+  const parts = (reason ?? "").split(",").map((r) => WASH_TEXT[r.trim()]).filter(Boolean);
+  return parts.length ? `Wash-like volume: ${parts.join("; ")}.` : "Wash-like volume.";
 }
