@@ -80,7 +80,13 @@ def backfill_targets(conn, today: date, since: int) -> tuple[list[tuple[str, int
     returned."""
     start, end = backfill_window(today, since)
     c = pool_snapshots.c
-    cond = sa.and_(c.volume_usd_cum.is_not(None), sa.or_(c.estimated.is_(True), sa.and_(c.volume_usd_day.is_(None), c.volume_usd_cum > 0)))
+    # an estimate before the pool's first traded candle-backed day is one fill_pool keeps: never a target again
+    s2 = pool_snapshots.alias("s2")
+    first_traded = (sa.select(sa.func.min(s2.c.day)).where(s2.c.pool_id == c.pool_id, s2.c.chain_id == c.chain_id,
+                                                          s2.c.estimated.is_(False), s2.c.volume_usd_day > 0)
+                    .scalar_subquery())
+    estimate = sa.and_(c.estimated.is_(True), sa.or_(first_traded.is_(None), c.day > first_traded))
+    cond = sa.and_(c.volume_usd_cum.is_not(None), sa.or_(estimate, sa.and_(c.volume_usd_day.is_(None), c.volume_usd_cum > 0)))
     need: dict[tuple[str, int], int] = {}
     for r in conn.execute(sa.select(c.pool_id, c.chain_id, sa.func.count().label("n"))
                           .where(c.day >= start, c.day <= end, cond).group_by(c.pool_id, c.chain_id)):
@@ -689,12 +695,14 @@ def in_blackout(hhmm: str | None, now: datetime) -> bool:
 
 
 def _receipt(engine, name: str, started: datetime, rc: int, out: dict) -> None:
-    """/api/health reads the latest receipt as the nightly's, so a repair receipt carries the latest nightly's day, never
-    its own (a repair dated today would pass for a nightly that never ran), and soft_errors 0 (a repair's GeckoTerminal
-    misses are not a nightly's errors)."""
+    """/api/health reads the latest receipt as the nightly's, so a repair receipt never reads better than the latest
+    nightly: its day (a repair dated today would pass for a nightly that never ran), its exit code unless the repair
+    itself failed, and its soft_errors (a restore after a failed nightly, or a verify after a nightly with 10+ soft
+    errors, must not turn health green). The repair's own misses stay in its steps."""
     last = _latest_nightly(engine)
     db.write_receipt(engine, day=last.day if last is not None else NO_NIGHTLY_DAY, started_at=started,
-                     finished_at=_utcnow(), exit_code=rc, soft_errors=0, steps={name: out},
+                     finished_at=_utcnow(), exit_code=rc or (last.exit_code if last is not None else 0),
+                     soft_errors=last.soft_errors if last is not None else 0, steps={name: out},
                      code_sha=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), notes=f"repair {name}")
 
 

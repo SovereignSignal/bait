@@ -232,9 +232,9 @@ Avalanche have no Blockscout instance, so code_hash lookups there return None.
 ## Repair (package 9, one-off)
 
 `python -m bait repair` brings stored data up to package 8's windows. Every command except `--dry-run` takes the run
-lock (exit 3 while the nightly runs) and writes one `run_receipts` row per sub-step (`notes` = `repair <name>`,
-`soft_errors` 0, `day` = the latest nightly receipt's day, never the repair's own, so `/api/health` never reads a repair
-as a nightly). It refuses to start (exit 5) after a failed nightly receipt (`rescore --restore` excepted), before a
+lock (exit 3 while the nightly runs) and writes one `run_receipts` row per sub-step (`notes` = `repair <name>`). The row
+never reads better than the latest nightly receipt, which `/api/health` judges: it carries that nightly's `day` and
+`soft_errors`, and its `exit_code` unless the repair itself failed; the repair's own counts are in `steps`. It refuses to start (exit 5) after a failed nightly receipt (`rescore --restore` excepted), before a
 package 8 nightly, between 05:30 and 08:00 UTC until today's nightly has written its receipt, and between `--stop-at`
 (default 05:30) and 06:30 UTC. Backfill, rescore, prose and `all` stop at `--stop-at` before the next 06:00 UTC nightly,
 between pools, days and Claude calls, print `INCOMPLETE: rerun to resume` and exit 6. `prose --yes` needs `--max-usd`.
