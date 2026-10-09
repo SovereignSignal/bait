@@ -321,15 +321,17 @@ def _split_proxy_families(conn, ctx) -> list[dict]:
 def _split_generic(conn, ctx, generic: set[str]) -> list[dict]:
     """Projects keyed on a template, proxy or data-generic name ("ERC1967Proxy", "LimitOrderHook") merged unrelated hooks
     by name alone. Detach their hooks so the rules regroup them on evidence; settle_split later hands the slug and paid
-    facts to wherever most hooks land. A project with enrichment or 3+ hooks is never split automatically (too costly
-    to get wrong): it is logged for a human instead."""
+    facts to wherever most hooks land. A template or proxy name is always split: it identifies nothing worth keeping.
+    A real-looking name that is generic only by the deployer data is the judgement call, so one with enrichment or 3+
+    hooks is never split automatically: it is logged for a human instead."""
     cand = [p for p in conn.execute(sa.select(projects).where(projects.c.norm_name.is_not(None)))
             if not p.norm_name.startswith(("contract:", "code:"))
             and (not useful_name(p.name, max_len=None) or p.norm_name in generic)]
     snaps = []
     for p in cand:
         n = conn.execute(sa.select(sa.func.count()).select_from(hooks).where(hooks.c.project_id == p.id)).scalar_one()
-        if p.enriched_at is not None or p.website or p.github or n >= 3:
+        by_data = useful_name(p.name, max_len=None) is not None          # not a template name: generic by data only
+        if by_data and (p.enriched_at is not None or p.website or p.github or n >= 3):
             log.info("group: would split %s (generic name, %d hooks)", p.slug, n)
             continue
         snaps.append(detach_project(conn, p.id, "split:generic", ctx.now))

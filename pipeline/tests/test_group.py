@@ -347,21 +347,24 @@ def test_one_team_with_a_deployer_per_chain_stays_one_project(conn, ctx):
     assert set(conn.execute(sa.select(db.projects.c.slug)).scalars()) == {"bunnihook"}
 
 
-def test_an_enriched_or_large_generic_project_is_logged_not_split(conn, ctx, caplog):
+def test_template_named_projects_always_split_data_generic_ones_are_guarded(conn, ctx, caplog):
     import logging
-    fee = insert_project(conn, "FeeHook", NOW, slug="feehook")
-    counter = insert_project(conn, "Counter", NOW, slug="counter")
-    conn.execute(sa.update(db.projects).where(db.projects.c.id == fee).values(norm_name="fee", website="https://fee.example"))
-    for n in (111, 112):
-        insert_hook(conn, A(n), 8453, project_id=fee, name="FeeHook")
-    for n in (113, 114, 115):
-        insert_hook(conn, A(n), 8453, project_id=counter, name="Counter")
+    proxy = insert_project(conn, "ERC1967Proxy", NOW, slug="erc1967proxy")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == proxy).values(
+        norm_name="erc1967proxy", website="https://proxy.example", enriched_at=NOW))
+    for n, cid in ((111, 8453), (112, 8453), (113, 56)):
+        insert_hook(conn, A(n), cid, project_id=proxy, name="ERC1967Proxy")
+    zephyr = insert_project(conn, "Zephyr", NOW, slug="zephyr")                   # a real-looking name, generic by data
+    for n, d in ((114, "1"), (115, "2"), (116, "4")):
+        _deploy(conn, n, 8453, "Zephyr", "0x" + d * 40)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.name == "Zephyr").values(project_id=zephyr))
     with caplog.at_level(logging.INFO, logger="bait"):
         out = group.run(conn, ctx)
     pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
-    assert out["split"] == 0 and {pid[A(111)], pid[A(112)]} == {fee} and {pid[A(n)] for n in (113, 114, 115)} == {counter}
-    assert "group: would split feehook (generic name, 2 hooks)" in caplog.text
-    assert "group: would split counter (generic name, 3 hooks)" in caplog.text
+    slugs = set(conn.execute(sa.select(db.projects.c.slug)).scalars())
+    assert out["split"] == 1 and "erc1967proxy" not in slugs and len({pid[A(n)] for n in (111, 112, 113)}) == 3
+    assert {pid[A(n)] for n in (114, 115, 116)} == {zephyr}
+    assert "group: would split zephyr (generic name, 3 hooks)" in caplog.text
 
 
 def test_a_split_carries_its_slug_receipts_and_enrichment_to_where_most_hooks_land(conn, ctx):
