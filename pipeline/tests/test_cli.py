@@ -24,3 +24,11 @@ def test_cli_rejects_unknown_step_and_chain(tmp_path):
     url = f"sqlite:///{tmp_path}/t.sqlite"
     assert main(["run", "--steps", "nope", "--database-url", url]) == 2
     assert main(["run", "--chains", "mars", "--database-url", url]) == 2
+
+
+def test_run_exits_3_when_lock_is_held(monkeypatch, tmp_path):
+    from bait import db
+    monkeypatch.setattr(db, "try_run_lock", lambda engine: None)
+    rc = main(["run", "--database-url", f"sqlite:///{tmp_path}/x.sqlite", "--steps", "ingest",
+               "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
+    assert rc == 3

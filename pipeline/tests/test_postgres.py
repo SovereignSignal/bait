@@ -45,3 +45,30 @@ def test_one_bad_item_does_not_lose_the_step_on_postgres(pg_engine):
     with pg_engine.connect() as conn:
         got = {r.project_id for r in conn.execute(sa.select(db.signals.c.project_id).where(db.signals.c.kind == "alive"))}
     assert got == {pids[0], pids[2]}              # Alpha and Gamma persisted; Beta's savepoint rolled back on its own
+
+
+def test_second_runner_cannot_take_the_run_lock(pg_engine):
+    first = db.try_run_lock(pg_engine)
+    assert first is not None
+    try:
+        assert db.try_run_lock(pg_engine) is None
+    finally:
+        first.close()
+    again = db.try_run_lock(pg_engine)         # released with the connection
+    assert again is not None
+    again.close()
+
+
+def test_cli_exits_3_without_running_a_step_while_another_run_holds_the_lock(pg_engine):
+    import os
+
+    from bait.__main__ import main
+    held = db.try_run_lock(pg_engine)
+    try:
+        rc = main(["run", "--database-url", os.environ["TEST_DATABASE_URL"], "--steps", "ingest",
+                   "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
+    finally:
+        held.close()
+    assert rc == 3
+    with pg_engine.connect() as conn:
+        assert conn.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 0   # ingest never ran
