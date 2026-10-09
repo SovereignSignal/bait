@@ -279,12 +279,12 @@ def test_follow_live_adds_new_pool_and_swaps(engine):
 def test_apply_swaps_increments_and_recounts_unique_wallets(engine):
     d = date(2026, 10, 1)
     with engine.begin() as c:
-        store.apply_swaps(c, 1, {(PA, d): [2, 10.0]}, {(PA, d, W1): 2})
-        store.apply_swaps(c, 1, {(PA, d): [3, 5.5]}, {(PA, d, W1): 1, (PA, d, W2): 2})
+        store.apply_swaps(c, 1, {(PA, d): [2, 10.0, 0]}, {(PA, d, W1): 2})
+        store.apply_swaps(c, 1, {(PA, d): [3, 5.5, 1]}, {(PA, d, W1): 1, (PA, d, W2): 2})
     with engine.connect() as c:
         r = c.execute(sa.select(db.pool_daily_onchain)).one()
         w = dict(c.execute(sa.select(db.pool_wallet_day.c.address, db.pool_wallet_day.c.swaps)).all())
-    assert (r.swaps, r.wallets, r.volume_usd) == (5, 2, 15.5) and w == {W1: 3, W2: 2}
+    assert (r.swaps, r.wallets, r.volume_usd, r.unpriced_swaps) == (5, 2, 15.5, 1) and w == {W1: 3, W2: 2}
     with engine.begin() as c:
         assert store.prune_wallets(c, d.replace(month=11, day=5)) == 2
 
@@ -514,3 +514,29 @@ def test_swap_window_start_moves_up_when_the_swap_phase_begins_days_later(engine
     _, daily, _, st = _tables(engine)
     assert (st.initialize_block, st.swap_block, daily) == (1400, 3880, {})                  # block 3880 = 09-24 00:00
     assert db.as_utc(st.swap_block_time) == datetime(2026, 9, 24, tzinfo=timezone.utc)
+
+
+def test_defillama_outage_does_not_commit_the_page(engine):
+    from bait.indexer.prices import PricesUnavailable
+    _seed_pool_and_cursor(engine)
+    down = PriceBook(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503))))
+    with pytest.raises(PricesUnavailable):
+        core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), down, core.Settings(max_pages=1), now=NOW)
+    _, daily, _, st = _tables(engine)
+    assert st.swap_block == 1000 and daily == {}
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    _, daily, _, st = _tables(engine)
+    assert st.swap_block == 1700 and daily == {(PA, date(2026, 9, 22)): (3, 2, 6000.0)}
+    bad_request = PriceBook(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(400))))
+    assert bad_request.get(BASE, [TOKX]) == {}                       # a 4xx is "no price", never a wedged chain
+
+
+def test_unpriced_swaps_are_counted_not_silently_zero(engine):
+    class NoPrices:
+        def get(self, chain, addrs):
+            return {}
+    _seed_pool_and_cursor(engine)
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), NoPrices(), core.Settings(max_pages=1), now=NOW)
+    with engine.connect() as c:
+        r = c.execute(sa.select(db.pool_daily_onchain)).one()
+    assert (r.swaps, r.unpriced_swaps, r.volume_usd) == (3, 3, 0.0)

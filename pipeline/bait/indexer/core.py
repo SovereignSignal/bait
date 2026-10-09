@@ -58,16 +58,17 @@ class ChainStats:
 
 @dataclass
 class SwapAgg:
-    daily: dict = field(default_factory=dict)      # (pool_id, day) -> [swaps, usd]
+    daily: dict = field(default_factory=dict)      # (pool_id, day) -> [swaps, usd, unpriced]
     wallets: dict = field(default_factory=dict)    # (pool_id, day, address) -> swaps
     swaps: int = 0
     unpriced: int = 0
     seen_ts: int = 0                               # newest block timestamp in the scanned pages
 
     def add(self, pool_id: str, day: date, wallet: str, usd: float | None) -> None:
-        d = self.daily.setdefault((pool_id, day), [0, 0.0])
+        d = self.daily.setdefault((pool_id, day), [0, 0.0, 0])
         d[0] += 1
         d[1] += usd or 0.0
+        d[2] += usd is None
         k = (pool_id, day, wallet)
         self.wallets[k] = self.wallets.get(k, 0) + 1
         self.swaps += 1
