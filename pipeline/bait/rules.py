@@ -222,7 +222,8 @@ def is_spam(pool_stats: list[tuple[float, int]], volume: float = 0.0) -> bool:
 
 # --- wash rules (DESIGN.md "Wash rules"). A project is wash-like for a reason when the pools that rule flags carry
 # >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
-WASH_REASONS = ("24h", "7d", "vol_tvl", "no_liquidity", "symmetric")
+# "unverified" is not a rule: a project that only escaped the spam rule by moving >= $1M and has no wallet data at all.
+WASH_REASONS = ("24h", "7d", "vol_tvl", "no_liquidity", "symmetric", "unverified")
 WASH_SHARE = 0.5
 WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
 
