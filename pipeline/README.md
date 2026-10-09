@@ -22,6 +22,8 @@ cp .env.example .env            # fill in keys; never commit .env
 .venv/bin/python -m pytest -q -p no:cacheprovider   # SQLite in memory, HTTP mocked, KEYLESS=0; Postgres-only tests need TEST_DATABASE_URL (scripts/pg-test-cluster.sh)
 ```
 
+Direct dependencies in `requirements.txt` are pinned; to refresh, bump in a venv, run the suite, and copy the versions from `pip freeze`.
+
 `--day` defaults to today's UTC date (what the Docker CMD relies on). Runs are idempotent per day:
 every table is keyed on its natural key plus `day` and written with upserts, so re-running a night
 replaces that night's rows. Exit code 0 only when every step finished with zero soft errors; a step
