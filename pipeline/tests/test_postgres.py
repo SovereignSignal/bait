@@ -240,3 +240,26 @@ def test_two_threads_committing_the_same_page_count_it_once(pg_engine):
         assert (r.swaps, r.wallets, r.volume_usd) == (2, 2, 150.0)   # the loser added nothing
         assert c.execute(sa.select(sa.func.count()).select_from(db.pool_wallet_day)).scalar_one() == 2
         assert store.get_state(c, 8453).swap_block == 20
+
+
+def test_score_counts_a_wallet_once_across_a_projects_pools_on_postgres(pg_engine):
+    from bait.steps import score
+    end = DAY - timedelta(days=1)
+    with pg_engine.begin() as c:
+        pid = c.execute(sa.insert(db.projects).values(slug="desk", name="Desk", norm_name="desk",
+                                                      first_seen_at=NOW - timedelta(days=60))).inserted_primary_key[0]
+        c.execute(sa.insert(db.hooks).values(address="0xdesk", chain_id=10, project_id=pid, name="Desk", first_seen_at=NOW,
+                                             flags={}, properties={}))
+        for pool in ("0xp1", "0xp2"):
+            c.execute(sa.insert(db.pools).values(pool_id=pool, chain_id=10, hook_address="0xdesk", created_at=NOW - timedelta(days=60)))
+            c.execute(sa.insert(db.pool_snapshots).values(pool_id=pool, chain_id=10, day=end, tvl_usd=1.0, volume_usd_cum=1.0,
+                                                          volume_usd_day=1.0, tx_count_day=1))
+            for w in ("0xw0", "0xw1"):
+                c.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id=pool, day=end, address=w, swaps=1))
+        c.execute(sa.insert(db.indexer_state).values(chain_id=10, initialize_block=1, swap_block=1, head_block=1, backfilled=True,
+                                                     updated_at=NOW, swap_block_time=NOW))
+    with pg_engine.begin() as c:
+        score.run(c, _ctx())
+    with pg_engine.connect() as c:
+        r = c.execute(sa.select(db.project_daily)).one()
+    assert (r.wallets_24h, r.wallets_exact, r.window_end) == (2, True, end)

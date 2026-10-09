@@ -88,7 +88,8 @@ def test_run_exits_4_when_a_locked_migration_leaves_a_required_column_missing(tm
     monkeypatch.setattr(db, "add_missing_columns", locked)
     rc = main(["run", "--database-url", url, "--steps", "ingest", "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
     assert rc == 4
-    assert db.missing_columns(e) == ["pool_stats.vol_source"]
+    assert db.missing_columns(e) == ["pool_stats.vol_source", "pool_stats.vol_24h_rolling", "pool_stats.wallets_24h",
+                                     "pool_stats.window_end"]
     with e.connect() as c:
         assert c.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 0     # no step ran
 

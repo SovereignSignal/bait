@@ -76,6 +76,9 @@ export const poolSnapshots = pgTable(
     tvlUsd: doublePrecision("tvl_usd"),
     volumeUsdCum: doublePrecision("volume_usd_cum"),
     txCountCum: bigint("tx_count_cum", { mode: "number" }), // swaps + liquidity mods ("txs")
+    volumeUsdDay: doublePrecision("volume_usd_day"), // that UTC day's volume; NULL = unknown
+    txCountDay: bigint("tx_count_day", { mode: "number" }), // that UTC day's swaps; NULL = unknown
+    estimated: boolean("estimated"),
   },
   (t) => [primaryKey({ columns: [t.poolId, t.chainId, t.day] }), index("pool_snapshots_day_idx").on(t.day)],
 );
@@ -95,6 +98,13 @@ export const projectDaily = pgTable(
     scoreTrending: doublePrecision("score_trending"), // 0 when vol_7d < $10k
     isNew: boolean("is_new").notNull().default(false),
     isSpam: boolean("is_spam").notNull().default(false),
+    windowEnd: date("window_end"), // the last closed UTC day the row reports (day - 1)
+    vol24h: doublePrecision("vol_24h"),
+    swaps24h: bigint("swaps_24h", { mode: "number" }), // NULL = not every day known (swaps7d likewise)
+    wallets24h: integer("wallets_24h"),
+    walletsExact: boolean("wallets_exact"), // true = distinct across the project's pools; false = upper bound
+    isWash: boolean("is_wash").notNull().default(false),
+    washReason: text("wash_reason"), // comma list: 24h, 7d, vol_tvl, no_liquidity, symmetric
   },
   (t) => [primaryKey({ columns: [t.projectId, t.day] }), index("project_daily_day_score_idx").on(t.day, t.scoreTrending)],
 );
@@ -112,6 +122,9 @@ export const poolStats = pgTable(
     sells24h: integer("sells_24h"),
     buyers24h: integer("buyers_24h"),
     sellers24h: integer("sellers_24h"),
+    vol24hRolling: doublePrecision("vol_24h_rolling"), // GeckoTerminal h24 at the run (rolling)
+    wallets24h: integer("wallets_24h"), // distinct; NULL = unknown (traders24h is buyers + sellers)
+    windowEnd: timestamp("window_end", { withTimezone: true }),
   },
   (t) => [primaryKey({ columns: [t.poolId, t.chainId, t.day] })],
 );

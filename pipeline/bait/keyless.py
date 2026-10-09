@@ -15,15 +15,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
-import sys
 import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from .rules import code_hash as canonical_code_hash, flags_from_address, proxy_kind, normalize_name, routable, score_trending, slugify
+from .logsetup import configure
+from .rules import (code_hash as canonical_code_hash, flags_from_address, is_wash_24h, normalize_name, proxy_kind, routable,
+                    score_trending, slugify, wallets_lower_bound)
 
 GT = "https://api.geckoterminal.com/api/v2"
 HOOKLIST = "https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json"
@@ -64,10 +66,6 @@ INITIALIZE = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438
 BLOCKSCOUT_LOGS = {"eth": "https://eth.blockscout.com", "unichain": "https://unichain.blockscout.com",
                    "ink": "https://explorer.inkonchain.com"}
 
-# Wash heuristic: big volume from a handful of wallets. Excluded from Trending, flagged on the card.
-WASH_MIN_VOL_24H = 250_000
-WASH_MAX_TRADERS_24H = 25
-
 CATEGORY_KEYWORDS = [
     ("launchpad", ("launch", "memecoin", "bonding", "creator", "fair launch", "token launch")),
     ("orders", ("limit order", "twamm", "dca", "stop loss", "take profit", "order")),
@@ -80,8 +78,17 @@ CATEGORY_KEYWORDS = [
 ]
 
 
+_log = logging.getLogger("bait")
+
+
 def log(msg: str) -> None:
-    print(f"[keyless] {msg}", file=sys.stderr, flush=True)
+    """Progress line. Through the "bait" logger, so Railway gets package 4's JSON line at level info (plain text on stderr
+    was tagged as an error)."""
+    _log.info("[keyless] %s", msg)
+
+
+def warn(msg: str) -> None:
+    _log.warning("[keyless] %s", msg)
 
 
 class Http:
@@ -130,10 +137,10 @@ class Http:
                     continue
                 if e.code == 404:
                     return None
-                log(f"GT {e.code} {path}")
+                warn(f"GT {e.code} {path}")
                 return None
             except Exception as e:  # network blip
-                log(f"GT error {e!r} {path}")
+                warn(f"GT error {e!r} {path}")
                 time.sleep(5)
         return None
 
@@ -147,12 +154,12 @@ class Http:
                     out.extend(res if isinstance(res, list) else [res])
                     break
                 except urllib.error.HTTPError as e:
-                    log(f"RPC {url} HTTP {e.code}")
+                    warn(f"RPC {url} HTTP {e.code}")
                     if e.code in (400, 403, 413):
                         break  # request-shape or plan limit: retrying will not help
                     time.sleep(2)
                 except Exception as e:
-                    log(f"RPC {url} error {e!r}")
+                    warn(f"RPC {url} error {e!r}")
                     time.sleep(2)
         return out
 
@@ -165,10 +172,6 @@ def decode_pool_key(result: str | None) -> dict | None:
     if int(c1, 16) == 0:  # pool never touched by PositionManager
         return None
     return {"currency0": c0, "currency1": c1, "fee": int(w[2], 16), "tickSpacing": int(w[3], 16), "hooks": "0x" + w[4][24:]}
-
-
-def is_wash(vol24h: float, traders24h: int) -> bool:
-    return vol24h >= WASH_MIN_VOL_24H and traders24h <= WASH_MAX_TRADERS_24H
 
 
 def categorize(text: str, flags: dict, props: dict) -> str:
@@ -322,10 +325,10 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
                         if e.code == 429:
                             time.sleep(4 * (attempt + 1))
                             continue
-                        log(f"Blockscout {bs} HTTP {e.code}")
+                        warn(f"Blockscout {bs} HTTP {e.code}")
                         break
                     except Exception as e:
-                        log(f"Blockscout {bs} error {e!r}")
+                        warn(f"Blockscout {bs} error {e!r}")
                         break
             if not logs:
                 ts = int(datetime.fromisoformat(pools[key]["attrs"]["pool_created_at"].replace("Z", "+00:00")).timestamp())
@@ -468,6 +471,7 @@ def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None =
             "tvl": float(a.get("reserve_in_usd") or 0),
             "txs24h": int(tx.get("buys", 0)) + int(tx.get("sells", 0)),
             "traders24h": int(tx.get("buyers", 0)) + int(tx.get("sellers", 0)),
+            "walletsMin24h": wallets_lower_bound(None, int(tx.get("buyers", 0)), int(tx.get("sellers", 0)), None),
             "createdAt": a.get("pool_created_at"),
             "dynamicFee": bool(pk["fee"] & 0x800000), "feeBps": None if pk["fee"] & 0x800000 else pk["fee"] / 100,
             "token0": pk["currency0"], "token1": pk["currency1"], "hook": hook_addr,
@@ -491,7 +495,7 @@ def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None =
         has_series = any(x["vol7d"] is not None for x in pools_)
         tvl = sum(x["tvl"] for x in pools_)
         traders = sum(x["traders24h"] for x in pools_)
-        washed = sum(x["vol24h"] for x in pools_ if is_wash(x["vol24h"], x["traders24h"]))
+        washed = sum(x["vol24h"] for x in pools_ if is_wash_24h(x["vol24h"], x["walletsMin24h"]))
         wash = vol24 > 0 and washed / vol24 >= 0.5
         created = [datetime.fromisoformat(x["createdAt"].replace("Z", "+00:00")) for x in pools_ if x.get("createdAt")]
         first_seen = min(created) if created else None
@@ -548,6 +552,7 @@ def main(argv=None) -> int:
     ap.add_argument("--cache-dir", help="cache GeckoTerminal responses here; reruns are instant")
     ap.add_argument("--spacing", type=float, default=6.5, help="seconds between GeckoTerminal calls")
     args = ap.parse_args(argv)
+    configure()
     now = datetime.now(timezone.utc)
     http = Http(gt_spacing=args.spacing, cache_dir=args.cache_dir)
     if args.hooklist_file:

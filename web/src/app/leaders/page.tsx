@@ -65,7 +65,7 @@ export default async function LeadersPage() {
             <div className={`${s.v} num`}>{usd(t.vol7d)}</div>
           </div>
           <div className={s.tot}>
-            <div className={s.k}>Wallets 24h</div>
+            <div className={s.k}>Wallets 24h (upper bound)</div>
             <div className={`${s.v} num`}>{int(t.wallets24h)}</div>
           </div>
           <div className={s.tot}>
@@ -78,7 +78,7 @@ export default async function LeadersPage() {
           </div>
         </div>
         <div className={s.boards}>
-          <Board title="Most wallets" note="24h" entries={L.wallets} fmt={int} empty="Wallet counts appear after the next pipeline run." />
+          <Board title="Most wallets" note="24h, distinct where known" entries={L.wallets} fmt={int} empty="Wallet counts appear after the next pipeline run." />
           <Board title="Most volume" note="7 days" entries={L.volume} fmt={usd} empty="No volume indexed yet." />
           <Board title="Most TVL" note="now" entries={L.tvl} fmt={usd} empty="No TVL indexed yet." />
           {L.smartMoney.length > 0 && <Board title="Most smart money" note="distinct wallets, 24h" entries={L.smartMoney} fmt={int} empty="" />}

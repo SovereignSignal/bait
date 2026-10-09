@@ -1,8 +1,8 @@
-"""Step 2: per chain with a confirmed subgraph, paginate hooked pools -> pools + pool_snapshots(day)."""
+"""Step 2: per chain with a confirmed subgraph, paginate hooked pools -> pools + pool_snapshots(day - 1); keyless for the rest."""
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
@@ -10,6 +10,10 @@ from ..config import CHAINS
 from ..db import hooks, pool_snapshots, pool_stats, pools, savepoint, upsert
 from ..rules import flags_from_address
 from . import RunContext, log
+
+SERIES_DAYS = 15          # candles per pool (fetch_ohlcv limit=15): the 14 closed days score reads plus the running day
+SNAP_KEYS = ["pool_id", "chain_id", "day"]
+BASE_LOOKBACK_DAYS = 30   # how far back a legacy cumulative is continued from
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
@@ -44,7 +48,11 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
 
 def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
-    """Chains with no subgraph (or no GRAPH_API_KEY): GeckoTerminal + on-chain hook resolution. See keyless.py."""
+    """Chains with no subgraph (or no GRAPH_API_KEY): GeckoTerminal + on-chain hook resolution. See keyless.py.
+
+    Every value goes to the UTC day it belongs to (score.py: windows end the day before the run). Candles give each day's
+    volume. A pool past the OHLCV cap only has GeckoTerminal's rolling 24h volume: it is written as yesterday's, marked
+    estimated, and no other day is touched. Rolling buys + sells become yesterday's swap count (an estimate too)."""
     from .. import keyless as K
     nets = [net for net, (cid, *_rest) in K.CHAINS.items() if cid in chain_ids]
     log.info("snapshot keyless chains=%s", ",".join(K.CHAINS[n][1] for n in nets))
@@ -55,10 +63,9 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     hooked = [p for p in found.values() if p.get("key") and int(p["key"]["hooks"], 16) != 0]
     K.fetch_ohlcv(http, hooked, int(os.environ.get("KEYLESS_OHLCV_CAP", "70")))
 
+    end = ctx.day - timedelta(days=1)
     known = {(r.address, r.chain_id) for r in conn.execute(sa.select(hooks.c.address, hooks.c.chain_id))}
-    new_hooks, pool_rows, snap_rows = {}, [], []
-    stats = ctx.extras.setdefault("keyless_pool_stats", {})
-    tx_counts: dict[tuple[str, int], dict] = {}
+    new_hooks, pool_rows, snap_rows, stat_rows, capped, swaps = {}, [], [], [], [], {}
     for p in hooked:
         a, k = p["attrs"], p["key"]
         cid = K.CHAINS[p["net"]][0]
@@ -73,28 +80,20 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
                           "token0": {"id": k["currency0"], "symbol": sym0}, "token1": {"id": k["currency1"], "symbol": sym1},
                           "fee": k["fee"], "tick_spacing": k["tickSpacing"],
                           "created_at": _ts(a.get("pool_created_at"))})
-        tvl = float(a.get("reserve_in_usd") or 0)
+        tvl = _float(a.get("reserve_in_usd"))   # missing reserve: unknown TVL, never a known $0
         tx = a.get("transactions", {}).get("h24", {})
-        txs24 = int(tx.get("buys", 0)) + int(tx.get("sells", 0))
+        counts = {f"{n}_24h": _int(tx.get(n)) for n in ("buys", "sells", "buyers", "sellers")}
         vol24 = float(a["volume_usd"]["h24"] or 0)
-        stats[(pid, cid)] = (vol24, int(tx.get("buyers", 0)) + int(tx.get("sellers", 0)))
-        tx_counts[(pid, cid)] = {f"{k}_24h": _int(tx.get(k)) for k in ("buys", "sells", "buyers", "sellers")}
-        # Daily candles become a cumulative-volume series so the score step computes 7d/prev-7d exactly as it does for subgraphs.
-        series = [(datetime.fromtimestamp(t, tz=timezone.utc).date(), v) for t, v in (p.get("daily") or [])]
-        if not series:
-            series = [(ctx.day - timedelta(days=1), 0.0), (ctx.day, vol24)]
-        cum = 0.0
-        days = {series[0][0] - timedelta(days=1): 0.0}  # cumulative is end-of-day; seed the day before the first candle
-        for d, v in series:
-            cum += v
-            days[d] = cum
-        if ctx.day not in days:
-            days[ctx.day] = cum
-        for d, c in days.items():
-            if d > ctx.day:
-                continue
-            snap_rows.append({"pool_id": pid, "chain_id": cid, "day": d, "tvl_usd": tvl, "volume_usd_cum": c,
-                              "tx_count_cum": txs24 if d == ctx.day else 0})
+        # vol_source=None (keyless): a same-day rerun must not leave the onchain step's label on a keyless number.
+        # traders_24h = buyers + sellers: an upper bound of distinct wallets (one that bought and sold counts twice).
+        stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": vol24, "vol_24h_rolling": vol24,
+                          "traders_24h": (counts["buyers_24h"] or 0) + (counts["sellers_24h"] or 0), "wallets_24h": None,
+                          "window_end": ctx.now, "vol_source": None, **counts})
+        swaps[(pid, cid)] = (counts["buys_24h"] or 0) + (counts["sells_24h"] or 0)
+        if p.get("daily"):
+            snap_rows += _candle_rows(pid, cid, p["daily"], tvl, ctx.day)
+        else:
+            capped.append((pid, cid, tvl, vol24))
     if new_hooks:
         by_net: dict[str, set[str]] = {}
         for h in new_hooks.values():
@@ -107,19 +106,89 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
         upsert(conn, hooks, rows, keys=["address", "chain_id"], update=[])
     for i in range(0, len(pool_rows), 500):
         upsert(conn, pools, pool_rows[i:i + 500], keys=["pool_id", "chain_id"])
+    vol_cols = ["tvl_usd", "volume_usd_cum", "volume_usd_day", "estimated"]
     for i in range(0, len(snap_rows), 500):
-        upsert(conn, pool_snapshots, snap_rows[i:i + 500], keys=["pool_id", "chain_id", "day"])
-    blank = {"buys_24h": None, "sells_24h": None, "buyers_24h": None, "sellers_24h": None}
-    # vol_source=None (keyless): a same-day rerun must not leave the onchain step's label on a keyless number
-    stat_rows = [{"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": n, "vol_source": None,
-                  **tx_counts.get((pid, cid), blank)}
-                 for (pid, cid), (v, n) in stats.items()]
+        upsert(conn, pool_snapshots, snap_rows[i:i + 500], keys=SNAP_KEYS, update=vol_cols)
+    before = _before(conn, list(swaps), end)
+    est = _carry_forward(capped, end, before)
+    for i in range(0, len(est), 500):
+        upsert(conn, pool_snapshots, est[i:i + 500], keys=SNAP_KEYS, update=vol_cols)
+    _rolling_swaps(conn, swaps, end, before)
     for i in range(0, len(stat_rows), 500):
-        upsert(conn, pool_stats, stat_rows[i:i + 500], keys=["pool_id", "chain_id", "day"])
+        upsert(conn, pool_stats, stat_rows[i:i + 500], keys=SNAP_KEYS)
     out["keyless_chains"] = len(nets)
     out["keyless_pools"] = len(pool_rows)
+    out["estimated_pools"] = len(est)
     out["pools"] += len(pool_rows)
-    log.info("snapshot keyless hooked_pools=%d unlisted_hooks=%d gt_calls=%d", len(pool_rows), len(new_hooks), http.gt_calls)
+    log.info("snapshot keyless hooked_pools=%d unlisted_hooks=%d estimated=%d gt_calls=%d", len(pool_rows), len(new_hooks),
+             len(est), http.gt_calls)
+
+
+def _candle_rows(pid: str, cid: int, candles, tvl: float | None, day: date) -> list[dict]:
+    """Daily candles (UTC days) -> one row per day from the first candle (at most SERIES_DAYS back) through `day`, the
+    running day: that day's candle volume, $0 on a day with no candle (no trades). The running day's row is partial, so it
+    is estimated (a capped night replaces it). Days before the first candle are never written. volume_usd_cum (legacy) is
+    the running sum from the first row."""
+    vols = {datetime.fromtimestamp(t, tz=timezone.utc).date(): float(v) for t, v in candles}
+    d = max(min(vols), day - timedelta(days=SERIES_DAYS - 1))
+    rows, cum = [], 0.0
+    while d <= day:
+        v = vols.get(d, 0.0)
+        cum += v
+        rows.append({"pool_id": pid, "chain_id": cid, "day": d, "tvl_usd": tvl, "volume_usd_cum": cum, "volume_usd_day": v,
+                     "estimated": d >= day})   # the running day's candle is partial: replaceable tomorrow
+        d += timedelta(days=1)
+    return rows
+
+
+def _before(conn, keys: list[tuple[str, int]], end: date) -> dict[tuple[str, int], tuple]:
+    """Per pool: (last volume_usd_cum before `end`, last tx_count_cum before `end`, whether `end` holds a candle row).
+    estimated NULL (a row from before 0012) is not a candle row: it is replaced."""
+    want, out = set(keys), {}
+    pids = sorted({p for p, _ in keys})
+    for i in range(0, len(pids), 500):
+        q = (sa.select(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id, pool_snapshots.c.day, pool_snapshots.c.volume_usd_cum,
+                       pool_snapshots.c.tx_count_cum, pool_snapshots.c.estimated)
+             .where(pool_snapshots.c.pool_id.in_(pids[i:i + 500]), pool_snapshots.c.day <= end,
+                    pool_snapshots.c.day >= end - timedelta(days=BASE_LOOKBACK_DAYS))
+             .order_by(pool_snapshots.c.day))
+        for r in conn.execute(q):
+            k = (r.pool_id, r.chain_id)
+            if k not in want:
+                continue
+            vol, txs, candle = out.get(k, (None, None, False))
+            if r.day < end:
+                out[k] = (r.volume_usd_cum if r.volume_usd_cum is not None else vol,
+                          r.tx_count_cum if r.tx_count_cum is not None else txs, candle)
+            else:
+                out[k] = (vol, txs, r.estimated is False)
+    return out
+
+
+def _carry_forward(capped: list[tuple[str, int, float | None, float]], end: date, before: dict) -> list[dict]:
+    """Rows for pools past the OHLCV cap: GeckoTerminal's rolling 24h volume (it ends at run time, about 6 h into today) as
+    `end`'s volume, estimated. Only `end` is written, so a pool that leaves the cap never zeroes its history, and a candle
+    row already there wins. volume_usd_cum (legacy) continues from the last known value."""
+    rows = []
+    for pid, cid, tvl, vol24 in capped:
+        base, _, candle = before.get((pid, cid), (None, None, False))
+        if not candle:
+            rows.append({"pool_id": pid, "chain_id": cid, "day": end, "tvl_usd": tvl, "volume_usd_cum": (base or 0.0) + vol24,
+                         "volume_usd_day": vol24, "estimated": True})
+    return rows
+
+
+def _rolling_swaps(conn, swaps: dict[tuple[str, int], int], end: date, before: dict) -> None:
+    """GeckoTerminal's rolling 24h buys + sells -> `end`'s tx_count_day (an estimate, like the rolling volume; the onchain
+    step replaces it with exact counts on ready chains). tx_count_cum (legacy; is_spam's lifetime count) continues from the
+    last known value. Only existing `end` rows are touched."""
+    params = [{"p": pid, "c": cid, "n": n, "cum": (before.get((pid, cid), (None, None, False))[1] or 0) + n}
+              for (pid, cid), n in swaps.items()]
+    if params:
+        conn.execute(sa.update(pool_snapshots)
+                     .where(pool_snapshots.c.pool_id == sa.bindparam("p"), pool_snapshots.c.chain_id == sa.bindparam("c"),
+                            pool_snapshots.c.day == end)
+                     .values(tx_count_day=sa.bindparam("n"), tx_count_cum=sa.bindparam("cum")), params)
 
 
 def keyless_http(ctx: RunContext):
@@ -152,6 +221,11 @@ def _snapshot_chain(conn, ctx, g, ch) -> int:
             log.warning("snapshot chain=%s subgraph hasIndexingErrors=true block=%s", ch.slug, meta.get("block", {}).get("number"))
     except Exception as e:
         log.warning("snapshot chain=%s _meta unavailable: %s", ch.slug, e)
+    # The cumulative is read at run time (06:00 UTC): it is written as the closed day `end`, about 6 h late (estimated).
+    end = ctx.day - timedelta(days=1)
+    prev = {r.pool_id: r for r in conn.execute(
+        sa.select(pool_snapshots.c.pool_id, pool_snapshots.c.volume_usd_cum, pool_snapshots.c.tx_count_cum)
+        .where(pool_snapshots.c.chain_id == ch.chain_id, pool_snapshots.c.day == end - timedelta(days=1)))}
     pool_rows, snap_rows = [], []
     for p in g.hooked_pools(ch.subgraph_id):
         pid = p["id"].lower()
@@ -161,10 +235,12 @@ def _snapshot_chain(conn, ctx, g, ch) -> int:
             "fee": _int(p.get("feeTier")), "tick_spacing": _int(p.get("tickSpacing")),
             "created_at": datetime.fromtimestamp(int(p["createdAtTimestamp"]), tz=timezone.utc) if p.get("createdAtTimestamp") else None,
         })
+        vol, txs, b = _float(p.get("volumeUSD")), _int(p.get("txCount")), prev.get(pid)
         snap_rows.append({
-            "pool_id": pid, "chain_id": ch.chain_id, "day": ctx.day,
-            "tvl_usd": _float(p.get("totalValueLockedUSD")), "volume_usd_cum": _float(p.get("volumeUSD")),
-            "tx_count_cum": _int(p.get("txCount")),
+            "pool_id": pid, "chain_id": ch.chain_id, "day": end, "tvl_usd": _float(p.get("totalValueLockedUSD")),
+            "volume_usd_cum": vol, "tx_count_cum": txs,   # txCount includes liquidity modifications
+            "volume_usd_day": _delta(vol, b.volume_usd_cum if b else None),
+            "tx_count_day": _delta(txs, b.tx_count_cum if b else None), "estimated": True,
         })
     for i in range(0, len(pool_rows), 500):
         upsert(conn, pools, pool_rows[i:i + 500], keys=["pool_id", "chain_id"])
@@ -178,3 +254,8 @@ def _int(v):
 
 def _float(v):
     return float(v) if v not in (None, "") else None
+
+
+def _delta(cur, before):
+    """That day's amount from two cumulatives; None (unknown) when either is missing, never the all-time total."""
+    return None if cur is None or before is None else max(cur - before, 0)
