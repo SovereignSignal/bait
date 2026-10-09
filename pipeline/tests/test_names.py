@@ -284,9 +284,16 @@ def test_retire_keeps_receipts_and_fills_missing_enrichment_on_the_target(conn, 
     assert urls == ["https://news.example/1", "https://news.example/2"]
 
 
-def test_backfill_unlisted_aliases_covers_hooks_the_hooklist_listed_later(conn, ctx):
+def test_backfill_unlisted_aliases_covers_only_hooks_that_once_had_an_unlisted_slug(conn, ctx):
+    from bait.steps import group, ingest
+    ingest.run(conn, ctx)
+    out = group.run(conn, ctx)
+    assert out["aliases_backfilled"] == 0                                # the sample was listed from the start
     named = insert_project(conn, "OuroborosHook", NOW, slug="ouroboroshook")
-    insert_hook(conn, "0x7bc2af6fb9a989505e9629470869a19143532aec", 4663, project_id=named)
-    conn.execute(sa.update(db.hooks).values(hooklisted=True))         # found on-chain first, listed since
+    found = "0x7bc2af6fb9a989505e9629470869a19143532aec"
+    insert_hook(conn, found, 4663, project_id=named)                      # found on-chain, looked up, listed since
+    insert_hook(conn, "0x" + "5" * 40, 4663, project_id=named)            # listed from the start: never unlisted
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.chain_id == 4663).values(hooklisted=True))
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == found).values(name_checked_at=NOW))
     assert names.backfill_unlisted_aliases(conn, NOW) == 1
     assert _aliases(conn) == {"unlisted-hook-0x7bc2-2aec": (named, "backfill")}
