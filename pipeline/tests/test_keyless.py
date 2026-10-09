@@ -25,3 +25,19 @@ def test_categorize_keywords_then_dynamic_fee_then_other():
     assert categorize("Executes limit orders on-chain", {}, {}) == "orders"
     assert categorize("plain hook", {}, {"dynamicFee": True}) == "dynamic-fee"
     assert categorize("plain hook", {}, {}) == "other"
+
+
+def test_keyless_and_blockscout_write_the_same_code_hash():
+    import httpx
+    from bait import keyless as K
+    from bait.clients.blockscout import Blockscout
+    from bait.rules import code_hash
+    code, a = "0x6080604052", "0x" + "1" * 40
+
+    class Rpc:
+        def rpc_batch(self, url, calls):
+            return [{"id": c["id"], "result": code} for c in calls]
+
+    bs = Blockscout(http_client=httpx.Client(transport=httpx.MockTransport(
+        lambda req: httpx.Response(200, json={"deployed_bytecode": code, "is_verified": False}, request=req))))
+    assert K.code_hashes(Rpc(), {"base": {a}})[("base", a)] == bs.fetch_code(8453, a).code_hash == code_hash(code)

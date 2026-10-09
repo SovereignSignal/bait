@@ -23,7 +23,7 @@ import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from .rules import flags_from_address, normalize_name, routable, score_trending, slugify
+from .rules import code_hash as canonical_code_hash, flags_from_address, normalize_name, routable, score_trending, slugify
 
 GT = "https://api.geckoterminal.com/api/v2"
 HOOKLIST = "https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json"
@@ -350,7 +350,7 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
 
 
 def code_hashes(http: Http, addrs_by_net: dict[str, set[str]]) -> dict[tuple[str, str], str]:
-    """sha1 of deployed bytecode per (net, address); clones of one implementation share it."""
+    """Canonical code_hash (rules.code_hash) per (net, address); clones of one implementation share it."""
     out: dict[tuple[str, str], str] = {}
     for net, addrs in addrs_by_net.items():
         addrs = sorted(addrs)
@@ -359,8 +359,9 @@ def code_hashes(http: Http, addrs_by_net: dict[str, set[str]]) -> dict[tuple[str
         res = {r.get("id"): r.get("result") for r in http.rpc_batch(rpc, calls)}
         for i, a in enumerate(addrs):
             code = res.get(i)
-            if code and code != "0x":
-                out[(net, a)] = hashlib.sha1(code.encode()).hexdigest()
+            h = canonical_code_hash(code) if code and code != "0x" else None
+            if h:
+                out[(net, a)] = h
         log(f"{CHAINS[net][1]}: bytecode for {sum(1 for a in addrs if (net, a) in out)}/{len(addrs)} hooks")
     return out
 
