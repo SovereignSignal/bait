@@ -21,6 +21,12 @@ export function useFeedQuery(): FeedQuery {
 }
 
 function Delta({ r }: { r: RowView }) {
+  if (r.isWash)
+    return (
+      <span className="b b-r" title="Wash-like volume: listed here, never ranked.">
+        Wash
+      </span>
+    );
   if (r.isNew) return <span className="b b-p">New</span>;
   const d = deltaText(r);
   if (!d) return <span className="mut3">—</span>;
