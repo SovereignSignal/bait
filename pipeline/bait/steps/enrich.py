@@ -1,6 +1,7 @@
 """Step 5 (enrich): projects with enriched_at null -> Parallel (optional) -> Blockscout verified source -> Claude what_line + category."""
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta
 
 import sqlalchemy as sa
@@ -23,7 +24,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out["candidates"] = len(todo)
     # Parallel tasks take ~1-2 minutes each; run them side by side (PARALLEL_CONCURRENCY, default 8) before the
     # per-project loop. The whole batch is budget-checked up front, so concurrency cannot overshoot the budget.
-    par_results, waiting = _parallel_batch(conn, ctx, par, todo, out) if par is not None else ({}, set())
+    _, waiting = _parallel_batch(conn, ctx, par, todo, out) if par is not None else ({}, set())
     # the batch may have tombstoned or collected Parallel data: re-read enrichment rather than trust the stale rows
     fresh_enr = {r.id: r.enrichment for r in conn.execute(
         sa.select(projects.c.id, projects.c.enrichment).where(projects.c.id.in_([p.id for p in todo])))} if todo else {}
@@ -41,9 +42,6 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         }
         enrichment = dict(fresh_enr.get(p.id) or {})
         try:
-            if "parallel" not in enrichment and par_results.get(p.id):
-                enrichment["parallel"] = par_results[p.id]
-                out["parallel"] += 1
             if bs is not None and "source" not in enrichment:
                 src = _verified_source(bs, hs)
                 if src:
@@ -113,8 +111,20 @@ def _parse_iso(s):
         return None
 
 
+_SQLITE_WRITE = threading.Lock()
+
+
 def _persist_enrichment(conn, pid: int, enrichment: dict) -> None:
-    conn.execute(sa.update(projects).values(enrichment=enrichment).where(projects.c.id == pid))
+    """Durable write of paid facts. Postgres: own connection + commit, so a later exception, budget stop, or kill
+    in this step cannot roll back a result we already paid for. SQLite allows one writer and the step holds it,
+    so the step connection is used (tests), serialised because worker threads share it."""
+    stmt = sa.update(projects).values(enrichment=enrichment).where(projects.c.id == pid)
+    if conn.dialect.name == "postgresql":
+        with conn.engine.begin() as c:
+            c.execute(stmt)
+    else:
+        with _SQLITE_WRITE:
+            conn.execute(stmt)
 
 
 def _mark_failed(conn, p, enr: dict, run_id: str, reason: str, out: dict) -> None:
@@ -178,6 +188,7 @@ def _parallel_batch(conn, ctx, par, todo, out) -> tuple[dict, set]:
             if not run_id:
                 run_id = par.submit(p.name, hints[p.id])
                 submitted[p.id] = run_id
+                _persist_enrichment(conn, p.id, dict(p.enrichment or {}) | {"parallel_run_id": run_id, "parallel_run_at": ctx.now.isoformat()})
             return p.id, par.result(run_id)
         except RunGone:
             gone[p.id] = run_id
@@ -194,6 +205,14 @@ def _parallel_batch(conn, ctx, par, todo, out) -> tuple[dict, set]:
         workers = 8
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = {pid: res for pid, res in ex.map(one, need) if res}
+    by_id = {p.id: p for p in need}
+    for pid, res in results.items():          # paid output is durable before any Claude call can fail
+        enr = dict(by_id[pid].enrichment or {})
+        enr.pop("parallel_run_id", None)
+        enr.pop("parallel_run_at", None)
+        enr["parallel"] = res
+        _persist_enrichment(conn, pid, enr)
+        out["parallel"] += 1
     # Remember paid runs whose output did not arrive in time, so the next run collects them instead of paying again.
     for p in need:
         if p.id in gone:
