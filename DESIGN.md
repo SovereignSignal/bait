@@ -208,7 +208,7 @@ Nightly step `activity`, right after `snapshot`: who actually uses each hook.
 - **pool_stats** gains `buys_24h`, `sells_24h`, `buyers_24h`, `sellers_24h` (GeckoTerminal `transactions.h24`,
   keyless path). Existing databases get the columns from `db.add_missing_columns()` on the next run;
   DDL in `db/migrations/0003_activity.sql`.
-- **pool_top_wallets** `(pool_id, chain_id, day, address)`: for the top `ACTIVITY_POOLS` (30) non-wash pools by 24h
+- **pool_top_wallets** `(pool_id, chain_id, day, address)`: for the top `ACTIVITY_POOLS` (30) non-wash pools (plus up to `ACTIVITY_WASH_POOLS` (10) 24h-wash candidates) by 24h
   volume, GeckoTerminal's last ~300 trades are rolled up per wallet (USD volume, trades, buys, sells, last trade).
   Top 20 wallets per pool per day; 14 days retained.
 - **wallet_labels** `(address, chain_id)`: Nansen labels (JSON list of strings), `smart_money` flag, `source`, `as_of`.
