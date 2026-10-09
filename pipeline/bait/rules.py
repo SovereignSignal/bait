@@ -223,7 +223,7 @@ def is_spam(pool_stats: list[tuple[float, int]], volume: float = 0.0) -> bool:
 # --- wash rules (DESIGN.md "Wash rules"). A project is wash-like for a reason when the pools that rule flags carry
 # >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
 # "unverified" is not a rule: a project that only escaped the spam rule by moving >= $1M and has no wallet data at all.
-WASH_REASONS = ("24h", "7d", "vol_tvl", "no_liquidity", "symmetric", "unverified")
+WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "unverified")
 WASH_SHARE = 0.5
 WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
 
@@ -286,6 +286,16 @@ def is_wash_7d(vol_7d: float, wallets_7d: int | None, tvl: float | None, symmetr
     """wallets_7d None (unknown, e.g. pruned pool_wallet_day rows) never matches: no vacuous "<= 10 wallets"."""
     return (wallets_7d is not None and vol_7d >= WASH_MIN_VOL_7D and wallets_7d <= WASH_MAX_WALLETS_7D
             and corroborated(vol_7d, tvl, symmetric, custom))
+
+
+# One or two wallets moving >= $1M in 7 days through a pool: no TVL corroboration needed, custom-accounting hooks
+# included (Optimism 0x69af...7fff: $436M from 1 wallet in 8 swaps). An RFQ / private hook with 5-10 real counterparties
+# stays clear. wallets must be a known distinct count (pool_wallet_day, or exact pool_stats days), never a lower bound.
+WASH_CONCENTRATED_WALLETS = 2
+
+
+def is_wash_concentrated(vol_7d: float, wallets: int | None) -> bool:
+    return wallets is not None and vol_7d >= WASH_MIN_VOL_7D and wallets <= WASH_CONCENTRATED_WALLETS
 
 
 # Volume far above liquidity from few wallets. Launchpads churn many times their liquidity too (Base 0x0f48 family:
