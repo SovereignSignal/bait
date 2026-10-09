@@ -47,3 +47,19 @@ def test_keyless_rows_feed_scoring_and_wash_is_excluded(conn, ctx, monkeypatch):
     assert round(real_row.vol_7d) == 70_000 and round(real_row.vol_7d_prev) == 35_000
     assert real_row.score_trending > 0 and not real_row.is_spam
     assert wash_row.is_spam and wash_row.score_trending == 0 and res["wash"] == 1
+
+
+def test_keyless_rerun_clears_a_stale_onchain_volume_label(conn, ctx, monkeypatch):
+    monkeypatch.setenv("KEYLESS", "1")
+    t = int(datetime(ctx.day.year, ctx.day.month, ctx.day.day, tzinfo=timezone.utc).timestamp())
+    real = _pool("0x" + "a" * 64, "0x" + "b" * 40, 10_000, 400, "2026-01-01T00:00:00Z", [(t, 10_000.0)])
+    monkeypatch.setattr(K, "collect", lambda *a, **k: {("base", real["attrs"]["address"]): real})
+    for name in ("resolve_hooks", "resolve_via_logs", "fetch_ohlcv"):
+        monkeypatch.setattr(K, name, lambda *a, **k: None)
+    monkeypatch.setattr(K, "code_hashes", lambda *a, **k: {})
+    # the onchain step ran earlier today and labelled the row; a same-day snapshot rerun rewrites vol_24h from keyless
+    conn.execute(sa.insert(db.pool_stats).values(pool_id=real["attrs"]["address"], chain_id=8453, day=ctx.day, vol_24h=1.0,
+                                                 traders_24h=1, vol_source="onchain"))
+    snapshot.run(conn, ctx)
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == real["attrs"]["address"])).one()
+    assert (st.vol_24h, st.vol_source) == (10_000.0, None)

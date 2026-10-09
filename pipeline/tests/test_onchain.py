@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 
 from bait import db
-from bait.rules import flags_from_address
+from bait.rules import custom_accounting, flags_from_address
 from bait.steps import onchain, score
 from tests.conftest import DAY, NOW, insert_hook
 
@@ -21,8 +21,9 @@ def _v4(conn, chain_id, pool_id, hook, block):
         sqrt_price_x96="1", tick=0, block_number=block, block_time=datetime(2026, 8, 1, tzinfo=timezone.utc), tx_hash="0x01"))
 
 
-def _daily(conn, chain_id, pool_id, day, swaps, wallets, vol):
-    conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=chain_id, pool_id=pool_id, day=day, swaps=swaps, wallets=wallets, volume_usd=vol))
+def _daily(conn, chain_id, pool_id, day, swaps, wallets, vol, unpriced=0):
+    conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=chain_id, pool_id=pool_id, day=day, swaps=swaps, wallets=wallets, volume_usd=vol,
+                                                         unpriced_swaps=unpriced))
 
 
 def _setup(conn, coverage_days=20, backfilled=True, updated=NOW - timedelta(hours=1)):
@@ -37,7 +38,8 @@ def _setup(conn, coverage_days=20, backfilled=True, updated=NOW - timedelta(hour
         _daily(conn, 8453, PA, d, 9 if d == REF else 2, 7 if d == REF else 1, 500.0 if d == REF else 100.0)
     _daily(conn, 8453, PC, REF, 4, 2, 50.0)
     conn.execute(sa.insert(db.indexer_state).values(chain_id=8453, initialize_block=10, swap_block=10, head_block=10,
-                                                    backfilled=backfilled, updated_at=updated))
+                                                    backfilled=backfilled, updated_at=updated,
+                                                    swap_block_time=NOW - timedelta(hours=1)))
     # keyless already wrote PA for today: a 16-day candle series on another scale, TVL from GeckoTerminal, 24h stats
     for i in range(15, -1, -1):
         conn.execute(sa.insert(db.pool_snapshots).values(pool_id=PA, chain_id=8453, day=DAY - timedelta(days=i), tvl_usd=12345.0,
@@ -124,3 +126,86 @@ def test_new_hook_cap_takes_busiest_first(conn, ctx, monkeypatch):
     assert out["hooks_added"] == 1 and out["hooks_deferred"] == 1
     assert {r.address for r in conn.execute(sa.select(db.hooks))} == {HOOK, HOOK2}     # HOOK2 has swaps, HOOK3 none
     assert {r.pool_id for r in conn.execute(sa.select(db.pools))} == {PA, PC}           # PE waits for its hook
+
+
+def test_stuck_swap_cursor_keeps_keyless_even_when_updated_at_is_fresh(conn, ctx):
+    _setup(conn)                                   # Initialize commits kept updated_at fresh...
+    conn.execute(sa.update(db.indexer_state).values(swap_block_time=datetime(2026, 10, 5, 18, tzinfo=timezone.utc)))
+    out = onchain.run(conn, ctx)                   # ...but swaps stopped at 10-05 18:00, inside REF (10-05)
+    assert out["chains_stale"] == 1 and out["pools_usage"] == 0
+    assert conn.execute(sa.select(db.pool_stats.c.vol_24h).where(db.pool_stats.c.pool_id == PA)).scalar() == 999.0
+
+
+CUSTOM, PF = "0x" + "f" * 36 + "0088", "0x" + "f" * 64          # beforeSwap + beforeSwapReturnsDelta (bit 3)
+
+
+def test_custom_accounting_hook_keeps_keyless_volume_and_takes_onchain_wallets(conn, ctx):
+    assert custom_accounting(CUSTOM) and not custom_accounting(HOOK2) and not custom_accounting("0x" + "1" * 36 + "0044")
+    _setup(conn)
+    insert_hook(conn, CUSTOM, 8453, name="Curve Hook")
+    _v4(conn, 8453, PF, CUSTOM, 400)
+    for i in range(20, -1, -1):
+        _daily(conn, 8453, PF, DAY - timedelta(days=i), 5, 3, 0.0)         # the Swap event says 0/0: the hook took the trade
+    for i in range(15, -1, -1):
+        conn.execute(sa.insert(db.pool_snapshots).values(pool_id=PF, chain_id=8453, day=DAY - timedelta(days=i), tvl_usd=1.0,
+                                                         volume_usd_cum=5000.0 - i, tx_count_cum=0))
+    conn.execute(sa.insert(db.pool_stats).values(pool_id=PF, chain_id=8453, day=DAY, vol_24h=777.0, traders_24h=1))
+    onchain.run(conn, ctx)
+    st = {r.pool_id: r for r in conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.day == DAY))}
+    assert (st[PF].vol_24h, st[PF].traders_24h, st[PF].vol_source) == (777.0, 3, "hook")
+    assert (st[PA].vol_24h, st[PA].vol_source) == (500.0, "onchain")
+    assert _snaps(conn, PF)[DAY][0] == 5000.0                               # keyless series untouched
+
+
+def test_mostly_unpriced_pool_day_does_not_override_and_series_volume_is_null(conn, ctx):
+    _setup(conn)
+    conn.execute(sa.update(db.pool_daily_onchain).where(db.pool_daily_onchain.c.pool_id == PC).values(unpriced_swaps=3))
+    onchain.run(conn, ctx)
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PC)).one()
+    assert (st.vol_24h, st.traders_24h, st.vol_source) == (None, 2, "unpriced")
+    assert _snaps(conn, PC)[DAY][:2] == (None, 4)                           # swap count kept, volume unknown
+
+
+def test_pools_copy_is_incremental_and_catches_up_hooks_known_later(conn, ctx, monkeypatch):
+    monkeypatch.setenv("ONCHAIN_MAX_NEW_HOOKS", "1")
+    _setup(conn)
+    assert onchain.run(conn, ctx)["pools"] == 2                     # PA, PC; HOOK3 deferred, PE now below the watermark
+    out = onchain.run(conn, ctx)                                    # HOOK3 known now: the catch-up copies its pool
+    assert out["pools"] == 1 and (PE, 143) in {(r.pool_id, r.chain_id) for r in conn.execute(sa.select(db.pools))}
+    assert onchain.run(conn, ctx)["pools"] == 0                     # nothing new: nothing read
+    _v4(conn, 8453, "0x" + "9" * 64, HOOK, 500)
+    assert onchain.run(conn, ctx)["pools"] == 1
+
+
+def _pool_keys(conn):
+    return {(r.pool_id, r.chain_id) for r in conn.execute(sa.select(db.pools))}
+
+
+def test_pools_inserted_below_the_watermark_after_a_copy_are_copied(conn, ctx):
+    _setup(conn)
+    onchain.run(conn, ctx)                                          # 8453 watermark = block 200
+    late = "0x" + "7" * 64
+    _v4(conn, 8453, late, HOOK, 50)                                 # a backfill inserts an older Initialize of a known hook
+    onchain.run(conn, ctx)
+    assert (late, 8453) in _pool_keys(conn)
+
+
+def test_deferred_hook_whose_first_pool_came_from_snapshot_still_gets_its_other_pools(conn, ctx, monkeypatch):
+    monkeypatch.setenv("ONCHAIN_MAX_NEW_HOOKS", "1")
+    _setup(conn)
+    onchain.run(conn, ctx)                                          # HOOK3 deferred; PE (block 300) passes the watermark
+    insert_hook(conn, HOOK3, 143, name="Snapshotted")               # keyless snapshot adds the hook and one of its pools
+    conn.execute(sa.insert(db.pools).values(pool_id="0x" + "6" * 64, chain_id=143, hook_address=HOOK3))
+    onchain.run(conn, ctx)
+    assert (PE, 143) in _pool_keys(conn)
+
+
+def test_an_earlier_mostly_unpriced_day_makes_volume_unknown_from_that_day_in_series_and_stats(conn, ctx):
+    _setup(conn)
+    bad = REF - timedelta(days=3)
+    _daily(conn, 8453, PC, bad, 4, 1, 0.0, unpriced=4)              # REF itself is priced (4 swaps, $50)
+    onchain.run(conn, ctx)
+    s = _snaps(conn, PC)
+    assert s[bad - timedelta(days=1)][0] == 0.0 and s[bad][0] is None and s[DAY][:2] == (None, 8)
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PC)).one()
+    assert (st.vol_24h, st.traders_24h, st.vol_source) == (None, 2, "unpriced")   # agrees with the series at REF

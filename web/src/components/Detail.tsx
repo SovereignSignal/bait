@@ -169,7 +169,7 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
   );
 }
 
-function Bars({ series }: { series: number[] }) {
+function Bars({ series }: { series: (number | null)[] }) {
   if (series.length < 2) return <div className={s.chartEmpty}>Daily history starts with the next snapshot.</div>;
   const W = 640;
   const H = 170;
@@ -178,7 +178,7 @@ function Bars({ series }: { series: number[] }) {
   const pt = 12;
   const pb = 4;
   const n = series.length;
-  const max = Math.max(...series) || 1;
+  const max = Math.max(0, ...series.filter((v): v is number => v != null)) || 1;
   const bw = (W - pl - pr) / n;
   return (
     <>
@@ -186,6 +186,7 @@ function Bars({ series }: { series: number[] }) {
       <line className={s.gl} x1={pl} x2={W - pr} y1={pt} y2={pt} />
       <line className={s.gl} x1={pl} x2={W - pr} y1={H - pb} y2={H - pb} />
       {series.map((v, i) => {
+        if (v == null) return null; // volume unknown that day: a gap, not a $0 bar
         const bh = ((H - pt - pb) * v) / max;
         return (
           <rect
