@@ -75,7 +75,8 @@ chains and the last 14 days of swaps, then follows the heads. Watch the logs for
 is caught up, and `indexer_state.backfilled` flips to true per chain. Optional: `INDEXER_CHAINS` (subset),
 `INDEXER_MAX_PAGES` (40 HyperSync pages per chain per loop).
 
-Deploying the package-5 indexer over an older one overlaps old code (no lock, no compare-and-set) with new once: stop the
-indexer service first or accept one possible double-counted page, and expect the first start to block `v4_pools` inserts
-briefly while it builds `v4_pools_chain_block_idx`.
+Deploying the package-5 indexer over an older one: the indexer must be stopped before this deploy (the orchestrator
+removes the running deployment first). Otherwise the old process (no lock, no compare-and-set) runs next to the new one,
+and every page the new process wins is duplicated until the old process exits. Expect the first start to block
+`v4_pools` inserts briefly while it builds `v4_pools_chain_block_idx`.
 
