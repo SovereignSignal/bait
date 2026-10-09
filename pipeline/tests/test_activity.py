@@ -109,3 +109,16 @@ def test_additive_migration_on_sqlite_is_idempotent(tmp_path):
     assert db.add_missing_columns(e, [("nope", "x", "integer")]) == []
 
 
+
+
+def test_activity_records_distinct_wallets_only_when_it_saw_every_trade_of_the_day(conn, ctx):
+    http = _seed(conn)
+    ctx.extras["keyless_http"] = http
+    out = activity.run(conn, ctx)
+    st = {r.pool_id: r.wallets_24h for r in conn.execute(sa.select(db.pool_stats))}
+    assert (st[POOL_A], st[POOL_B], st[POOL_W], out["wallets_distinct"]) == (25, 3, None, 2)   # A: 26 trades, 25 wallets
+    http.responses[f"/networks/base/pools/{POOL_A}/trades"] = {"data": [
+        _trade(_w(i % 7), 10, "buy", "2026-10-06T01:00:00Z") for i in range(300)]}             # the cap: maybe not the whole day
+    conn.execute(sa.update(db.pool_stats).values(wallets_24h=None))
+    activity.run(conn, ctx)
+    assert conn.execute(sa.select(db.pool_stats.c.wallets_24h).where(db.pool_stats.c.pool_id == POOL_A)).scalar() is None

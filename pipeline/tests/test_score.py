@@ -220,3 +220,40 @@ def test_windows_schema_is_additive_on_an_existing_database():
             "pool_stats.vol_24h_rolling", "pool_stats.wallets_24h", "pool_stats.window_end"} <= added
     with e.connect() as c:
         assert c.execute(sa.text("SELECT is_wash, wash_reason FROM project_daily")).one() == (0, None)
+
+
+def test_project_wallets_distinct_on_ready_chains_upper_bound_elsewhere(conn, ctx):
+    # StablePair-like: six GeckoTerminal pools whose buyers + sellers sum to 1,142 (534+511+45+31+12+9)
+    sp = insert_project(conn, "StablePair", first_seen=NOW - timedelta(days=60), slug="stablepair")
+    insert_hook(conn, "0xsp", 1, project_id=sp, name="StablePair")
+    for i, (b, s) in enumerate([(300, 234), (300, 211), (25, 20), (16, 15), (6, 6), (5, 4)]):
+        pool = f"0xsp{i}"
+        insert_pool(conn, pool, 1, "0xsp", created=NOW - timedelta(days=60))
+        insert_snap(conn, pool, 1, END, 1_000, 10.0, 1, vol_day=10.0, tx_day=1)
+        conn.execute(sa.insert(db.pool_stats).values(pool_id=pool, chain_id=1, day=DAY, vol_24h=10.0, traders_24h=b + s,
+                                                     buyers_24h=b, sellers_24h=s))
+    solo = insert_project(conn, "Solo", first_seen=NOW - timedelta(days=60), slug="solo")
+    insert_hook(conn, "0xso", 1, project_id=solo, name="Solo")
+    insert_pool(conn, "0xsop", 1, "0xso", created=NOW - timedelta(days=60))
+    insert_snap(conn, "0xsop", 1, END, 1_000, 10.0, 1, vol_day=10.0, tx_day=1)
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xsop", chain_id=1, day=DAY, vol_24h=10.0, traders_24h=70, wallets_24h=40))
+    desk = _onchain_project(conn, "Desk", "0xdp", wallets=2, vol_per_day=100.0)
+    insert_pool(conn, "0xdp2", 10, "0xDesk", created=NOW - timedelta(days=60))
+    for w in ("0xw0", "0xw1"):                     # the same two wallets in a second pool count once
+        conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id="0xdp2", day=END, address=w, swaps=1))
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    assert (daily(conn, sp).wallets_24h, daily(conn, sp).wallets_exact) == (1_142, False)
+    assert (daily(conn, solo).wallets_24h, daily(conn, solo).wallets_exact) == (40, True)
+    assert (daily(conn, desk).wallets_24h, daily(conn, desk).wallets_exact) == (2, True)
+
+
+def test_24h_wash_uses_a_wallet_lower_bound_not_buyers_plus_sellers(conn, ctx):
+    p = insert_project(conn, "Ouro", first_seen=NOW - timedelta(days=60), slug="ouro")
+    insert_hook(conn, "0xou", 4663, project_id=p, name="Ouro")
+    insert_pool(conn, "0xoup", 4663, "0xou", created=NOW - timedelta(days=60))
+    insert_snap(conn, "0xoup", 4663, END, 1_000, 1.0, 1, vol_day=900_000.0, tx_day=500)
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xoup", chain_id=4663, day=DAY, vol_24h=900_000.0, traders_24h=26,
+                                                 buyers_24h=13, sellers_24h=13))
+    out = score.run(conn, ctx)
+    assert out["wash"] == 1                        # 13 buyers + 13 sellers is at least 13 wallets, not 26 > 25

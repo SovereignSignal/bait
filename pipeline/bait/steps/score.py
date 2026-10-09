@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 from ..db import (as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pool_wallet_day, pools, project_daily,
                   projects, upsert)
-from ..rules import is_new, is_spam, is_wash_7d, score_trending
+from ..rules import is_new, is_spam, is_wash_24h, is_wash_7d, score_trending, wallets_lower_bound
 from . import RunContext, log
 from .onchain import ready_chains
 
@@ -75,17 +75,18 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
     # 24h wash rule, per pool from pool_stats(day); a project is wash-like when wash pools carry most of its 24h volume
     # (summing wallets across a merged family would let two wash pools pass as one busy project).
-    from ..keyless import is_wash
     per: dict[int, list[float]] = {}
     for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day)):
         key = (r.pool_id, r.chain_id)
         if key in pool_project and r.vol_24h is not None and key not in unknown_vol:
             t = per.setdefault(pool_project[key][0], [0.0, 0.0])
             t[0] += r.vol_24h
-            if is_wash(r.vol_24h, r.traders_24h or 0):
+            if is_wash_24h(r.vol_24h, wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h)):
                 t[1] += r.vol_24h
     wash = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
-    wash7 = _wash_7d(conn, end, pool_project, set(ready_chains(conn, ctx)), unknown_vol, pool_tvl)
+    ready = ready_chains(conn, ctx)
+    wash7 = _wash_7d(conn, end, pool_project, set(ready), unknown_vol, pool_tvl)
+    wallets = _wallets(conn, day, end, ready, pool_project)
     wash |= wash7
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
@@ -103,6 +104,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"],
             "vol_24h": a["vol24"], "vol_7d": a["vol7"], "vol_7d_prev": a["vol7p"],
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
+            "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
             "score_trending": 0.0 if (pid in wash or young) else score_trending(a["vol7"], a["vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
             "is_new": pid not in wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
@@ -137,6 +139,31 @@ def _swaps(rows: dict, w: tuple[date, date], created: date | None) -> tuple[int,
             known = False
         d += _D
     return total, known
+
+
+def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -> dict[int, tuple[int, bool]]:
+    """Wallets per project for the 24h figure, and whether the number is a distinct count across the project's pools.
+    Ready chains: distinct addresses on `end` from pool_wallet_day, one union over the project's pools. Other pools:
+    pool_stats(day).wallets_24h (distinct within the pool, rolling 24 h), else traders_24h (buyers + sellers). Adding
+    pools, or buyers to sellers, can count a wallet twice: then the number is an upper bound (exact False)."""
+    parts: dict[int, list[tuple[int, bool]]] = {}
+    if ready:
+        q = (sa.select(hooks.c.project_id, sa.func.count(sa.distinct(pool_wallet_day.c.address)).label("n"))
+             .select_from(pool_wallet_day
+                          .join(pools, (pools.c.pool_id == pool_wallet_day.c.pool_id) & (pools.c.chain_id == pool_wallet_day.c.chain_id))
+                          .join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
+             .where(pool_wallet_day.c.day == end, pool_wallet_day.c.chain_id.in_(ready), hooks.c.project_id.is_not(None))
+             .group_by(hooks.c.project_id))
+        for r in conn.execute(q):
+            parts[r.project_id] = [(r.n, True)]
+    for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day)):
+        key = (r.pool_id, r.chain_id)
+        if key not in pool_project or r.chain_id in ready:
+            continue
+        n, distinct = (r.wallets_24h, True) if r.wallets_24h is not None else (r.traders_24h, False)
+        if n:
+            parts.setdefault(pool_project[key][0], []).append((n, distinct))
+    return {pid: (sum(n for n, _ in ps), len(ps) == 1 and ps[0][1]) for pid, ps in parts.items()}
 
 
 def _wash_7d(conn, end: date, pool_project: dict, chains: set[int], skip: set[tuple] | frozenset, tvl: dict) -> set[int]:
