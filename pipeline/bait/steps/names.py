@@ -219,14 +219,18 @@ def detach_project(conn, pid: int, reason: str, now) -> dict:
 
 
 def settle_split(conn, snap: dict, now) -> int | None:
-    """After the rules regrouped a split project's hooks: its slug, aliases, receipts and enrichment go to the project
-    that now holds most of them (lowest id on a tie). Slugs a live project took meanwhile are left alone."""
+    """After the rules regrouped a split project's hooks: receipts always go to the project that now holds most of them
+    (lowest id on a tie). Its slug, aliases and enrichment follow only on a strict majority of its hooks; otherwise no
+    project is the right heir. Slugs a live project took meanwhile are left alone."""
     held = Counter(conn.execute(sa.select(hooks.c.project_id).where(
         sa.tuple_(hooks.c.address, hooks.c.chain_id).in_(snap["hooks"]), hooks.c.project_id.is_not(None))).scalars()) \
         if snap["hooks"] else Counter()
     if not held:
         return None
     target = min(held, key=lambda pid: (-held[pid], pid))
+    if 2 * held[target] <= len(snap["hooks"]):
+        _fill(conn, target, {}, snap["receipts"])
+        return None
     _fill(conn, target, snap["fields"], snap["receipts"])
     live = set(conn.execute(sa.select(projects.c.slug)).scalars())
     for old in (snap["slug"], *snap["aliases"]):
