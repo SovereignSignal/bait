@@ -73,3 +73,30 @@ def test_soft_errors_do_not_fail_the_run_but_land_in_the_receipt(tmp_path, monke
     with e.connect() as c:
         r = c.execute(sa.select(db.run_receipts)).one()
     assert r.exit_code == 0 and r.soft_errors == 2 and r.steps["ingest"]["errors"] == 2
+
+def test_run_exits_4_when_a_locked_migration_leaves_a_required_column_missing(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path}/old.sqlite"
+    e = db.make_engine(url)
+    with e.begin() as c:   # pool_stats from before 0010: no vol_source
+        c.execute(sa.text("CREATE TABLE pool_stats (pool_id text NOT NULL, chain_id integer NOT NULL, day date NOT NULL,"
+                          " vol_24h double precision, traders_24h integer, buys_24h integer, sells_24h integer,"
+                          " buyers_24h integer, sellers_24h integer, PRIMARY KEY (pool_id, chain_id, day))"))
+
+    def locked(engine, *a, **k):
+        raise db.SchemaLocked("pool_stats.vol_source")
+    monkeypatch.setattr(db, "add_missing_columns", locked)
+    rc = main(["run", "--database-url", url, "--steps", "ingest", "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
+    assert rc == 4
+    assert db.missing_columns(e) == ["pool_stats.vol_source"]
+    with e.connect() as c:
+        assert c.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 0     # no step ran
+
+
+def test_run_continues_when_a_locked_migration_had_nothing_required_left(tmp_path, monkeypatch):
+    url = f"sqlite:///{tmp_path}/new.sqlite"
+
+    def locked(engine, *a, **k):
+        raise db.SchemaLocked("index")
+    monkeypatch.setattr(db, "add_missing_indexes", locked)
+    rc = main(["run", "--database-url", url, "--steps", "ingest", "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
+    assert rc == 0

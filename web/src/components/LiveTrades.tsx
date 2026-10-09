@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { explorerTxUrl } from "@/lib/chains";
 import { shortAddr, since, usd } from "@/lib/format";
+import { tradesNote, type TradesStatus } from "@/lib/trades";
 import type { ChainId, TradeView } from "@/lib/types";
 import { WalletAvatar } from "./Avatar";
 import s from "./Detail.module.css";
@@ -11,7 +12,7 @@ import s from "./Detail.module.css";
 const REFRESH_MS = 60_000;
 
 export function LiveTrades({ chainId, chainSlug, poolId, pair }: { chainId: ChainId; chainSlug: string; poolId: string; pair: string }) {
-  const [trades, setTrades] = useState<TradeView[] | null>(null);
+  const [feed, setFeed] = useState<{ trades: TradeView[]; status: TradesStatus } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const box = useRef<HTMLDivElement>(null);
   const onScreen = useRef(true);
@@ -21,16 +22,18 @@ export function LiveTrades({ chainId, chainSlug, poolId, pair }: { chainId: Chai
     lastLoad.current = Date.now();
     try {
       const res = await fetch(`/api/trades/${chainSlug}/${poolId}`);
-      const body = (await res.json()) as { trades?: TradeView[] };
-      setTrades(Array.isArray(body.trades) ? body.trades : []);
+      const body = (await res.json()) as { trades?: TradeView[]; status?: TradesStatus };
+      const trades = Array.isArray(body.trades) ? body.trades : [];
+      const failed = body.status === "rate_limited" || body.status === "upstream_error";
+      setFeed((cur) => (failed && cur?.trades.length ? cur : { trades, status: body.status ?? "ok" }));
     } catch {
-      setTrades((cur) => cur ?? []);
+      setFeed((cur) => (cur?.trades.length ? cur : { trades: [], status: "upstream_error" }));
     }
     setNow(Date.now());
   }, [chainSlug, poolId]);
 
   useEffect(() => {
-    setTrades(null);
+    setFeed(null);
     load();
     const visible = () => document.visibilityState === "visible" && onScreen.current;
     const tick = setInterval(() => {
@@ -63,13 +66,13 @@ export function LiveTrades({ chainId, chainSlug, poolId, pair }: { chainId: Chai
         <span className={s.liveDot} aria-hidden="true" />
         Live trades · {pair}
       </div>
-      {trades == null ? (
+      {feed == null ? (
         <div className={`${s.tradesNote} mut`}>Loading trades…</div>
-      ) : trades.length === 0 ? (
-        <div className={`${s.tradesNote} mut`}>No trades over $10 in the latest window, or the trade feed is busy. Retrying every minute.</div>
+      ) : tradesNote(feed.status, feed.trades.length) ? (
+        <div className={`${s.tradesNote} mut`}>{tradesNote(feed.status, feed.trades.length)}</div>
       ) : (
         <ul className={s.tradeList}>
-          {trades.map((x, i) => {
+          {feed.trades.map((x, i) => {
             const href = explorerTxUrl(chainId, x.tx);
             const label = x.labels?.[0];
             const body = (

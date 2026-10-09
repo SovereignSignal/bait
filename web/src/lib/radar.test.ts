@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { anyChainColor, anyChainName, anyExplorerTxUrl, NEUTRAL_DOT, nativeSymbol } from "./chains";
-import { groupRadar, isDynamicFee, launchFee, launchLabel, launchPair, ZERO } from "./radar";
+import { collapseLaunches, groupRadar, isDynamicFee, launchFee, launchLabel, launchPair, ZERO } from "./radar";
 import type { RadarItemView } from "./types";
 
 test("dynamic fee is the 0x800000 bit", () => {
@@ -46,4 +46,10 @@ test("radar groups follow display order, newest first, empty kinds dropped", () 
   ]);
   assert.deepEqual(g.map(([k, xs]) => [k, xs.map((x) => x.url)]), [["audit", ["c"]], ["repo", ["b", "a"]]]);
   assert.deepEqual(groupRadar([item("a", "repo", null)], "audit"), []);
+});
+
+test("collapseLaunches keeps the newest launch per project and counts the rest", () => {
+  const l = (poolId: string, projectSlug: string | null, hook: string) => ({ poolId, projectSlug, hook });
+  const out = collapseLaunches([l("1", "bunni", "0xa"), l("2", "bunni", "0xa"), l("3", null, "0xB"), l("4", null, "0xb"), l("5", "zora", "0xc")]);
+  assert.deepEqual(out.map((x) => [x.l.poolId, x.more]), [["1", 1], ["3", 1], ["5", 0]]);
 });

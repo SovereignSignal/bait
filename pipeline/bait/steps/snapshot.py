@@ -110,7 +110,8 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     for i in range(0, len(snap_rows), 500):
         upsert(conn, pool_snapshots, snap_rows[i:i + 500], keys=["pool_id", "chain_id", "day"])
     blank = {"buys_24h": None, "sells_24h": None, "buyers_24h": None, "sellers_24h": None}
-    stat_rows = [{"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": n,
+    # vol_source=None (keyless): a same-day rerun must not leave the onchain step's label on a keyless number
+    stat_rows = [{"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": n, "vol_source": None,
                   **tx_counts.get((pid, cid), blank)}
                  for (pid, cid), (v, n) in stats.items()]
     for i in range(0, len(stat_rows), 500):

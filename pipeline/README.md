@@ -75,7 +75,9 @@ With `KEYLESS=0` and no keys the step only prunes.
 ### On-chain indexer + step `onchain` (step 3b)
 `python -m bait.indexer` (package `bait/indexer/`) is a separate long-running process (Railway service `indexer`, see
 `../railway/README.md`). Tables (DDL `../db/migrations/0004_indexer.sql`, metadata in `db.py` "# --- indexer ---"):
-`v4_pools` (hooked pools only), `pool_daily_onchain`, `pool_wallet_day` (30 days kept), `indexer_state` (per-chain cursors).
+`v4_pools` (hooked pools only), `pool_daily_onchain` (never pruned: kept for all-time and monthly totals; `unpriced_swaps`
+counts swaps with no priced side), `pool_wallet_day` (30 days kept), `indexer_state` (per-chain cursors; `swap_block_time` =
+block time the swap cursor reached). Additive changes: `../db/migrations/0010_indexer_safety.sql`.
 
 - **Engine:** Envio HyperSync JSON API over httpx (`indexer/hypersync.py`), `POST https://<chain>.hypersync.xyz/query`
   with `Authorization: Bearer $HYPERSYNC_API_TOKEN`, paginated by `next_block`; `GET /height` for the head. 16 chains:
@@ -92,11 +94,16 @@ With `KEYLESS=0` and no keys the step only prunes.
 - **USD volume is approximate by design:** each swap is valued at the token's *current* DefiLlama price
   (`coins.llama.fi/prices/current`, batched 80 ids, cached 30 min; native 0x0 -> the chain's coingecko id). Prices with
   confidence < 0.5, above $10M, or without decimals are ignored; with both sides priced the larger value is used unless
-  they differ by more than 20x (then the smaller); a single swap above $500M counts as $0; swaps with no priced side
-  count as swaps and wallets with $0 volume (logged as `unpriced`).
+  they differ by more than 20x (then the smaller); a single swap above $500M counts as unpriced; swaps with no priced side
+  count as swaps and wallets, add $0 and are counted in `unpriced_swaps`; wrapped native and major stablecoins fall back
+  to the native coin price / $1 (`indexer/prices.py`); when the DefiLlama call fails the page is not committed and is
+  retried next loop.
 - **Safety:** each page is written with its cursor in one transaction, so a restart resumes exactly (no gaps, no double
   counts); at most `INDEXER_MAX_PAGES` (40) pages per chain per loop so a backfilling chain cannot starve the rest; one
   chain failing never stops the others. A heartbeat line per loop: `heartbeat loop= mode= new_pools= <chain>:lag=<init>/<swap>,new=,swaps=`.
+  Each chain syncs under a Postgres advisory lock (`bait-indexer:<chain_id>`) and the swap cursor moves by
+  compare-and-set, so a second process (deploy overlap) skips the chain or rolls its page back. SIGTERM is honoured
+  between pages. A swap log without a block timestamp fails the page.
 - **No token:** RPC fallback on the 10 chains with a public RPC in `keyless.LOGS` (Base and BNB use publicnode, the
   `keyless.LOGS` endpoints answered 429): Initialize only, new blocks only (cursor starts at the head, no backfill, no
   swaps), narrow `eth_getLogs` windows. Logged at startup. If it falls more than `INDEXER_RPC_MAX_WINDOWS` windows behind
@@ -106,15 +113,21 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
 1. Hooks in `v4_pools` missing from `hooks` become unlisted hook rows (name None, like snapshot keyless), busiest first,
    at most `ONCHAIN_MAX_NEW_HOOKS` (500) per night because each one can cost a Claude call in group's long tail;
    code_hash via `keyless.code_hashes` where a public RPC exists (KEYLESS != 0).
-2. `pools` upserted from `v4_pools` for hooks we hold (every chain; the web filters unknown chain ids). token0/token1 are
-   set on insert only, so GeckoTerminal/subgraph symbols survive; `created_at` = Initialize block time.
+2. `pools` upserted from `v4_pools` for hooks we hold (every chain; the web filters unknown chain ids), incrementally
+   (per-chain `onchain_watermarks` on `block_number` as the fast path, plus a nightly pool-level anti-join for known
+   hooks' pools that have no `pools` row, which catches rows a backfill inserts below the watermark); a row is rewritten
+   only when a value changed. token0/token1 are set on insert only, so GeckoTerminal/subgraph symbols survive; `created_at` =
+   Initialize block time.
 3. Usage, only for chains whose `indexer_state.backfilled` is true and `updated_at` is within `ONCHAIN_MAX_STALE_HOURS`
-   (6): pools with `pool_daily_onchain` rows in day-14..day get a cumulative volume + swap-count series in
+   (6) and `swap_block_time` has passed the end of the reference day (the 7-day wash rule uses the same chains): pools with `pool_daily_onchain` rows in day-14..day get a cumulative volume + swap-count series in
    `pool_snapshots` (zero-seeded the day before, replacing the pool's older snapshots so one scale is used; TVL keeps the
    latest GeckoTerminal/subgraph reserve, the indexer does not compute TVL) and `pool_stats(day)` `vol_24h` /
    `traders_24h` from the last complete UTC day (buys/sells columns kept). `swaps_7d` for these pools is real swaps, not
    txCount. While a chain's on-chain history is shorter than the window, pools that keyless already snapshots keep their
-   keyless series and only `pool_stats` is overridden.
+   keyless series and only `pool_stats` is overridden. Custom-accounting hooks (address bit 3) and pool-days with more
+   than half their swaps unpriced keep keyless volume; `pool_stats.vol_source` is `onchain`, `hook` or `unpriced`
+   (NULL = keyless). The rule is per day: from the first such day on the series carries NULL volume (swap counts kept),
+   or the keyless series is kept when that day is on or before the reported day; `pool_stats` agrees with the series.
 
 ### Grouping rules (step 4)
 1. Same normalized name -> same project (`BunniHook`, `bunni hooks` -> `bunni`).
@@ -199,7 +212,8 @@ calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `
 Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs), `INDEXER_INTERVAL`
 (seconds per loop, 60), `INDEXER_CHAINS` (comma slugs or ids, default all 16), `INDEXER_MAX_PAGES` (40),
 `INDEXER_TOPIC_FILTER_MAX` (2000), `INDEXER_TOPIC_CHUNK` (500), `INDEXER_RPC_MAX_WINDOWS` (30). Step `onchain`:
-`ONCHAIN_MAX_NEW_HOOKS` (500), `ONCHAIN_MAX_STALE_HOURS` (6).
+`ONCHAIN_MAX_NEW_HOOKS` (500), `ONCHAIN_MAX_STALE_HOURS` (6), `DISK_LIMIT_GB` (50; nightly `pg_database_size` line,
+warning at 60%).
 
 ## Chains
 `bait/config.py` `CHAINS`. Subgraph IDs are the community deployments DefiLlama uses; health is
