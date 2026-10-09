@@ -192,13 +192,47 @@ ENRICHMENT_COLS = ("website", "github", "x_handle", "enrichment", "what_line", "
 def _carry_over(conn, pid: int, into: int) -> None:
     """Paid-for facts survive a merge: receipts move (the target keeps its own on a URL clash) and enrichment fills
     the target's empty fields. Daily rows and signals are not carried; the score and signals steps rebuild them."""
-    rows = [{**dict(r._mapping), "project_id": into} for r in conn.execute(sa.select(receipts).where(receipts.c.project_id == pid))]
-    upsert(conn, receipts, rows, keys=["project_id", "url"], update=[])
     src = conn.execute(sa.select(*(projects.c[c] for c in ENRICHMENT_COLS)).where(projects.c.id == pid)).one()
+    _fill(conn, into, dict(src._mapping),
+          [dict(r._mapping) for r in conn.execute(sa.select(receipts).where(receipts.c.project_id == pid))])
+
+
+def _fill(conn, into: int, fields: dict, receipt_rows: list[dict]) -> None:
+    upsert(conn, receipts, [{**r, "project_id": into} for r in receipt_rows], keys=["project_id", "url"], update=[])
     dst = conn.execute(sa.select(*(projects.c[c] for c in ENRICHMENT_COLS)).where(projects.c.id == into)).one()
-    fill = {c: getattr(src, c) for c in ENRICHMENT_COLS if getattr(dst, c) in (None, "", {}) and getattr(src, c) not in (None, "", {})}
+    fill = {c: fields[c] for c in ENRICHMENT_COLS if getattr(dst, c) in (None, "", {}) and fields.get(c) not in (None, "", {})}
     if fill:
         conn.execute(sa.update(projects).values(**fill).where(projects.c.id == into))
+
+
+def detach_project(conn, pid: int, reason: str, now) -> dict:
+    """A split: detach the project's hooks so the rules regroup them, delete the project, and return what it carried
+    (slug, aliases, receipts, enrichment, its hooks) for settle_split once the hooks have new homes."""
+    p = conn.execute(sa.select(projects).where(projects.c.id == pid)).one()
+    snap = {"slug": p.slug, "reason": reason, "fields": {c: getattr(p, c) for c in ENRICHMENT_COLS},
+            "receipts": [dict(r._mapping) for r in conn.execute(sa.select(receipts).where(receipts.c.project_id == pid))],
+            "aliases": list(conn.execute(sa.select(project_aliases.c.old_slug).where(project_aliases.c.project_id == pid)).scalars()),
+            "hooks": [tuple(r) for r in conn.execute(sa.select(hooks.c.address, hooks.c.chain_id).where(hooks.c.project_id == pid))]}
+    conn.execute(sa.update(hooks).values(project_id=None).where(hooks.c.project_id == pid))
+    retire_project(conn, pid, into=None, reason=reason, now=now)
+    return snap
+
+
+def settle_split(conn, snap: dict, now) -> int | None:
+    """After the rules regrouped a split project's hooks: its slug, aliases, receipts and enrichment go to the project
+    that now holds most of them (lowest id on a tie). Slugs a live project took meanwhile are left alone."""
+    held = Counter(conn.execute(sa.select(hooks.c.project_id).where(
+        sa.tuple_(hooks.c.address, hooks.c.chain_id).in_(snap["hooks"]), hooks.c.project_id.is_not(None))).scalars()) \
+        if snap["hooks"] else Counter()
+    if not held:
+        return None
+    target = min(held, key=lambda pid: (-held[pid], pid))
+    _fill(conn, target, snap["fields"], snap["receipts"])
+    live = set(conn.execute(sa.select(projects.c.slug)).scalars())
+    for old in (snap["slug"], *snap["aliases"]):
+        if old not in live:
+            add_alias(conn, old, target, snap["reason"], now)
+    return target
 
 
 def hook_rows(conn, pid: int):
