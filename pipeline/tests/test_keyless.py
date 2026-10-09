@@ -93,11 +93,18 @@ def test_code_facts_stops_a_silent_chain_after_three_batches_and_at_the_deadline
     assert K.code_facts(late, {"base": addrs}, deadline=time.monotonic() - 1) == {} and late.calls == 0
 
 
-def test_blockscout_prefers_its_own_proxy_verdict_over_the_bytecode():
+def test_an_explorer_can_upgrade_a_proxy_verdict_but_never_downgrade_eip1967():
     import httpx
+    from types import SimpleNamespace
     from bait.clients.blockscout import Blockscout
+    from bait.rules import code_evidence
+
+    def bs(body):
+        return Blockscout(http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, json=body, request=req))))
     a = "0x" + "1" * 40
-    uups = Blockscout(http_client=httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(
-        200, json={"deployed_bytecode": "0x6080" + SLOT, "proxy_type": None}, request=req))))
-    info = uups.fetch_code(8453, a)
-    assert info.is_proxy is False and info.proxy_kind is None                      # explorer knows: not a proxy
+    unresolved = bs({"deployed_bytecode": "0x6080" + SLOT, "proxy_type": None, "implementations": []}).fetch_code(8453, a)
+    assert unresolved.is_proxy is True and unresolved.proxy_kind == "eip1967"     # Blockscout just could not resolve it
+    assert code_evidence(SimpleNamespace(code_hash=unresolved.code_hash, is_proxy=True, proxy_kind="eip1967")) is None
+    upgraded = bs({"deployed_bytecode": "0x6080", "proxy_type": "eip1967"}).fetch_code(8453, a)
+    assert upgraded.is_proxy is True and upgraded.proxy_kind == "explorer"

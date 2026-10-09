@@ -84,10 +84,8 @@ def _lookup(conn, ctx: RunContext, client, out: dict) -> None:
         vals = {"name_checked_at": ctx.now}
         if res:
             vals.update(contract_name=res[0], verified_source=True)
-            if len(res) > 2 and res[2] is not None:  # the explorer's verdict beats the bytecode guess
-                vals["is_proxy"] = res[2]
-                if not res[2]:
-                    vals["proxy_kind"] = None
+            if len(res) > 2 and res[2]:              # an explorer may upgrade to "proxy", never downgrade
+                vals["is_proxy"] = True
             out["names_found"] += 1
         conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == h.address, hooks.c.chain_id == h.chain_id))
     out["names_checked"] += len(todo)
