@@ -40,6 +40,7 @@ def test_rename_merge_clash_generic_and_miss(conn, ctx):
     p4 = _unlisted(conn, A(4), 1, vol=600)         # LaunchHook: clashes with the curated project
     p5 = _unlisted(conn, A(5), 1, vol=500)         # generic UniswapV4Hook: stays unlisted
     p6 = _unlisted(conn, A(6), 1, vol=400)         # unverified: miss
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(1), A(2)])).values(code_hash="0x" + "c" * 64))
     fake = FakeNames({A(1): "FoundationHookV2", A(2): "FoundationHookV2", A(3): "FoundationHookV2",
                       A(4): "LaunchHook", A(5): "UniswapV4Hook"})
     ctx.clients["names"] = fake
@@ -61,6 +62,7 @@ def test_rename_merge_clash_generic_and_miss(conn, ctx):
     miss = conn.execute(sa.select(db.hooks).where(db.hooks.c.address == A(6))).one()
     assert miss.contract_name is None and miss.name_checked_at is not None
     assert conn.execute(sa.select(db.hooks.c.verified_source).where(db.hooks.c.address == A(1))).scalar_one() is True
+    assert _aliases(conn)["unlisted-000002-8453"] == (p1, "names:code_hash")
 
 
 def test_misses_wait_14_days_and_cap_applies(conn, ctx, monkeypatch):
@@ -160,3 +162,15 @@ def test_backfill_unlisted_aliases_recreates_old_unlisted_slugs(conn, ctx):
     assert names.backfill_unlisted_aliases(conn, NOW) == 1
     assert names.backfill_unlisted_aliases(conn, NOW) == 0                  # idempotent
     assert _aliases(conn) == {"unlisted-hook-0x7bc2-2aec": (named, "backfill")}
+
+
+def test_same_name_same_chain_without_evidence_stays_two_projects(conn, ctx):
+    p1 = _unlisted(conn, A(10), 8453, vol=9)
+    p2 = _unlisted(conn, A(11), 8453, vol=8)
+    ctx.clients["names"] = FakeNames({A(10): "OrderHook", A(11): "OrderHook"})
+    out = {}
+    names.run(conn, ctx, out)
+    proj = {r.id: r for r in conn.execute(sa.select(db.projects))}
+    assert out["projects_merged"] == 0 and out["names_split"] == 1
+    assert proj[p1].name == "OrderHook" and proj[p2].name == "OrderHook 0x0000…000b"
+    assert proj[p2].slug == "orderhook-0x0000-000b" and _aliases(conn)["unlisted-00000b-8453"] == (p2, "renamed")
