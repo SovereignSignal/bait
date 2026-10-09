@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM public.ecr.aws/docker/library/node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
