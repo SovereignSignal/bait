@@ -295,9 +295,9 @@ def _at(monkeypatch, hh, mm=0):
     return at
 
 
-def _nightly(e, day, rc=0):
+def _nightly(e, day, rc=0, soft=0, at=NOW):
     with e.begin() as c:
-        c.execute(sa.insert(db.run_receipts).values(day=day, started_at=NOW, finished_at=NOW, exit_code=rc, soft_errors=0, steps={}))
+        c.execute(sa.insert(db.run_receipts).values(day=day, started_at=at, finished_at=at, exit_code=rc, soft_errors=soft, steps={}))
 
 
 def _cli_db(tmp_path, nightly_rc=0, p8=True, nightly_day=None):
@@ -490,6 +490,8 @@ def test_backfill_keeps_estimates_before_the_first_candle_and_never_fills_unknow
     r = _rows(engine, "0xpe")
     assert [(r[DAY - i * D].volume_usd_day, r[DAY - i * D].estimated) for i in (6, 5, 4, 3, 2)] == [
         (500.0, True), (0.0, False), (100.0, False), (9.0, True), (0.0, False)]
+    again = repair.backfill(engine, _ctx(FakeGT({})), since=2)     # the kept estimate is not pulled again by a rerun
+    assert (again["pools_needing"], again["calls"]) == (0, 0)
 
 
 def test_paid_prose_needs_an_explicit_cap(tmp_path, monkeypatch):
@@ -499,3 +501,21 @@ def test_paid_prose_needs_an_explicit_cap(tmp_path, monkeypatch):
     assert main(["repair", "prose", "--blurbs", "--yes", "--database-url", url]) == 2
     assert main(["repair", "prose", "--blurbs", "--dry-run", "--database-url", url]) == 0       # the plan needs none
     assert _receipts(e) == []
+
+
+def test_a_repair_receipt_never_reads_better_than_the_latest_nightly(tmp_path, monkeypatch):
+    from bait.__main__ import main
+    t = _today()
+    url, e = _cli_db(tmp_path, nightly_rc=None)
+    _nightly(e, t, rc=1, at=datetime.combine(t, dtime(13, 30), tzinfo=timezone.utc))     # failed nightly at 13:30
+    with e.begin() as c:
+        repair.backup_day(c, t)
+    _at(monkeypatch, 14)
+    assert main(["repair", "rescore", "--restore", "--database-url", url]) == 0              # restore at 14:00
+    assert [(r.notes, r.exit_code, r.day) for r in _receipts(e)] == [("repair rescore-restore", 1, t)]
+    (tmp_path / "soft").mkdir()
+    url2, e2 = _cli_db(tmp_path / "soft", nightly_rc=None)
+    _nightly(e2, t, soft=12, at=datetime.combine(t, dtime(6, 40), tzinfo=timezone.utc))  # a nightly with 12 soft errors
+    monkeypatch.setattr(repair, "keyless_http", lambda ctx: FakeGT({}))
+    assert main(["repair", "verify", "--database-url", url2]) == 0
+    assert [(r.exit_code, r.soft_errors) for r in _receipts(e2)] == [(0, 12)]

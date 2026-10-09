@@ -1621,9 +1621,9 @@ For each task: commit SHA, test counts before and after, anything that deviated 
 ## Review fixes (2026-10-09, after implementation)
 
 An independent review held the package for these; each landed as its own commit with tests first.
-- Receipts carry the latest nightly receipt's `day` (1970-01-01 when there is none), never the repair's own, and no repair starts 05:30-08:00 UTC until today's nightly has written its receipt: `/api/health` reads the latest receipt as the nightly's.
+- Receipts never read better than the latest nightly receipt: its `day` (1970-01-01 when there is none), its `soft_errors`, and its `exit_code` unless the repair failed; and no repair starts 05:30-08:00 UTC until today's nightly has written its receipt: `/api/health` reads the latest receipt as the nightly's.
 - One stop time for the whole command: `--stop-at` on the day of the next 06:00 UTC nightly (today's until 06:30). It is checked between pools, re-scored days and Claude calls and before every step of `all`; `rescore` and `prose` take `--stop-at`; a start between the stop time and 06:30 exits 5; a stop prints `INCOMPLETE: rerun to resume` and exits 6.
 - `rescore --restore` restores exactly the days `project_daily_p9_backup` holds (`--day` narrows it) and is exempt from the failed-nightly guard.
-- Backfill: before a pool's first candle only rows with no per-day value become $0 (estimates are kept); rows whose cumulative is NULL are never filled, estimated or not.
+- Backfill: before a pool's first candle only rows with no per-day value become $0 (estimates are kept, and an estimate before the pool's first traded candle-backed day is no longer a target, so reruns skip it); rows whose cumulative is NULL are never filled, estimated or not.
 - `prose --yes` requires `--max-usd`.
 - Railway: a run starts by restarting the pipeline deployment (`deploymentRestart`) after setting the start command. The operational notes above still apply with that change.
