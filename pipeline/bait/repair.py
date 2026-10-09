@@ -633,7 +633,8 @@ def add_parsers(sub) -> None:
     p.add_argument("--what-lines", action="store_true")
     p.add_argument("--blurbs", action="store_true")
     p.add_argument("--limit", type=int, default=None, help="at most N projects per kind, busiest first")
-    p.add_argument("--max-usd", type=float, default=None, help="cap on this run's spend, on top of the daily/30-day budgets")
+    p.add_argument("--max-usd", type=float, default=None,
+                   help="required with --yes: cap on this run's spend, on top of the daily/30-day budgets")
     p.add_argument("--signals-limit", type=int, default=50)
     p.add_argument("--stop-at", default="05:30", help="UTC HH:MM before 06:00: stop between calls here")
     p.add_argument("--stale-before", type=datetime.fromisoformat, default=P8_MERGED_AT,
@@ -746,6 +747,9 @@ def main(args: argparse.Namespace, engine) -> int:
         return 2
     if cmd == "prose" and not (args.what_lines or args.blurbs):
         log.error("prose: pass --what-lines and/or --blurbs")
+        return 2
+    if cmd == "prose" and args.yes and args.max_usd is None:
+        log.error("prose --yes: pass --max-usd X (the most this run may spend; see the dry run's worst case)")
         return 2
     stop_at = getattr(args, "stop_at", None)
     if stop_at:
