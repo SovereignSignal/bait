@@ -28,7 +28,7 @@ def test_score_hand_computed(conn, ctx):
     assert d.score_trending == pytest.approx(math.log1p(100_000) * 2.0)
     assert d.is_new is False           # pipeline first saw it 3d ago, but its pool is 60d old: not new
     assert d.is_spam is False
-    assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0}
+    assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_7d": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):
@@ -101,3 +101,34 @@ def test_wash_rule_reads_persisted_pool_stats(conn, ctx):
     out = score.run(conn, ctx)
     d = daily(conn, p)
     assert d.is_spam and d.score_trending == 0.0 and out["wash"] == 1
+
+
+def _onchain_project(conn, name, pool, wallets, vol_per_day):
+    p = insert_project(conn, name, first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, f"0x{name}", 10, project_id=p, name=name)
+    insert_pool(conn, pool, 10, f"0x{name}", created=NOW - timedelta(days=60))
+    insert_snap(conn, pool, 10, DAY - timedelta(days=14), 50_000, 0, 100)
+    insert_snap(conn, pool, 10, DAY - timedelta(days=7), 50_000, 1_000_000, 200)
+    insert_snap(conn, pool, 10, DAY, 50_000, 1_000_000 + 7 * vol_per_day, 300)
+    for i in range(7):
+        d = DAY - timedelta(days=i)
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id=pool, day=d, swaps=2, wallets=1, volume_usd=vol_per_day))
+        for w in range(wallets):
+            conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id=pool, day=d, address=f"0xw{w}", swaps=1))
+    return p
+
+
+def test_wash_7d_from_indexer_one_wallet_hundreds_of_millions(conn, ctx):
+    """10/8 case: Optimism 0x69af...7fff moved $436M in 7 days from one wallet. Same wallets every day count once."""
+    wash = _onchain_project(conn, "Desk", "0xdp", wallets=1, vol_per_day=60_000_000)
+    busy = _onchain_project(conn, "Busy", "0xbp", wallets=11, vol_per_day=60_000_000)     # 11 distinct wallets: not wash
+    small = _onchain_project(conn, "Small", "0xsp", wallets=1, vol_per_day=100_000)       # $700K < $1M: not wash
+    out = score.run(conn, ctx)
+    assert daily(conn, wash).is_spam and daily(conn, wash).score_trending == 0.0
+    assert not daily(conn, busy).is_spam and not daily(conn, small).is_spam
+    assert out["wash_7d"] == 1
+
+
+def test_is_wash_7d_thresholds():
+    from bait.rules import is_wash_7d
+    assert is_wash_7d(1_000_000, 10) and not is_wash_7d(999_999, 1) and not is_wash_7d(5_000_000, 11)

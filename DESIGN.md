@@ -272,3 +272,14 @@ first, misses retried after 14 days. Same contract name on one chain = one proje
 into, a clash gets the chain appended; proxies and template names (UniswapV4Hook, BaseHook) are ignored.
 Dry run on 10/8 data: 400 checked, 202 named, 117 projects renamed, 28 merged; 10 of the top 50 stay unnamed (all
 unverified). The web labels those by their busiest pair: "WETH/USDC hook · 0x7bc2…2aec".
+
+## Wash rules, status 2026-10-09
+
+- 24h (GeckoTerminal pool_stats): pool >= $250K/24h through <= 25 traders. Unchanged.
+- 7-day (indexer, new): pool >= $1M over 7 days through <= 10 distinct wallets (`rules.is_wash_7d`). A project is
+  wash when wash pools carry >= 50% of its 7-day on-chain volume; it is hidden from New, Trending and Leaders, not
+  deleted. On 10/8 data it flags exactly one project: Optimism 0x69af...7fff ($436M from 1 wallet in 8 swaps).
+- Dormant all-time rule (> $1B all-time, <= 4 pools, $0 in 7 days): not built. Bait ranks on 7-day volume only and
+  shows no all-time totals; build it together with the monthly aggregate, before any all-time view ships.
+- Robinhood 0xe5e70...e044 is V2MemeHook (named). It shows $0 because the indexer has not caught up on Robinhood
+  swaps (also Base and BNB); those chains rely on the 24h rule until it does.
