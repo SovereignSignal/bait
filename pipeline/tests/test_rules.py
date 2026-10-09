@@ -138,5 +138,15 @@ def test_merge_evidence_reads_the_proxy_flag_not_the_name():
     assert merge_evidence([h(dep="0xd")], [h(dep="0xd")]) == "deployer"
     create2 = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
     assert merge_evidence([h(dep=create2)], [h(dep=create2)]) is None                     # CREATE2 factory deploys for everyone
-    assert merge_evidence([h(name="Bunni Hooks")], [h(name="BunniHook")]) == "hooklist_name"
+    assert merge_evidence([h(name="Bunni Hooks")], [h(name="BunniHook")]) is None        # a shared hooklist name alone neither
     assert merge_evidence([h(name="FeeHook")], [h(name="FeeHook")]) is None                # template name
+
+
+def test_generic_names_match_after_normalising():
+    from bait.rules import useful_name
+    for g in ("Limit Order Hook", "LimitOrderHookV2", "Black List Hook", "CurveHook", "VaultHook", "OrderHook", "TWAMM",
+              "FullRange", "GeomeanOracle", "PointsHook", "Arbitrage Hook", "Example", "My New Hook", "Hook", "Hooks",
+              "Transparent Upgradeable Proxy", "Dynamic-Fee Hook"):
+        assert useful_name(g, max_len=None) is None, g
+    for ok in ("OrderBookHook", "Arbitrum Hook", "Testudo", "FoundationHookV2", "Limit Order Hook (Arbitrum)", "Bunni"):
+        assert useful_name(ok, max_len=None) == ok, ok

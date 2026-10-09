@@ -169,13 +169,13 @@ def test_backfill_unlisted_aliases_recreates_old_unlisted_slugs(conn, ctx):
 def test_same_name_same_chain_without_evidence_stays_two_projects(conn, ctx):
     p1 = _unlisted(conn, A(10), 8453, vol=9)
     p2 = _unlisted(conn, A(11), 8453, vol=8)
-    ctx.clients["names"] = FakeNames({A(10): "OrderHook", A(11): "OrderHook"})
+    ctx.clients["names"] = FakeNames({A(10): "OrcaHook", A(11): "OrcaHook"})
     out = {}
     names.run(conn, ctx, out)
     proj = {r.id: r for r in conn.execute(sa.select(db.projects))}
     assert out["projects_merged"] == 0 and out["names_split"] == 1
-    assert proj[p1].name == "OrderHook" and proj[p2].name == "OrderHook 0x0000…000b"
-    assert proj[p2].slug == "orderhook-0x0000-000b" and _aliases(conn)["unlisted-00000b-8453"] == (p2, "renamed")
+    assert proj[p1].name == "OrcaHook" and proj[p2].name == "OrcaHook 0x0000…000b"
+    assert proj[p2].slug == "orcahook-0x0000-000b" and _aliases(conn)["unlisted-00000b-8453"] == (p2, "renamed")
 
 
 def test_proxy_resolves_to_its_implementation_name():

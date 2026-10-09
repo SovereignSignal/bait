@@ -12,8 +12,9 @@ from tests.conftest import NOW, insert_hook, insert_project
 def test_group_by_name_and_factories(conn, ctx):
     ingest.run(conn, ctx)
     out = group.run(conn, ctx)
-    # 9 template-named hooks (CustomHook x2, TestHook, FeeHook x3, Counter x2, SwapFeeHook) no longer merge by name
-    assert out["by_name"] == 291 and out["created"] == 95 and out["unassigned"] == 0
+    # 30 template-named hooks (LimitOrderHook x7, FeeHook x3, CustomHook, DynamicFeeHook, BlackListHook, Counter,
+    # ArbitrageHook, MyNewHook, ArbHook, GridHook, CurveHook x2 each, TestHook, SwapFeeHook) get a card each
+    assert out["by_name"] == 270 and out["created"] == 108 and out["unassigned"] == 0
     assert out["factories"] == 3   # EulerSwap 51, OrketHook 47, StrategyFeeHook 34 (> 20)
     rows = conn.execute(sa.select(db.projects.c.name, db.projects.c.is_factory, db.projects.c.slug, db.projects.c.what_line)).all()
     by = {r.name: r for r in rows}
@@ -163,16 +164,16 @@ def _alias(conn, slug):
 
 
 def test_hooklisted_later_renames_its_contract_project_in_place(conn, ctx, tmp_path, fixture_entries):
-    pid = insert_project(conn, "OrderHook (Base)", NOW, slug="orderhook-base")
-    conn.execute(sa.update(db.projects).where(db.projects.c.id == pid).values(norm_name="contract:8453:order"))
+    pid = insert_project(conn, "OrcaHook (Base)", NOW, slug="orcahook-base")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == pid).values(norm_name="contract:8453:orca"))
     insert_hook(conn, A(1), 8453, project_id=pid)
-    conn.execute(sa.update(db.hooks).values(hooklisted=False, contract_name="OrderHook"))
-    ctx.hooklist_file = _hooklist(tmp_path, fixture_entries, (A(1), 8453, "OrderHook"))
+    conn.execute(sa.update(db.hooks).values(hooklisted=False, contract_name="OrcaHook"))
+    ctx.hooklist_file = _hooklist(tmp_path, fixture_entries, (A(1), 8453, "OrcaHook"))
     ingest.run(conn, ctx)
     out = group.run(conn, ctx)
     assert out["promoted"] == 1 and out["created"] == 0
-    assert [(p.id, p.name, p.norm_name, p.slug) for p in conn.execute(sa.select(db.projects))] == [(pid, "OrderHook", "order", "orderhook")]
-    assert tuple(_alias(conn, "orderhook-base")) == (pid, "renamed")
+    assert [(p.id, p.name, p.norm_name, p.slug) for p in conn.execute(sa.select(db.projects))] == [(pid, "OrcaHook", "orca", "orcahook")]
+    assert tuple(_alias(conn, "orcahook-base")) == (pid, "renamed")
     assert conn.execute(sa.select(db.hooks.c.regroup)).scalar_one() is False
 
 
@@ -206,19 +207,19 @@ def test_legacy_sha1_hash_is_rehashed_and_the_clone_joins_the_registered_project
 
 
 def test_rule1_adopts_a_same_chain_contract_project_only_with_evidence(conn, ctx):
-    order = insert_project(conn, "OrderHook (Base)", NOW, slug="orderhook-base")
+    order = insert_project(conn, "OrcaHook (Base)", NOW, slug="orcahook-base")
     pool = insert_project(conn, "PoolHook", NOW, slug="poolhook")
-    conn.execute(sa.update(db.projects).where(db.projects.c.id == order).values(norm_name="contract:8453:order"))
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == order).values(norm_name="contract:8453:orca"))
     conn.execute(sa.update(db.projects).where(db.projects.c.id == pool).values(norm_name="contract:8453:pool"))
     insert_hook(conn, A(6), 8453, project_id=order)
     insert_hook(conn, A(7), 8453, project_id=pool)
-    insert_hook(conn, A(8), 8453, name="OrderHook")
+    insert_hook(conn, A(8), 8453, name="OrcaHook")
     insert_hook(conn, A(9), 8453, name="PoolHook")
     conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(6), A(8)])).values(deployer="0x" + "d" * 40))
     out = group.run(conn, ctx)
     assert out["adopted"] == 1 and out["created"] == 1 and out["by_name"] == 2
     p = {r.id: r for r in conn.execute(sa.select(db.projects))}
-    assert (p[order].name, p[order].norm_name, p[order].slug) == ("OrderHook", "order", "orderhook")
+    assert (p[order].name, p[order].norm_name, p[order].slug) == ("OrcaHook", "orca", "orcahook")
     pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
     assert pid[A(8)] == order and pid[A(9)] not in (pool, None)                       # a name alone does not merge
 
@@ -304,3 +305,28 @@ def test_proxy_bytecode_family_is_split_and_generic_contract_names_are_looked_up
     slugs = set(conn.execute(sa.select(db.projects.c.slug)).scalars())
     assert out["split"] == 1 and len({r.project_id for r in rows}) == 2 and "unlisted-hook-family-0x0000" not in slugs
     assert all(r.contract_name is None and r.name_checked_at is None and r.is_proxy is True for r in rows)
+
+
+def test_sample_template_names_never_merge_by_name(conn, ctx):
+    ingest.run(conn, ctx)
+    group.run(conn, ctx)
+    rows = conn.execute(sa.select(db.hooks.c.name, db.hooks.c.chain_id, db.hooks.c.project_id, db.projects.c.name.label("pname"))
+                        .join(db.projects)).all()
+    for name, n in (("LimitOrderHook", 7), ("BlackListHook", 2), ("CurveHook", 2)):
+        mine = [r for r in rows if r.name == name]
+        assert len(mine) == n and len({r.project_id for r in mine}) == n and not any(r.pname == name for r in mine)
+    assert {r.chain_id for r in rows if r.name == "CurveHook"} == {42161, 5042}
+
+
+def test_a_hooklist_name_shared_by_unrelated_deployers_is_generic(conn, ctx):
+    for n, dep in ((71, "0x" + "1" * 40), (72, "0x" + "2" * 40)):                 # two teams, one name
+        insert_hook(conn, A(n), 8453, name="Zephyr")
+        conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(n)).values(deployer=dep))
+    for n in (73, 74):                                                             # one team, two deployments
+        insert_hook(conn, A(n), 8453, name="Mistral")
+        conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(n)).values(deployer="0x" + "3" * 40))
+    group.run(conn, ctx)
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    names_ = set(conn.execute(sa.select(db.projects.c.name)).scalars())
+    assert pid[A(71)] != pid[A(72)] and "Zephyr" not in names_
+    assert pid[A(73)] == pid[A(74)] and "Mistral" in names_
