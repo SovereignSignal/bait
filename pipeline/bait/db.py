@@ -90,6 +90,10 @@ pool_snapshots = sa.Table(
     sa.Column("tvl_usd", sa.Float),
     sa.Column("volume_usd_cum", sa.Float),
     sa.Column("tx_count_cum", sa.BigInteger),
+    # Per UTC day (0012): score windows sum these. NULL = unknown, or a row written before 0012.
+    sa.Column("volume_usd_day", sa.Float),
+    sa.Column("tx_count_day", sa.BigInteger),
+    sa.Column("estimated", sa.Boolean),        # volume_usd_day from a rolling 24h number or a run-time cumulative
     sa.Index("pool_snapshots_day_idx", "day"),
 )
 
@@ -106,6 +110,9 @@ pool_stats = sa.Table(
     sa.Column("buyers_24h", sa.Integer),
     sa.Column("sellers_24h", sa.Integer),
     sa.Column("vol_source", sa.Text),          # 'onchain' | 'hook' | 'unpriced'; NULL = keyless (0010)
+    sa.Column("vol_24h_rolling", sa.Float),    # GeckoTerminal volume_usd.h24 at the run; onchain never overrides it (0012)
+    sa.Column("wallets_24h", sa.Integer),      # distinct wallets in the window; NULL = unknown (traders_24h = buyers + sellers)
+    sa.Column("window_end", TS),               # vol_24h and the wallet counts cover the 24 h before this (0012)
 )
 
 # Who trades each hooked pool: top wallets by volume from the last ~300 trades (step "activity"). Kept 14 days.
@@ -146,6 +153,14 @@ project_daily = sa.Table(
     sa.Column("score_trending", sa.Float),
     sa.Column("is_new", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column("is_spam", sa.Boolean, nullable=False, server_default=sa.false()),
+    # 0012: the closed UTC days this row reports. window_end = day - 1; 7d = window_end-6 .. window_end.
+    sa.Column("window_end", sa.Date),
+    sa.Column("vol_24h", sa.Float),
+    sa.Column("swaps_24h", sa.BigInteger),     # NULL = not every pool's day is known (swaps_7d likewise)
+    sa.Column("wallets_24h", sa.Integer),
+    sa.Column("wallets_exact", sa.Boolean),    # True = distinct across the project's pools; False = an upper bound
+    sa.Column("is_wash", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("wash_reason", sa.Text),         # comma list in rules.WASH_REASONS order
     sa.Index("project_daily_day_score_idx", "day", "score_trending"),
 )
 
@@ -329,6 +344,19 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("indexer_state", "swap_block_time", "timestamptz"),
     ("pool_daily_onchain", "unpriced_swaps", "integer NOT NULL DEFAULT 0"),
     ("pool_stats", "vol_source", "text"),
+    ("pool_snapshots", "volume_usd_day", "double precision"),
+    ("pool_snapshots", "tx_count_day", "bigint"),
+    ("pool_snapshots", "estimated", "boolean"),
+    ("pool_stats", "vol_24h_rolling", "double precision"),
+    ("pool_stats", "wallets_24h", "integer"),
+    ("pool_stats", "window_end", "timestamptz"),
+    ("project_daily", "window_end", "date"),
+    ("project_daily", "vol_24h", "double precision"),
+    ("project_daily", "swaps_24h", "bigint"),
+    ("project_daily", "wallets_24h", "integer"),
+    ("project_daily", "wallets_exact", "boolean"),
+    ("project_daily", "is_wash", "boolean NOT NULL DEFAULT false"),
+    ("project_daily", "wash_reason", "text"),
 ]
 
 
