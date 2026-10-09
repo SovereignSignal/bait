@@ -26,7 +26,7 @@ export function sourceLine(p: ProjectSummary): string {
 }
 
 /** "+26%" / "-8%" / null when there is no base week. */
-export function deltaText(r: { vol7d: number; vol7dPrev: number }): { text: string; up: boolean } | null {
+export function deltaText(r: { vol7d: number | null; vol7dPrev: number | null }): { text: string; up: boolean } | null {
   const d = weekDelta(r);
   return d == null ? null : { text: fmtDelta(d), up: d >= 0 };
 }
@@ -34,7 +34,7 @@ export function deltaText(r: { vol7d: number; vol7dPrev: number }): { text: stri
 export type Win = "24h" | "7d";
 
 /** The number a row or mover shows and the window it covers. 24h only when asked for and known. */
-export function rowMetric(r: { vol24h: number | null; vol7d: number }, use24h: boolean): { v: number; win: Win } {
+export function rowMetric(r: { vol24h: number | null; vol7d: number | null }, use24h: boolean): { v: number | null; win: Win } {
   return use24h && r.vol24h != null ? { v: r.vol24h, win: "24h" } : { v: r.vol7d, win: "7d" };
 }
 
@@ -66,12 +66,12 @@ export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
 }
 
 /** The rolling 24 h (GeckoTerminal, at the run) against the daily average of the last 7 closed UTC days, 0..100. */
-export function pace(vol24h: number | null, vol7d: number): number {
-  if (vol24h == null || vol7d <= 0) return 0;
+export function pace(vol24h: number | null, vol7d: number | null): number {
+  if (vol24h == null || vol7d == null || vol7d <= 0) return 0;
   return Math.min(100, Math.round(((vol24h * 7) / vol7d) * 100));
 }
 
-export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean }, rank: number | undefined, m: { v: number; win: Win }): string {
+export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean }, rank: number | undefined, m: { v: number | null; win: Win }): string {
   const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
   const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "24-hour"} volume`];
   const d = weekDelta(r);

@@ -41,8 +41,10 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
     { k: "Swaps 24h", v: int(u.tx24h) },
   ];
   const busy = busiestPool(p);
+  const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
     p.whyBlurb ||
+    (p.metrics.vol7d == null ? `The last 7 days' volume through this hook's ${pools} is unknown.` : null) ||
     `${usd(p.metrics.vol7d)} traded through this hook in the last 7 days across ${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}${
       d != null ? `, ${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))}% on the week` : ""
     }.`;

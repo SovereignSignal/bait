@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applyTab, movers, weekDelta } from "./feed";
-import { pace, walletsText, washLine } from "./present";
+import { usd } from "./format";
+import { pace, rowMetric, walletsText, washLine } from "./present";
 import type { RowView } from "./types";
 
 const row = (over: Partial<RowView>): RowView => ({
@@ -40,4 +41,13 @@ test("washLine names every reason", () => {
   assert.equal(washLine("7d,no_liquidity"), "Wash-like volume: $1M+ in 7 days through 10 or fewer wallets; $1M+ in 7 days through a pool with $1K or less of liquidity.");
   assert.equal(washLine("unverified"), "Wash-like volume: $1M+ moved through a pool that looks idle, with no wallet data to check who moved it.");
   assert.equal(washLine(null), "Wash-like volume.");
+});
+test("an unknown 7-day volume renders as unknown, never trends and sorts last", () => {
+  const rows = [row({ slug: "unknown", vol7d: null, vol7dPrev: null, scoreTrending: 9 }), row({ slug: "real", vol7d: 50_000, vol7dPrev: 20_000, scoreTrending: 5 })];
+  assert.deepEqual(applyTab(rows, { tab: "trending" }).map((r) => r.slug), ["real"]);
+  assert.deepEqual(applyTab(rows, { tab: "all" }).map((r) => r.slug), ["real", "unknown"]);
+  assert.equal(weekDelta({ vol7d: null, vol7dPrev: 70_000 }), null);
+  assert.deepEqual(rowMetric({ vol24h: null, vol7d: null }, false), { v: null, win: "7d" });
+  assert.equal(usd(rowMetric({ vol24h: null, vol7d: null }, false).v), "–");
+  assert.equal(pace(5_000, null), 0);
 });
