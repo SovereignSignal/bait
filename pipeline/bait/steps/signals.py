@@ -26,6 +26,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     exa, gh, nansen, graph, claude = (ctx.client(n) for n in ("exa", "github", "nansen", "graph", "claude"))
     for p, daily in targets:
         changed = False
+        hits = None
         try:
             if exa is not None and name_tokens(p.name):   # unnamed projects can never keep a receipt: don't pay to search
                 try:
