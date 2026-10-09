@@ -661,3 +661,55 @@ def test_pool_cap_schema_is_additive_on_an_existing_database():
     assert {c["name"] for c in sa.inspect(e).get_columns("hook_pool_counts")} == {
         "chain_id", "hook_address", "pools_total", "first_block", "last_block", "last_seen"}
     assert "pools_total" in {c["name"] for c in sa.inspect(e).get_columns("hooks")}
+
+
+# ------------------------------------------------------------------ per-hook pool cap (package 5b)
+
+def _row(pool, hook, block):
+    return core.hooked_pools_from_page(BASE.chain_id, [init_log(pool, ZERO, USDC, hook, block)], {block: T0 + block * BT})[0]
+
+
+def _counter(engine, hook=HOOK):
+    with engine.connect() as c:
+        return c.execute(sa.select(db.hook_pool_counts).where(db.hook_pool_counts.c.hook_address == hook)).first()
+
+
+def test_cap_stores_the_first_pools_of_a_hook_and_counts_the_rest(engine):
+    page = [_row(pid(n), HOOK, 100 + n) for n in (1, 2, 3)] + [_row(PC, HOOK2, 50)]
+    with engine.begin() as c:
+        stored, over = store.store_pools(c, BASE.chain_id, page, cap=2)
+    assert [r["pool_id"] for r in stored] == [pid(1), pid(2), PC] and [r["pool_id"] for r in over] == [pid(3)]
+    k = _counter(engine)
+    assert (k.pools_total, k.first_block, k.last_block) == (3, 103, 103)
+    with engine.begin() as c:                          # the same page again (a re-backfill from block 0): counted once
+        assert store.store_pools(c, BASE.chain_id, page, cap=2)[1] == []
+    assert _counter(engine).pools_total == 3
+    with engine.begin() as c:
+        store.store_pools(c, BASE.chain_id, [_row(pid(9), HOOK, 900)], cap=2)
+    k = _counter(engine)
+    assert (k.pools_total, k.first_block, k.last_block) == (4, 103, 900) and db.as_utc(k.last_seen) == core.utc(T0 + 900 * BT)
+    with engine.connect() as c:
+        assert store.pool_count(c, BASE.chain_id) == 3 and store.capped_floor(c, BASE.chain_id) == 103
+
+
+def test_cap_crossing_never_counts_a_stored_row_twice_and_rolls_back_with_its_page(engine):
+    with pytest.raises(RuntimeError):
+        with engine.begin() as c:
+            store.store_pools(c, BASE.chain_id, [_row(pid(n), HOOK, 100 + n) for n in (1, 2, 3)], cap=1)
+            raise RuntimeError("the page failed after the cap check")
+    assert _counter(engine) is None
+    with engine.begin() as c:
+        store.store_pools(c, BASE.chain_id, [_row(pid(1), HOOK, 101)], cap=2)
+        stored, over = store.store_pools(c, BASE.chain_id, [_row(pid(n), HOOK, 100 + n) for n in (1, 2, 3)], cap=2)
+    assert [r["pool_id"] for r in stored] == [pid(2)] and [r["pool_id"] for r in over] == [pid(3)]
+    assert _counter(engine).pools_total == 3
+
+
+def test_sync_caps_a_launchpad_hook_and_the_heartbeat_says_so(engine):
+    fake = FakeHyperSync()
+    fake.inits += [init_log(pid(0xD), ZERO, USDC, HOOK, 1600), init_log(pid(0xE), ZERO, USDC, HOOK, 3000)]
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    pools, _, _, state = _tables(engine)
+    assert state.initialize_block == HEAD - BASE.lag + 1 and set(pools) == {PA, PC}
+    assert (st.new_pools, st.capped) == (2, 2) and _counter(engine).pools_total == 3
+    assert "base:lag=0/20991,new=2,capped=2" in heartbeat(1, "hypersync", {"base": st})
