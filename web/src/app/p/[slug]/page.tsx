@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { Terminal } from "@/components/Terminal";
-import { getAllSlugs, getProject, getRows, usingFixtures } from "@/db/queries";
+import { getAllSlugs, getProject, getRows, slugForOldUnlisted, usingFixtures } from "@/db/queries";
 import { SAMPLE_NOW } from "@/fixtures/sample";
 import { movers } from "@/lib/feed";
 
@@ -29,7 +29,11 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 export default async function ProjectPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const [p, rows] = await Promise.all([getProject(slug), getRows()]);
-  if (!p) notFound();
+  if (!p) {
+    const moved = await slugForOldUnlisted(slug);   // hook was named since this link was shared
+    if (moved) permanentRedirect(`/p/${moved}`);
+    notFound();
+  }
   const sample = usingFixtures();
   return <Terminal rows={rows} moverRows={movers(rows)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} />;
 }

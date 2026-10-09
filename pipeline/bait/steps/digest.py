@@ -22,7 +22,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 "swaps_7d": r.swaps_7d, "pools_n": r.pools_n, "score_trending": r.score_trending}
 
     trending = sorted([r for r in rows if (r.score_trending or 0) > 0], key=lambda r: (-(r.score_trending or 0), -(r.tvl_usd or 0)))[:20]
-    new = sorted([r for r in rows if r.is_new], key=lambda r: -(r.tvl_usd or 0))
+    new = sorted([r for r in rows if r.is_new], key=lambda r: -(r.tvl_usd or 0))[:20]   # 85 were New on 10/8
     body = {
         "week_of": ctx.day.isoformat(), "generated_at": ctx.now.isoformat(),
         "totals": {"projects": len(rows), "tvl_usd": sum(r.tvl_usd or 0 for r in rows), "vol_7d": sum(r.vol_7d or 0 for r in rows)},
