@@ -230,7 +230,6 @@ def _usage(conn, ctx: RunContext, out: dict) -> None:
     ready = ready_chains(conn, ctx, out)
     window_start = ctx.day - timedelta(days=WINDOW_DAYS)
     ref = ref_day(ctx)
-    extras_stats = ctx.extras.get("keyless_pool_stats")
     for cid in ready:
         coverage = conn.execute(sa.select(sa.func.min(pool_daily_onchain.c.day)).where(pool_daily_onchain.c.chain_id == cid)).scalar()
         if coverage is None:
@@ -244,7 +243,7 @@ def _usage(conn, ctx: RunContext, out: dict) -> None:
             .where(pool_daily_onchain.c.chain_id == cid, pool_daily_onchain.c.day >= start, pool_daily_onchain.c.day <= ctx.day)
             .order_by(pool_daily_onchain.c.pool_id))]
         for i in range(0, len(pool_ids), CHUNK):
-            _usage_chunk(conn, ctx, cid, pool_ids[i:i + CHUNK], start, full, ref, coverage, extras_stats, out)
+            _usage_chunk(conn, ctx, cid, pool_ids[i:i + CHUNK], start, full, ref, coverage, out)
 
 
 def _unknown_from(hook: str | None, days: dict, start: date) -> date | None:
@@ -258,7 +257,7 @@ def _unknown_from(hook: str | None, days: dict, start: date) -> date | None:
 
 
 def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date, full: bool, ref: date, coverage: date,
-                 extras_stats, out: dict) -> None:
+                 out: dict) -> None:
     daily: dict[str, dict[date, tuple[int, int, float, int]]] = {}
     for r in conn.execute(sa.select(pool_daily_onchain).where(
             pool_daily_onchain.c.chain_id == cid, pool_daily_onchain.c.pool_id.in_(chunk),
@@ -317,13 +316,9 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
         if pid in held_back:
             held.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": None, "traders_24h": w,
                          "wallets_24h": w, "window_end": window_end, "vol_source": "hook" if hook and custom_accounting(hook) else "unpriced"})
-            if extras_stats is not None and (pid, cid) in extras_stats:  # keyless volume kept; no entry = unknown, not $0
-                extras_stats[(pid, cid)] = (extras_stats[(pid, cid)][0], w)
         else:
             stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": w,
                               "wallets_24h": w, "window_end": window_end, "vol_source": "onchain"})
-            if extras_stats is not None:
-                extras_stats[(pid, cid)] = (v, w)
     keys = ["pool_id", "chain_id", "day"]
     for i in range(0, len(stat_rows), CHUNK):
         upsert(conn, pool_stats, stat_rows[i:i + CHUNK], keys=keys, update=["vol_24h", "traders_24h", "wallets_24h", "window_end", "vol_source"])

@@ -1,8 +1,14 @@
-"""Step 6 (score): project_daily rollup from pool_snapshots for ctx.day.
+"""Step 6 (score): project_daily(day) from closed UTC days.
 
-Window math per pool: value(day) - baseline(day-7). baseline = latest snapshot on/before day-7; if none and
-the pool was created after day-7 -> 0; if none and the pool predates the window (cold start) -> the earliest
-snapshot we have, so a partial window never inflates vol_7d with all-time volume.
+One window convention (DESIGN.md "Windows"). The run on `day` reports the UTC days that are over: window_end = day - 1;
+"24h" = the day window_end; "7d" = window_end-6 .. window_end; "prev 7d" = window_end-13 .. window_end-7. Windows sum the
+per-day columns of pool_snapshots (volume_usd_day, tx_count_day); the row for `day` itself is still running and is
+never read.
+- Volume: a day without a row adds $0 (the pool was not listed, or did not trade). A pool whose cumulative volume at
+  window_end is NULL (the onchain step could not measure it) is left out of every volume window, not read as $0.
+- Swaps: a pool's count is known when every day of the window is (days before the pool was created count as 0; a pool
+  with no volume in the window adds 0). Otherwise swaps_7d / swaps_24h are NULL, never a 7-day number built from one day.
+Reads stored rows only, so `python -m bait run --steps score --day <d>` writes the same rows however often it runs.
 """
 from __future__ import annotations
 
@@ -16,74 +22,70 @@ from ..rules import is_new, is_spam, is_wash_7d, score_trending
 from . import RunContext, log
 from .onchain import ready_chains
 
+_D = timedelta(days=1)
+
+
+def window_end(day: date) -> date:
+    """The last closed UTC day the run on `day` reports."""
+    return day - _D
+
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     day = ctx.day
-    since = day - timedelta(days=14)
+    end = window_end(day)
+    w24, w7, wp = (end, end), (end - 6 * _D, end), (end - 13 * _D, end - 7 * _D)
     hook_to_project = {(r.chain_id, r.address): r.project_id for r in conn.execute(
         sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id).where(hooks.c.project_id.is_not(None)))}
-    pool_rows = conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id, pools.c.hook_address, pools.c.created_at)).all()
     pool_project = {}
-    for p in pool_rows:
+    for p in conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id, pools.c.hook_address, pools.c.created_at)):
         pid = hook_to_project.get((p.chain_id, p.hook_address))
         if pid:
             pool_project[(p.pool_id, p.chain_id)] = (pid, as_utc(p.created_at).date() if p.created_at else None)
-    snaps = conn.execute(sa.select(pool_snapshots).where(pool_snapshots.c.day <= day, pool_snapshots.c.day >= since)
-                         .order_by(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id, pool_snapshots.c.day)).all()
-    # oldest snapshot per pool overall (for cold start) may be before `since`; fetch earliest days separately
-    earliest = {(r.pool_id, r.chain_id): r for r in conn.execute(
-        sa.select(pool_snapshots).where(sa.tuple_(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id, pool_snapshots.c.day).in_(
-            sa.select(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id, sa.func.min(pool_snapshots.c.day))
-            .group_by(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id))))} if snaps else {}
-
-    by_pool: dict[tuple, list] = {}
-    for s in snaps:
-        by_pool.setdefault((s.pool_id, s.chain_id), []).append(s)
+    by_pool: dict[tuple, dict] = {}
+    for s in conn.execute(sa.select(pool_snapshots).where(pool_snapshots.c.day >= wp[0], pool_snapshots.c.day <= end)):
+        by_pool.setdefault((s.pool_id, s.chain_id), {})[s.day] = s
 
     agg: dict[int, dict] = {}
-    unknown_vol: set[tuple] = set()   # pools whose current cumulative volume is NULL (onchain held it back): not $0
+    unknown_vol: set[tuple] = set()   # cumulative volume NULL at window_end (onchain held it back): not $0
     pool_tvl: dict[tuple, float | None] = {}
-    for key, series in by_pool.items():
+    for key, rows in by_pool.items():
         if key not in pool_project:
             continue
         pid, created = pool_project[key]
-        a = agg.setdefault(pid, {"tvl": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx7": 0, "pools": 0, "max_tvl": 0.0, "stats": []})
-        cur = _at(series, day)
-        if cur is None:
-            continue
-        b7 = _baseline(series, day - 7 * _D, created, earliest.get(key))
-        b14 = _baseline(series, day - 14 * _D, created, earliest.get(key))
+        a = agg.setdefault(pid, _empty())
+        cur = rows[max(rows)]          # latest row on/before window_end
         a["pools"] += 1
         a["tvl"] += cur.tvl_usd or 0.0
         a["max_tvl"] = max(a["max_tvl"], cur.tvl_usd or 0.0)
+        a["stats"].append((cur.tvl_usd or 0.0, cur.tx_count_cum or 0))
         pool_tvl[key] = cur.tvl_usd
+        quiet: dict[str, bool] = {}
         if cur.volume_usd_cum is None:
-            # left out of both weeks, so the trending ratio compares like with like, and out of the wash inputs
             unknown_vol.add(key)
         else:
-            a["vol7"] += max(cur.volume_usd_cum - (b7.volume_usd_cum or 0.0), 0.0)
-            a["vol7p"] += max((b7.volume_usd_cum or 0.0) - (b14.volume_usd_cum or 0.0), 0.0)
-        a["tx7"] += max((cur.tx_count_cum or 0) - (b7.tx_count_cum or 0), 0)
-        a["stats"].append((cur.tvl_usd or 0.0, cur.tx_count_cum or 0))
+            for name, w in (("vol24", w24), ("vol7", w7), ("vol7p", wp)):
+                v = _vol(rows, w)
+                a[name] += v
+                quiet[name] = v == 0
+        for name, w, vol_name in (("tx24", w24, "vol24"), ("tx7", w7, "vol7")):
+            n, known = _swaps(rows, w, created)
+            a[name] += n
+            if not known and not quiet.get(vol_name, False):
+                a[name + "_known"] = False
 
-    # Keyless runs hand over per-pool (24h volume, unique wallets); wash-like projects are excluded like spam.
-    wash: set[int] = set()
-    stats = ctx.extras.get("keyless_pool_stats") or {
-        (r.pool_id, r.chain_id): (r.vol_24h, r.traders_24h or 0)
-        for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day))}
-    if stats:
-        from ..keyless import is_wash
-        # Judge each pool, then call a project wash-like when wash pools carry most of its 24h volume
-        # (summing wallets across a merged family would let two wash pools pass as one busy project).
-        per: dict[int, list[float]] = {}
-        for key, (vol24, traders) in stats.items():
-            if key in pool_project and vol24 is not None and key not in unknown_vol:
-                t = per.setdefault(pool_project[key][0], [0.0, 0.0])
-                t[0] += vol24
-                if is_wash(vol24, traders):
-                    t[1] += vol24
-        wash = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
-    wash7 = _wash_7d(conn, day, pool_project, set(ready_chains(conn, ctx)), unknown_vol, pool_tvl)
+    # 24h wash rule, per pool from pool_stats(day); a project is wash-like when wash pools carry most of its 24h volume
+    # (summing wallets across a merged family would let two wash pools pass as one busy project).
+    from ..keyless import is_wash
+    per: dict[int, list[float]] = {}
+    for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day)):
+        key = (r.pool_id, r.chain_id)
+        if key in pool_project and r.vol_24h is not None and key not in unknown_vol:
+            t = per.setdefault(pool_project[key][0], [0.0, 0.0])
+            t[0] += r.vol_24h
+            if is_wash(r.vol_24h, r.traders_24h or 0):
+                t[1] += r.vol_24h
+    wash = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
+    wash7 = _wash_7d(conn, end, pool_project, set(ready_chains(conn, ctx)), unknown_vol, pool_tvl)
     wash |= wash7
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
@@ -95,12 +97,14 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 first_seen[pid] = c
     rows = []
     for pid, fs in first_seen.items():
-        a = agg.get(pid, {"tvl": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx7": 0, "pools": 0, "max_tvl": 0.0, "stats": []})
+        a = agg.get(pid) or _empty()
+        young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
         rows.append({
-            "project_id": pid, "day": day, "tvl_usd": a["tvl"], "vol_7d": a["vol7"], "vol_7d_prev": a["vol7p"],
-            "swaps_7d": a["tx7"], "pools_n": a["pools"],
-            "score_trending": 0.0 if (pid in wash or fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc))
-                              else score_trending(a["vol7"], a["vol7p"]),
+            "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"],
+            "vol_24h": a["vol24"], "vol_7d": a["vol7"], "vol_7d_prev": a["vol7p"],
+            "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
+            "score_trending": 0.0 if (pid in wash or young) else score_trending(a["vol7"], a["vol7p"]),
+            # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
             "is_new": pid not in wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
             "is_spam": pid in wash or is_spam(a["stats"]),
         })
@@ -111,23 +115,46 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(wash), "wash_7d": len(wash7)}
 
 
-def _wash_7d(conn, day: date, pool_project: dict, chains: set[int], skip: set[tuple] | frozenset, tvl: dict) -> set[int]:
-    """Projects whose 7-day on-chain volume is mostly in wash pools (rules.is_wash_7d), judged per pool. Only chains whose
-    swap cursor is caught up (onchain.ready_chains): a stuck cursor would judge on partial volume. skip: pools whose
-    current volume is unknown (NULL), left out rather than judged on understated volume. tvl: latest TVL per pool, for
-    the corroboration."""
+def _empty() -> dict:
+    return {"tvl": 0.0, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
+            "tx24_known": True, "tx7_known": True, "stats": []}
+
+
+def _vol(rows: dict, w: tuple[date, date]) -> float:
+    """Sum of volume_usd_day over the window; a missing day or a NULL value adds $0."""
+    return sum((r.volume_usd_day or 0.0) for d, r in rows.items() if w[0] <= d <= w[1])
+
+
+def _swaps(rows: dict, w: tuple[date, date], created: date | None) -> tuple[int, bool]:
+    """Sum of the known tx_count_day over the window, and whether every day is known (a day before the pool was created
+    counts as 0, known)."""
+    total, known, d = 0, True, w[0]
+    while d <= w[1]:
+        r = rows.get(d)
+        if r is not None and r.tx_count_day is not None:
+            total += r.tx_count_day
+        elif created is None or d >= created:
+            known = False
+        d += _D
+    return total, known
+
+
+def _wash_7d(conn, end: date, pool_project: dict, chains: set[int], skip: set[tuple] | frozenset, tvl: dict) -> set[int]:
+    """Projects whose 7-day on-chain volume (end-6 .. end) is mostly in wash pools (rules.is_wash_7d), judged per pool.
+    Only chains whose swap cursor is caught up (onchain.ready_chains). skip: pools whose volume is unknown (NULL).
+    tvl: latest TVL per pool, for the corroboration."""
     if not chains:
         return set()
-    start = day - timedelta(days=6)
+    start = end - 6 * _D
     vol = {(r.pool_id, r.chain_id): r.v or 0.0 for r in conn.execute(
         sa.select(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id, sa.func.sum(pool_daily_onchain.c.volume_usd).label("v"))
-        .where(pool_daily_onchain.c.day >= start, pool_daily_onchain.c.day <= day, pool_daily_onchain.c.chain_id.in_(chains))
+        .where(pool_daily_onchain.c.day >= start, pool_daily_onchain.c.day <= end, pool_daily_onchain.c.chain_id.in_(chains))
         .group_by(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id))}
     if not vol:
         return set()
     wallets = {(r.pool_id, r.chain_id): r.n for r in conn.execute(
         sa.select(pool_wallet_day.c.pool_id, pool_wallet_day.c.chain_id, sa.func.count(sa.distinct(pool_wallet_day.c.address)).label("n"))
-        .where(pool_wallet_day.c.day >= start, pool_wallet_day.c.day <= day, pool_wallet_day.c.chain_id.in_(chains))
+        .where(pool_wallet_day.c.day >= start, pool_wallet_day.c.day <= end, pool_wallet_day.c.chain_id.in_(chains))
         .group_by(pool_wallet_day.c.pool_id, pool_wallet_day.c.chain_id))}
     per: dict[int, list[float]] = {}
     for key, v in vol.items():
@@ -141,30 +168,3 @@ def _wash_7d(conn, day: date, pool_project: dict, chains: set[int], skip: set[tu
     if out:
         log.info("score: %d projects flagged as 7-day wash (>= $1M through <= 10 wallets, corroborated)", len(out))
     return out
-
-
-_D = timedelta(days=1)
-
-
-class _Zero:
-    tvl_usd = 0.0
-    volume_usd_cum = 0.0
-    tx_count_cum = 0
-
-
-def _at(series, day: date):
-    """Latest snapshot on/before day."""
-    best = None
-    for s in series:
-        if s.day <= day:
-            best = s
-    return best
-
-
-def _baseline(series, cutoff: date, created: date | None, earliest):
-    b = _at(series, cutoff)
-    if b is not None:
-        return b
-    if created is not None and created > cutoff:
-        return _Zero
-    return earliest or _Zero
