@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 
+import httpx
+
 from ..config import env
 from . import http
 
@@ -20,6 +22,20 @@ def parse_repo(url: str | None) -> tuple[str, str | None] | None:
     if repo:
         repo = repo.removesuffix(".git")
     return owner, repo
+
+
+_REPO_URL = re.compile(r"^(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9][A-Za-z0-9-]{0,38})(?:/([A-Za-z0-9_.-]{1,100}))?(?:[/?#].*)?$")
+_NOT_OWNERS = {"orgs", "settings", "features", "topics", "sponsors", "marketplace", "apps", "search", "about",
+               "collections", "login", "explore"}
+
+
+def repo_from_url(url: str | None) -> tuple[str, str | None] | None:
+    """Strict parse for API calls: github.com/<owner>[/<repo>...] with a real owner segment, else None."""
+    m = _REPO_URL.match((url or "").strip())
+    if not m or m.group(1).lower() in _NOT_OWNERS:
+        return None
+    repo = (m.group(2) or "").removesuffix(".git") or None
+    return None if repo in (".", "..") else (m.group(1), repo)
 
 
 class GitHub:
@@ -60,10 +76,21 @@ class GitHub:
         return (d or {}).get("items", [])
 
     def activity(self, url: str, days: int = 30, now: datetime | None = None) -> dict | None:
-        parsed = parse_repo(url)
+        """None for anything that is not a readable public repo: a malformed URL (never called), or a private, deleted
+        or blocked repo (403/404/451). A rate-limit 403 still raises: that is our problem, not the repo's."""
+        parsed = repo_from_url(url)
         if not parsed:
             return None
-        owner, repo = parsed
+        try:
+            return self._activity(*parsed, days=days, now=now)
+        except httpx.HTTPStatusError as e:
+            r = e.response
+            limited = r.headers.get("x-ratelimit-remaining") == "0" or "retry-after" in r.headers
+            if r.status_code in (404, 451) or (r.status_code == 403 and not limited):
+                return None
+            raise
+
+    def _activity(self, owner: str, repo: str | None, days: int, now: datetime | None) -> dict | None:
         now = now or datetime.now(timezone.utc)
         since = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
         if not repo:  # org URL: pick the most recently pushed public repo
