@@ -4,6 +4,7 @@ JSONB on Postgres, JSON on SQLite so tests run in memory. Upsert helper picks th
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
@@ -117,7 +118,8 @@ pool_top_wallets = sa.Table(
     sa.Column("last_trade_at", TS),
 )
 
-# Nansen labels per wallet; an empty list is a real answer ("no labels") and suppresses re-queries until stale.
+# Wallet labels from the retired Nansen lane (credits exhausted 2026-10-08). Frozen: the web still reads existing rows;
+# the pipeline no longer writes here. Delete the table when the web stops reading it.
 wallet_labels = sa.Table(
     "wallet_labels", metadata,
     sa.Column("address", sa.Text, primary_key=True),
@@ -167,7 +169,7 @@ digests = sa.Table(
 )
 
 # --- spend ---
-# One row per paid API call (Anthropic, Parallel, Exa; Nansen with usd=0). Written on its own connection by
+# One row per paid API call (Anthropic, Parallel, Exa). Written on its own connection by
 # costs.Meter so it survives step rollbacks. Budgets in costs.py read it.
 api_spend = sa.Table(
     "api_spend", metadata,
@@ -308,6 +310,32 @@ def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str
                 conn.execute(sa.text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {sqltype}'))
                 added.append(f"{table}.{column}")
     return added
+
+
+def savepoint(conn: sa.Connection):
+    """Per-item isolation inside a step transaction. Postgres aborts the whole transaction on the first
+    statement error, so each item's writes run in a SAVEPOINT that rolls back alone. SQLite: no-op (pysqlite's
+    savepoint support is unreliable and the test suite runs there)."""
+    return conn.begin_nested() if conn.dialect.name == "postgresql" else nullcontext()
+
+
+RUN_LOCK_KEY = "bait-run"
+
+
+def try_run_lock(engine: sa.Engine) -> sa.Connection | None:
+    """One nightly run at a time. Postgres: session-level advisory lock held by the returned connection; close it
+    to release. Returns None when another runner holds it. Other dialects: no lock, returns an open connection.
+
+    The lock connection comes from a throwaway NullPool engine: a pooled connection would go back to the pool on
+    close() with its session (and so the lock) still alive."""
+    if engine.dialect.name != "postgresql":
+        return engine.connect()
+    conn = sa.create_engine(engine.url, poolclass=sa.pool.NullPool, future=True).connect()
+    got = conn.execute(sa.text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": RUN_LOCK_KEY}).scalar_one()
+    if got:
+        return conn
+    conn.close()
+    return None
 
 
 def upsert(conn: sa.Connection, table: sa.Table, rows: Sequence[dict], keys: Iterable[str],

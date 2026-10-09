@@ -11,7 +11,13 @@ UPDATE_COLS = ["name", "description", "flags", "properties", "verified_source", 
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
-    entries = hooklist.load(path=ctx.hooklist_file)
+    out = {"hooks": 0, "new": 0, "updated": 0, "invalid": 0, "errors": 0}
+    try:
+        entries, out["invalid"] = hooklist.load_entries(path=ctx.hooklist_file)
+    except Exception as e:  # registry unreachable: keep last night's hooks, let the other steps run
+        out["errors"] = 1
+        log.error("ingest: hooklist unavailable, keeping existing hooks: %s", e)
+        return out
     existing = {(r.address, r.chain_id) for r in conn.execute(sa.select(hooks.c.address, hooks.c.chain_id))}
     rows, seen = [], set()
     for e in entries:
@@ -28,7 +34,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     for i in range(0, len(rows), 500):
         upsert(conn, hooks, rows[i:i + 500], keys=["address", "chain_id"], update=UPDATE_COLS)
     new = [r for r in rows if (r["address"], r["chain_id"]) not in existing]
-    out = {"hooks": len(rows), "new": len(new), "updated": len(rows) - len(new)}
+    out.update(hooks=len(rows), new=len(new), updated=len(rows) - len(new))
     if new:
         log.info("ingest new hooks: %s", ", ".join(f"{r['name'] or r['address'][:10]}@{r['chain_id']}" for r in new[:10]))
     return out

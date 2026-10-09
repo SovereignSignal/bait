@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 
 from ..clients.github import GitHub, parse_repo
-from ..db import as_utc, hooks, projects, radar_items, upsert
+from ..db import as_utc, hooks, projects, radar_items, savepoint, upsert
 from . import RunContext, log
 
 RETENTION_DAYS = 90
@@ -95,7 +95,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     gh = _github(ctx)
     for name, fn in (("registry", _registry), ("repos", _repos), ("exa", _exa)):
         try:
-            fn(conn, ctx, gh, out)
+            with savepoint(conn):
+                fn(conn, ctx, gh, out)
         except Exception as e:  # one source never takes down the others or the run
             out["source_errors"] += 1
             log.warning("radar source=%s failed: %s", name, e)

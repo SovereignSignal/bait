@@ -78,35 +78,42 @@ def main(argv: list[str] | None = None) -> int:
             log.error("unknown chain slug %s; known: %s", e, ",".join(CHAIN_BY_SLUG))
             return 2
     day = args.day or datetime.now(timezone.utc).date()
-    ctx = RunContext(day=day, chains=chains, hooklist_file=args.hooklist_file, force_digest=args.force_digest,
-                     max_code_fetch=args.max_code_fetch, signals_limit=args.signals_limit, meter=meter)
-    b = meter.budgets
-    log.info("spend budgets: $%.2f/day, $%.2f/30 days; spent today $%.4f, last 30 days $%.4f",
-             b.daily, b.monthly, meter.spent(today=True), meter.spent(days=30))
-    log.info("run day=%s steps=%s db=%s", day, ",".join(steps), engine.url.render_as_string(hide_password=True))
+    lock = db.try_run_lock(engine)
+    if lock is None:
+        log.error("another bait run holds the run lock; exiting (manual run overlapping the cron?)")
+        return 3
+    try:
+        ctx = RunContext(day=day, chains=chains, hooklist_file=args.hooklist_file, force_digest=args.force_digest,
+                         max_code_fetch=args.max_code_fetch, signals_limit=args.signals_limit, meter=meter)
+        b = meter.budgets
+        log.info("spend budgets: $%.2f/day, $%.2f/30 days; spent today $%.4f, last 30 days $%.4f",
+                 b.daily, b.monthly, meter.spent(today=True), meter.spent(days=30))
+        log.info("run day=%s steps=%s db=%s", day, ",".join(steps), engine.url.render_as_string(hide_password=True))
 
-    soft_errors = 0
-    for name in STEP_ORDER:
-        if name not in steps:
-            continue
-        t0 = time.monotonic()
-        meter.step = name
-        try:
-            with engine.begin() as conn:
-                counts = STEPS[name](conn, ctx)
-        except Exception:
-            log.exception("step=%s FAILED after %.1fs", name, time.monotonic() - t0)
+        soft_errors = 0
+        for name in STEP_ORDER:
+            if name not in steps:
+                continue
+            t0 = time.monotonic()
+            meter.step = name
+            try:
+                with engine.begin() as conn:
+                    counts = STEPS[name](conn, ctx)
+            except Exception:
+                log.exception("step=%s FAILED after %.1fs", name, time.monotonic() - t0)
+                meter.flush()
+                log.info("run spend $%.4f (paid API calls this run; ledger: api_spend)", meter.run_usd)
+                return 1
             meter.flush()
-            log.info("run spend $%.4f (paid API calls this run; ledger: api_spend)", meter.run_usd)
+            soft_errors += counts.get("errors", 0)
+            log.info("step=%s ok %s elapsed=%.1fs", name, " ".join(f"{k}={v}" for k, v in counts.items()), time.monotonic() - t0)
+        log.info("run spend $%.4f (paid API calls this run; ledger: api_spend)", meter.run_usd)
+        if soft_errors:
+            log.error("run finished with %d soft errors (see warnings above)", soft_errors)
             return 1
-        meter.flush()
-        soft_errors += counts.get("errors", 0)
-        log.info("step=%s ok %s elapsed=%.1fs", name, " ".join(f"{k}={v}" for k, v in counts.items()), time.monotonic() - t0)
-    log.info("run spend $%.4f (paid API calls this run; ledger: api_spend)", meter.run_usd)
-    if soft_errors:
-        log.error("run finished with %d soft errors (see warnings above)", soft_errors)
-        return 1
-    return 0
+        return 0
+    finally:
+        lock.close()
 
 
 if __name__ == "__main__":

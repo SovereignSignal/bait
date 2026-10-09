@@ -1,11 +1,8 @@
-"""Step 3 (activity): who trades each hooked pool, plus Nansen wallet labels.
+"""Step 3 (activity): who trades each hooked pool.
 
 1. Pools: today's pool_stats joined to pools, wash pools excluded (keyless.is_wash), top ACTIVITY_POOLS by 24h volume.
 2. Trades: GeckoTerminal /pools/{id}/trades (last ~300 trades in 24h, keyless) through the run's shared keyless.Http.
    Aggregated per wallet (tx_from_address); top 20 by volume -> pool_top_wallets(day). Rows older than 14 days deleted.
-3. Labels (only with NANSEN_API_KEY): distinct wallets from today's rows, by volume, skipping chains Nansen does not
-   cover and wallets labeled within NANSEN_RELABEL_DAYS; at most NANSEN_MAX_ADDRESSES calls per run -> wallet_labels.
-   An empty label list is stored too, so a wallet with no labels is not re-queried until it goes stale.
 """
 from __future__ import annotations
 
@@ -14,14 +11,11 @@ from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 
-from ..clients.nansen import is_smart_money
-from ..db import as_utc, pool_stats, pool_top_wallets, pools, upsert, wallet_labels
+from ..db import as_utc, pool_stats, pool_top_wallets, pools, savepoint, upsert
 from . import RunContext, log
 
 TOP_WALLETS = 20
 RETAIN_DAYS = 14
-# Nansen answers that mean "stop calling for this run" (bad key, out of credits, forbidden).
-_FATAL_STATUS = {401, 402, 403}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -33,8 +27,7 @@ def _env_int(name: str, default: int) -> int:
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"pools": 0, "pools_fetched": 0, "pools_no_trades": 0, "trades": 0, "wallets": 0, "pruned": 0,
-           "nansen_queried": 0, "nansen_labeled": 0, "nansen_smart_money": 0, "nansen_skipped_chain": 0,
-           "nansen_fresh": 0, "errors": 0}
+           "errors": 0}
     from .. import keyless as K
     from .snapshot import keyless_http
 
@@ -53,26 +46,21 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if net is None:
             continue
         try:
-            trades = K.fetch_trades(http, net, pid)
-            if trades is None:
-                out["pools_no_trades"] += 1
-                continue
-            rows = aggregate(trades, pid, cid, ctx.day)
-            conn.execute(sa.delete(pool_top_wallets).where(pool_top_wallets.c.pool_id == pid, pool_top_wallets.c.chain_id == cid,
-                                                           pool_top_wallets.c.day == ctx.day))
-            upsert(conn, pool_top_wallets, rows, keys=["pool_id", "chain_id", "day", "address"])
-            out["pools_fetched"] += 1
-            out["trades"] += len(trades)
-            out["wallets"] += len(rows)
+            with savepoint(conn):
+                trades = K.fetch_trades(http, net, pid)
+                if trades is None:
+                    out["pools_no_trades"] += 1
+                    continue
+                rows = aggregate(trades, pid, cid, ctx.day)
+                conn.execute(sa.delete(pool_top_wallets).where(pool_top_wallets.c.pool_id == pid, pool_top_wallets.c.chain_id == cid,
+                                                               pool_top_wallets.c.day == ctx.day))
+                upsert(conn, pool_top_wallets, rows, keys=["pool_id", "chain_id", "day", "address"])
+                out["pools_fetched"] += 1
+                out["trades"] += len(trades)
+                out["wallets"] += len(rows)
         except Exception as e:  # one pool must not kill the night
             out["errors"] += 1
             log.warning("activity pool=%s chain=%s failed: %s", pid, cid, e)
-
-    nansen = ctx.client("nansen")
-    if nansen is not None and selected:
-        label_wallets(conn, ctx, nansen, selected, out)
-        log.info("activity nansen queried=%d labeled=%d smart_money=%d (credits are spent per query)",
-                 out["nansen_queried"], out["nansen_labeled"], out["nansen_smart_money"])
     return out
 
 
@@ -112,57 +100,6 @@ def aggregate(trades: list[dict], pool_id: str, chain_id: int, day) -> list[dict
             a["last_trade_at"] = ts
     ranked = sorted(agg.values(), key=lambda a: (-a["volume_usd"], -a["trades"], a["address"]))
     return ranked[:TOP_WALLETS]
-
-
-def label_wallets(conn, ctx: RunContext, nansen, selected: list[tuple[str, int]], out: dict) -> None:
-    from ..clients import nansen as N
-    cap = N.max_addresses()
-    fresh_after = ctx.now - timedelta(days=N.relabel_days())
-    left = N.budget_left(conn, ctx.now)
-    out["nansen_budget_left"] = left
-    sel = set(selected)
-    totals: dict[tuple[str, int], float] = {}
-    for r in conn.execute(sa.select(pool_top_wallets).where(pool_top_wallets.c.day == ctx.day)):
-        if (r.pool_id, r.chain_id) in sel:
-            k = (r.address.lower(), r.chain_id)
-            totals[k] = totals.get(k, 0.0) + (r.volume_usd or 0.0)
-    if not totals:
-        return
-    known = {(r.address, r.chain_id): as_utc(r.as_of) for r in conn.execute(
-        sa.select(wallet_labels.c.address, wallet_labels.c.chain_id, wallet_labels.c.as_of))}
-    source = getattr(nansen, "source", "nansen")
-    for (addr, cid), _vol in sorted(totals.items(), key=lambda kv: (-kv[1], kv[0])):
-        if not nansen.supports(cid):
-            out["nansen_skipped_chain"] += 1
-            continue
-        seen = known.get((addr, cid))
-        if seen is not None and seen >= fresh_after:
-            out["nansen_fresh"] += 1
-            continue
-        if out["nansen_queried"] >= cap:
-            break
-        if left < N.cost_per_hit():
-            log.info("activity nansen: monthly credit budget reached (NANSEN_MONTHLY_CREDITS); no more lookups this run")
-            out["nansen_budget_stop"] = 1
-            break
-        out["nansen_queried"] += 1
-        try:
-            labs = list(nansen.labels(addr, cid) or [])
-        except Exception as e:
-            out["errors"] += 1
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            log.warning("activity nansen address=%s chain=%s failed: %s", addr, cid, e)
-            if status in _FATAL_STATUS:
-                log.warning("activity nansen status=%s: stopping labels for this run", status)
-                break
-            continue
-        smart = is_smart_money(labs)
-        upsert(conn, wallet_labels, [{"address": addr, "chain_id": cid, "labels": labs, "smart_money": smart,
-                                      "source": source, "as_of": ctx.now}], keys=["address", "chain_id"])
-        out["nansen_labeled"] += bool(labs)
-        out["nansen_smart_money"] += smart
-        if labs:
-            left -= N.cost_per_hit()
 
 
 def _ts(v) -> datetime | None:

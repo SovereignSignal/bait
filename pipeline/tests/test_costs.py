@@ -198,7 +198,6 @@ def test_shortlist_finds_the_matching_project():
 def test_preview_counts_and_totals(conn, ctx, monkeypatch):
     for k in ("ANTHROPIC_API_KEY", "PARALLEL_API_KEY", "EXA_API_KEY"):
         monkeypatch.setenv(k, "test")
-    monkeypatch.delenv("NANSEN_API_KEY", raising=False)
     monkeypatch.setenv("ENRICH_MAX", "40")
     monkeypatch.setenv("GROUP_CLAUDE_MAX", "100")
     monkeypatch.setenv("ONCHAIN_MAX_NEW_HOOKS", "10")
@@ -220,7 +219,6 @@ def test_preview_counts_and_totals(conn, ctx, monkeypatch):
     assert rows[("signals", "exa")]["calls"] == 3 and rows[("signals", "anthropic")]["calls"] == 3
     assert rows[("group", "anthropic")]["calls"] == 1   # only the described one; bare addresses cost nothing
     assert rows[("radar", "exa")]["calls"] == 6 and rows[("radar", "anthropic")]["calls"] == 30
-    assert rows[("activity", "nansen")]["calls"] == 0   # no key
     total = sum(r["worst_usd"] for r in rows.values())
     hand = (1 * costs.anthropic_estimate("claude-haiku-4-5", group.PROMPT_CHARS_MAX, 400)
             + 3 * 0.025 + 3 * costs.anthropic_estimate("claude-sonnet-5-5", 6000, 600)
