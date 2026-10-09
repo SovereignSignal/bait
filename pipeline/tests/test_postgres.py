@@ -72,3 +72,34 @@ def test_cli_exits_3_without_running_a_step_while_another_run_holds_the_lock(pg_
     assert rc == 3
     with pg_engine.connect() as conn:
         assert conn.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 0   # ingest never ran
+
+
+def test_indexer_chain_lock_is_exclusive_per_chain_and_released_on_close(pg_engine):
+    a = db.try_advisory_lock(pg_engine, "bait-indexer:8453")
+    try:
+        assert db.try_advisory_lock(pg_engine, "bait-indexer:8453") is None
+        other = db.try_advisory_lock(pg_engine, "bait-indexer:1")
+        assert other is not None
+        other.close()
+    finally:
+        a.close()
+    b = db.try_advisory_lock(pg_engine, "bait-indexer:8453")
+    assert b is not None
+    b.close()
+
+
+def test_runner_skips_a_chain_another_indexer_holds(pg_engine, monkeypatch):
+    import httpx
+    from bait.indexer import core
+    from bait.indexer.__main__ import Runner
+    from bait.indexer.chains import select_chains
+    seen = []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: seen.append(ch.slug) or core.ChainStats(mode="hypersync"))
+    held = db.try_advisory_lock(pg_engine, "bait-indexer:8453")
+    try:
+        out = Runner(pg_engine, "tok", select_chains("ethereum,base"),
+                     httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))), core.Settings()).run_once()
+    finally:
+        held.close()
+    assert seen == ["ethereum"] and out["base"].error == "locked"

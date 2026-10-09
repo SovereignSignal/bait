@@ -397,20 +397,35 @@ def savepoint(conn: sa.Connection):
 RUN_LOCK_KEY = "bait-run"
 
 
-def try_run_lock(engine: sa.Engine) -> sa.Connection | None:
-    """One nightly run at a time. Postgres: session-level advisory lock held by the returned connection; close it
-    to release. Returns None when another runner holds it. Other dialects: no lock, returns an open connection.
+_LOCK_ENGINES: dict = {}
 
-    The lock connection comes from a throwaway NullPool engine: a pooled connection would go back to the pool on
-    close() with its session (and so the lock) still alive."""
+
+def try_advisory_lock(engine: sa.Engine, key: str) -> sa.Connection | None:
+    """Session-level pg_try_advisory_lock(hashtext(key)) on a dedicated connection; close() releases it. None when another
+    session holds it. Other dialects: no lock, an open connection. The connection comes from a NullPool engine (cached per
+    URL): a pooled connection would go back to the pool on close() with its session, and so the lock, still alive. The
+    transaction is committed at once: the lock survives it and the session is not left idle in transaction."""
     if engine.dialect.name != "postgresql":
         return engine.connect()
-    conn = sa.create_engine(engine.url, poolclass=sa.pool.NullPool, future=True).connect()
-    got = conn.execute(sa.text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": RUN_LOCK_KEY}).scalar_one()
+    lock_engine = _LOCK_ENGINES.get(engine.url)
+    if lock_engine is None:
+        lock_engine = _LOCK_ENGINES[engine.url] = sa.create_engine(engine.url, poolclass=sa.pool.NullPool, future=True)
+    conn = lock_engine.connect()
+    try:
+        got = conn.execute(sa.text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": key}).scalar_one()
+        conn.commit()
+    except Exception:
+        conn.close()
+        raise
     if got:
         return conn
     conn.close()
     return None
+
+
+def try_run_lock(engine: sa.Engine) -> sa.Connection | None:
+    """One nightly run at a time; see try_advisory_lock."""
+    return try_advisory_lock(engine, RUN_LOCK_KEY)
 
 
 def upsert(conn: sa.Connection, table: sa.Table, rows: Sequence[dict], keys: Iterable[str],
