@@ -446,3 +446,29 @@ def test_rescore_and_prose_stop_between_items_at_the_deadline(engine):
     assert out["left_at_deadline"] == len(targets) and claude.what == []
     out = repair.write_blurbs(engine, claude, [("p", "d")], NOW, deadline=NOW, clock=lambda: NOW)
     assert out["left_at_deadline"] == 1 and claude.why == []
+
+
+def test_restore_puts_back_every_backed_up_day_whatever_today_is_and_even_after_a_failed_nightly(tmp_path, monkeypatch, capsys):
+    from bait.__main__ import main
+    _at(monkeypatch, 12)
+    url, e = _cli_db(tmp_path, nightly_rc=1)            # the latest nightly failed: a restore is still allowed
+    t = _today()
+    days = [t - (i + 2) * D for i in range(15)]         # backed up two days ago, as a 15-day re-score would
+    with e.begin() as c:
+        pid = c.execute(sa.select(db.projects.c.id).where(db.projects.c.slug == "cli")).scalar_one()
+        c.execute(sa.delete(db.project_daily))
+        for d in days:
+            _old_row(c, pid, d)
+            repair.backup_day(c, d)
+        c.execute(sa.update(db.project_daily).values(is_spam=False))      # what the re-score wrote
+        assert repair.backup_days(c) == sorted(days) and repair.backup_days(c, days[0]) == [days[0]]
+    assert main(["repair", "rescore", "--restore", "--dry-run", "--database-url", url]) == 0
+    assert f"restore: 15 backed-up day(s) {days[-1]} .. {days[0]}" in capsys.readouterr().out
+    assert main(["repair", "rescore", "--restore", "--day", days[-1].isoformat(), "--database-url", url]) == 0
+    with e.connect() as c:
+        assert c.execute(sa.select(db.project_daily.c.day).where(db.project_daily.c.is_spam.is_(True))).scalars().all() == [days[-1]]
+    assert main(["repair", "rescore", "--restore", "--database-url", url]) == 0
+    with e.connect() as c:
+        assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily).where(db.project_daily.c.is_spam.is_(True))).scalar_one() == 15
+    assert [r.notes for r in _receipts(e)] == ["repair rescore-restore", "repair rescore-restore"]
+    assert main(["repair", "rescore", "--database-url", url]) == repair.EXIT_PRECONDITION   # a re-score is not exempt
