@@ -291,3 +291,22 @@ unverified). The web labels those by their busiest pair: "WETH/USDC hook · 0x7b
 - **Registry membership** is stored (`hooks.hooklisted`), set every night by ingest from the full hooklist. The "✓ Hooklist" badge and the Registry activity entry render only when true; otherwise "Not in hooklist" / "Discovered on-chain".
 - **Tab.** "Verified" is now "In Uniswap app" (eligible projects only). Audit status is a separate badge, not part of the tab.
 - **Trade panel.** The decorative swap form is gone. The pool action card shows the pair, chain and fee, and a primary "Swap on Uniswap" only for an eligible pool with at least $1K TVL and two identified tokens; otherwise "View pool on Uniswap" plus the reason.
+
+## Grouping and naming, package 7 (2026-10-09)
+
+- **One code hash.** `code_hash` is `0x` + sha256 of the deployed bytes everywhere (`rules.code_hash`). Keyless rows that
+  stored sha1 of the hex string are re-hashed from public RPC, 2,000 per run, until none are left.
+- **Regroup.** Ingest flags a grouped hook (`hooks.regroup`) when the hooklist names or lists it; a code-hash write flags
+  it too. The group step moves it into the curated project with that name, or renames its auto-named project in place,
+  and pulls same-bytecode hooks out of auto-named projects. Curated projects never give hooks up.
+- **Names are candidates, merges need evidence.** Shared non-proxy bytecode, a shared deployer that is not a CREATE2
+  factory, or the same hooklist name (`rules.merge_evidence`). Two same-named contracts on one chain without evidence
+  stay apart; the later one gets a short-address suffix.
+- **Template and proxy names** (`rules.GENERIC`) never group by name, hooklist or verified source. Proxies resolve to
+  their implementation name (Sourcify `proxyResolution`, Blockscout `implementations`); proxy bytecode is never
+  evidence. Projects keyed on such a name were split.
+- **Aliases.** Every rename, merge and regroup writes `project_aliases`; `/p/<old>` redirects through it.
+- **Lookups.** A transient contract-name failure (network, 429, 5xx) is asked again next run; Cloudflare 403 is a miss.
+  The log line carries per-source outcomes.
+- **Out of scope:** a teams alias map (FablesRamp, FablesRampETH, FablesRWA stay separate cards). `LimitOrderHook` is
+  treated as a real name (one hooklist family across chains) until the owner says it is a template.
