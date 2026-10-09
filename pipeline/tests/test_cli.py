@@ -17,8 +17,9 @@ def test_cli_end_to_end_sqlite_idempotent(tmp_path, monkeypatch):
     e = db.make_engine(url)
     with e.connect() as c:
         assert c.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 300
-        assert c.execute(sa.select(sa.func.count()).select_from(db.projects)).scalar_one() == 91
-        assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily)).scalar_one() == 91
+        # 78 named projects + 30 template-named hooks (LimitOrderHook, FeeHook, CurveHook, ...) that never merge by name
+        assert c.execute(sa.select(sa.func.count()).select_from(db.projects)).scalar_one() == 108
+        assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily)).scalar_one() == 108
         assert c.execute(sa.select(sa.func.count()).select_from(db.digests)).scalar_one() == 1
         receipts = c.execute(sa.select(db.run_receipts)).all()
     assert len(receipts) == 2 and all(r.exit_code == 0 for r in receipts)
@@ -62,6 +63,17 @@ def test_run_writes_a_receipt_even_when_a_step_fails(tmp_path, monkeypatch):
     assert r.steps["snapshot"]["failed"] == "RuntimeError"
     assert "SECRET" not in json.dumps(r.steps)
 
+
+def test_soft_errors_do_not_fail_the_run_but_land_in_the_receipt(tmp_path, monkeypatch):
+    from bait import __main__ as cli
+    url = f"sqlite:///{tmp_path}/s.sqlite"
+    monkeypatch.setitem(cli.STEPS, "ingest", lambda conn, ctx: {"hooks": 3, "errors": 2})
+    rc = cli.main(["run", "--day", "2026-10-06", "--database-url", url, "--steps", "ingest"])
+    assert rc == 0
+    e = db.make_engine(url)
+    with e.connect() as c:
+        r = c.execute(sa.select(db.run_receipts)).one()
+    assert r.exit_code == 0 and r.soft_errors == 2 and r.steps["ingest"]["errors"] == 2
 
 def test_run_exits_4_when_a_locked_migration_leaves_a_required_column_missing(tmp_path, monkeypatch):
     url = f"sqlite:///{tmp_path}/old.sqlite"

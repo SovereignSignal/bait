@@ -26,8 +26,16 @@ Direct dependencies in `requirements.txt` are pinned; to refresh, bump in a venv
 
 `--day` defaults to today's UTC date (what the Docker CMD relies on). Runs are idempotent per day:
 every table is keyed on its natural key plus `day` and written with upserts, so re-running a night
-replaces that night's rows. Exit code 0 only when every step finished with zero soft errors; a step
-exception exits 1 immediately; bad flags exit 2.
+replaces that night's rows.
+
+Exit codes:
+
+- 0: every requested step completed. Soft errors (for example one GitHub 403) do not change this; they are
+  counted in the `run_receipts` row (`soft_errors`, per-step counts) and logged at WARNING.
+- 1: a step raised; the run stops at that step.
+- 2: bad arguments (unknown step or chain slug).
+- 3: another run holds the run lock.
+- 4: schema not ready (a required column is missing).
 
 Flags: `--steps ingest,snapshot,...` (subset, run in canonical order), `--chains base,ethereum`
 (slugs), `--hooklist-file`, `--force-digest`, `--max-code-fetch N` (Blockscout lookups per night,

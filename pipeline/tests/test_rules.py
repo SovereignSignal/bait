@@ -155,3 +155,85 @@ def test_symmetric_traders():
     assert not is_symmetric([(50_000.0, 5, 5)], 60_000)      # one wallet is not a pattern
     assert not is_symmetric(bots, None) and not is_symmetric([(5_000.0, 1, 1)] * 2, 9_000)    # under $10K
     assert is_symmetric(bots + [(1.0, 1, 0)], 900_000)       # only the top 10 by volume are judged
+
+
+def test_code_hash_is_0x_sha256_of_the_bytes():
+    import hashlib
+    from bait.rules import code_hash
+    want = "0x" + hashlib.sha256(bytes.fromhex("6080604052")).hexdigest()
+    assert code_hash("0x6080604052") == code_hash("6080604052") == code_hash("0X6080604052") == want
+    assert len(want) == 66
+    for empty in (None, "", "0x", "0xzz"):
+        assert code_hash(empty) is None
+
+
+def test_useful_name_and_proxy_bytecode():
+    from bait.rules import is_proxy_code, useful_name
+    assert useful_name("FoundationHookV2") == "FoundationHookV2"
+    assert useful_name("x" * 61) is None and useful_name("Long " + "x" * 70, max_len=None) == "Long " + "x" * 70
+    for g in ("ERC1967Proxy", "FeeHook", "Counter", " UniswapV4Hook ", "", None):
+        assert useful_name(g, max_len=None) is None
+    slot = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+    assert is_proxy_code("0x6080604052" + slot.upper() + "5490")                    # EIP-1967 implementation slot
+    assert is_proxy_code("0x363d3d373d3d3d363d73" + "ab" * 20 + "5af43d82803e903d91602b57fd5bf3")   # EIP-1167 clone
+    assert not is_proxy_code("0x6080604052") and not is_proxy_code(None)
+
+
+def test_merge_evidence_reads_the_proxy_flag_not_the_name():
+    from types import SimpleNamespace
+    from bait.rules import merge_evidence
+
+    def h(code=None, dep=None, name=None, cname=None, proxy=False):
+        return SimpleNamespace(code_hash=code, deployer=dep, name=name, contract_name=cname, is_proxy=proxy)
+    assert merge_evidence([h(cname="OrcaHook")], [h(cname="OrcaHook")]) is None          # a name alone is not evidence
+    assert merge_evidence([h(code="0xa")], [h(code="0xa")]) == "code_hash"
+    assert merge_evidence([h(code="0xp", proxy=True)], [h(code="0xp", proxy=True)]) is None   # proxy bytecode is shared
+    assert merge_evidence([h(code="0xp", cname="OrcaHook", proxy=True)], [h(code="0xp")]) is None  # resolved impl name
+    assert merge_evidence([h(code="0xu", proxy=None)], [h(code="0xu", proxy=None)]) is None   # status unknown: no evidence
+    assert merge_evidence([h(dep="0xd")], [h(dep="0xd")]) == "deployer"
+    create2 = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
+    assert merge_evidence([h(dep=create2)], [h(dep=create2)]) is None                     # CREATE2 factory deploys for everyone
+    assert merge_evidence([h(name="Bunni Hooks")], [h(name="BunniHook")]) is None        # a shared hooklist name alone neither
+    assert merge_evidence([h(name="FeeHook")], [h(name="FeeHook")]) is None                # template name
+
+
+def test_generic_names_match_after_normalising():
+    from bait.rules import useful_name
+    for g in ("Limit Order Hook", "LimitOrderHookV2", "Black List Hook", "TWAMM", "FullRange", "GeomeanOracle",
+              "Arbitrage Hook", "Example", "My New Hook", "Hook", "Hooks", "Transparent Upgradeable Proxy", "Dynamic-Fee Hook"):
+        assert useful_name(g, max_len=None) is None, g
+    for ok in ("OrderBookHook", "Arbitrum Hook", "Testudo", "FoundationHookV2", "Limit Order Hook (Arbitrum)", "Bunni",
+               "Curve", "VaultHook", "OrderHook", "PointsHook", "Base Pair", "Arb Labs"):     # bare words: real names too
+        assert useful_name(ok, max_len=None) == ok, ok
+    assert useful_name("BaseHook") is None and useful_name("BaseTestHooks") is None       # the template class names
+    assert useful_name("ArbHook") is None and useful_name("Curve Hook") is None             # template example hooks
+
+
+def test_proxy_bytecode_needs_the_proxy_shape_not_just_the_constant():
+    from types import SimpleNamespace
+    from bait.rules import code_evidence, is_proxy_code, proxy_kind
+    slot = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+    clone = "0x363d3d373d3d3d363d73" + "ab" * 20 + "5af43d82803e903d91602b57fd5bf3"           # real EIP-1167, 45 bytes
+    assert len(clone) == 2 + 90 and proxy_kind(clone) == "eip1167" and is_proxy_code(clone)
+    clones_user = ("0x6080604052" + "00" * 100 + "3d602d80600a3d3981f3363d3d373d3d3d363d73"   # OZ Clones embeds the
+                   + "00" * 300)                                                             # clone code as a constant
+    assert not is_proxy_code(clones_user)
+    uups_impl = "0x6080604052" + slot + "00" * 3000                                          # UUPS implementation
+    assert not is_proxy_code(uups_impl)
+    erc1967 = "0x6080604052" + slot + "00" * 200                                             # real ERC1967 proxy
+    assert proxy_kind(erc1967) == "eip1967"
+
+    def row(kind):
+        return SimpleNamespace(code_hash="0xc", is_proxy=True, proxy_kind=kind)
+    assert code_evidence(row("eip1167")) == "0xc"          # same clone hash = same implementation: evidence
+    assert code_evidence(row("eip1967")) is None and code_evidence(row(None)) is None
+
+
+def test_a_small_delegatecalling_runtime_of_no_known_shape_is_unknown():
+    from types import SimpleNamespace
+    from bait.rules import code_evidence, is_proxy_code, proxy_kind
+    small = "0x363d3d37" + "73" + "ab" * 20 + "5af4" + "3d82803e" + "00" * 50     # forwards with DELEGATECALL (f4)
+    assert proxy_kind(small) == "unknown" and not is_proxy_code(small)
+    assert proxy_kind(small + "00" * 1100) is None                                  # a full contract may delegatecall
+    assert proxy_kind("0x6080604052") is None
+    assert code_evidence(SimpleNamespace(code_hash="0xd", is_proxy=None, proxy_kind="unknown")) is None

@@ -20,6 +20,7 @@ export interface HealthInput {
 const DEADLINE_HOUR_UTC = 8; // the nightly run starts at 06:00 UTC and must be done by now
 const INDEXER_MAX_AGE_MS = 2 * 3600_000;
 const SWAP_LAG_WARN_BLOCKS = 50_000;
+// Soft errors no longer change the pipeline exit code (a completed run exits 0), so health is where they surface.
 const SOFT_ERRORS_FAIL = 10;
 
 export function evaluateHealth(input: HealthInput, now: Date): { ok: boolean; reasons: string[]; warnings: string[] } {

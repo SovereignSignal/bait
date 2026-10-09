@@ -9,7 +9,7 @@ from tests.conftest import insert_hook
 
 def test_ingest_fixture_then_idempotent(conn, ctx):
     out = ingest.run(conn, ctx)
-    assert out == {"hooks": 300, "new": 300, "updated": 0, "invalid": 0, "errors": 0, "delisted": 0}
+    assert out == {"hooks": 300, "new": 300, "updated": 0, "invalid": 0, "errors": 0, "delisted": 0, "regroup": 0}
     row = conn.execute(sa.select(db.hooks).where(db.hooks.c.address == "0x0000fe59823933ac763611a69c88f91d45f81888", db.hooks.c.chain_id == 42161)).one()
     assert row.chain_id == 42161 and row.name == "BunniHook" and row.flags["beforeSwapReturnsDelta"] is True
     assert row.verified_source is True and row.properties["dynamicFee"] is False
@@ -17,7 +17,7 @@ def test_ingest_fixture_then_idempotent(conn, ctx):
 
     ctx.now = datetime(2026, 10, 7, 6, 0, tzinfo=timezone.utc)
     out2 = ingest.run(conn, ctx)
-    assert out2 == {"hooks": 300, "new": 0, "updated": 300, "invalid": 0, "errors": 0, "delisted": 0}
+    assert out2 == {"hooks": 300, "new": 0, "updated": 300, "invalid": 0, "errors": 0, "delisted": 0, "regroup": 0}
     assert conn.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 300
     row2 = conn.execute(sa.select(db.hooks.c.first_seen_at).where(db.hooks.c.address == row.address, db.hooks.c.chain_id == 42161)).scalar_one()
     assert db.as_utc(row2) == datetime(2026, 10, 6, 6, 0, tzinfo=timezone.utc)   # preserved on update
@@ -63,3 +63,16 @@ def test_ingest_marks_listed_hooks_and_demotes_the_rest(conn, ctx):
     assert rows[("0x" + "c" * 40, 8453)] is False
     listed = [v for k, v in rows.items() if k != ("0x" + "c" * 40, 8453)]
     assert listed and all(v is True for v in listed)
+
+
+def test_ingest_marks_grouped_hooks_the_registry_just_named(conn, ctx, fixture_entries):
+    from tests.conftest import NOW, insert_project
+    e = fixture_entries[0]["hook"]
+    addr, cid = e["address"].lower(), e["chainId"]
+    pid = insert_project(conn, "Unlisted hook x", NOW, slug="unlisted-x")
+    insert_hook(conn, addr, cid, project_id=pid)                         # found on-chain before its PR merged
+    insert_hook(conn, "0x" + "c" * 40, 8453, project_id=pid)             # never listed: not marked
+    conn.execute(sa.update(db.hooks).values(hooklisted=False))
+    out = ingest.run(conn, ctx)
+    marked = {r.address for r in conn.execute(sa.select(db.hooks.c.address).where(db.hooks.c.regroup.is_(True)))}
+    assert out["regroup"] == 1 and marked == {addr}

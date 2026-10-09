@@ -301,3 +301,12 @@ def test_budget_stop_mid_loop_keeps_every_collected_parallel_result(conn, ctx, m
     assert out["budget_stop"] == 1
     rows = {r.slug: r for r in conn.execute(sa.select(db.projects))}
     assert all(rows[s].enrichment.get("parallel", {}).get("team") == f"trun_{s.upper()}" for s in ("a", "b", "c"))
+
+
+def test_cut_line_word_boundary_and_ellipsis():
+    assert enrich.cut_line("  Dynamic fee hook.  ") == "Dynamic fee hook."
+    long = ("word " * 80).strip()                        # 399 chars
+    out = enrich.cut_line(long)
+    assert out.endswith("…") and len(out) <= 200 and not out[:-1].endswith(" ")
+    assert long.startswith(out[:-1]) and long[len(out) - 1] == " "   # the cut sits on a word boundary
+    assert enrich.cut_line("x" * 300) == "x" * 199 + "…"               # no spaces: hard cut, still marked

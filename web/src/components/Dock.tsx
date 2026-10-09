@@ -16,7 +16,6 @@ export function Dock() {
   const toFeed = () => {
     const qs = typeof window !== "undefined" && (onFeed || pathname?.startsWith("/p/")) ? window.location.search : "";
     if (!onFeed) router.push(`/${qs}`);
-    window.scrollTo(0, 0);
   };
 
   const current = pathname === "/leaders" ? "leaders" : pathname === "/building" ? "building" : t.searchOpen ? "search" : onFeed && t.watchOnly ? "watch" : onFeed ? "feed" : null;
@@ -49,7 +48,7 @@ export function Dock() {
       </button>
       <Link href="/building" aria-current={current === "building" ? "page" : undefined} onClick={() => t.closeSearch()}>
         <RadarIcon />
-        Building
+        Radar
       </Link>
       <button
         type="button"

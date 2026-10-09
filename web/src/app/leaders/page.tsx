@@ -54,7 +54,7 @@ export default async function LeadersPage() {
   const t = L.totals;
   return (
     <>
-      <div className={s.wrap}>
+      <main className={s.wrap} id="main" tabIndex={-1}>
         <div className={s.lead}>
           <h1>Leaders</h1>
           <p>Who is actually using v4 hooks. Grouped by project, refreshed nightly.</p>
@@ -81,9 +81,9 @@ export default async function LeadersPage() {
           <Board title="Most wallets" note="24h, distinct where known" entries={L.wallets} fmt={int} empty="Wallet counts appear after the next pipeline run." />
           <Board title="Most volume" note="7 days" entries={L.volume} fmt={usd} empty="No volume indexed yet." />
           <Board title="Most TVL" note="now" entries={L.tvl} fmt={usd} empty="No TVL indexed yet." />
-          <Board title="Most smart money" note="distinct wallets, 24h" entries={L.smartMoney} fmt={int} empty="Smart-money labels appear once the activity step has labelled top wallets." />
+          {L.smartMoney.length > 0 && <Board title="Most smart money" note="distinct wallets, 24h" entries={L.smartMoney} fmt={int} empty="" />}
         </div>
-      </div>
+      </main>
       <Footer sample={usingFixtures()} />
     </>
   );

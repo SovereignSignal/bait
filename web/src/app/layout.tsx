@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { Dock } from "@/components/Dock";
 import { TerminalProvider } from "@/components/TerminalProvider";
-import { TopBar } from "@/components/TopBar";
+import { SkipLink, TopBar } from "@/components/TopBar";
 import { CHAIN_ORDER } from "@/lib/chains";
 import "./globals.css";
 
@@ -25,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={inter.variable}>
       <body>
         <TerminalProvider>
+          <SkipLink />
           <TopBar chains={CHAIN_ORDER} />
           {children}
           <Dock />

@@ -9,7 +9,7 @@
 import { receiptRelevant } from "@/lib/relevance";
 import { resolveSymbols } from "@/lib/symbols";
 import { createSwrCache, type Ttl } from "@/lib/swr-cache";
-import { isUnlisted, oldUnlistedSlugPattern, unlistedLabel } from "@/lib/unlisted";
+import { isSlugShaped, isUnlisted, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
@@ -131,20 +131,24 @@ export function knownPoolKeys(): Promise<Set<string>> {
   );
 }
 
-/** Current slug of the project that owns a hook matching an old unlisted slug, for redirects after renames. */
-export async function slugForOldUnlisted(slug: string): Promise<string | null> {
+/**
+ * Where a moved slug lives now: renamed, merged, regrouped, or named since the link was shared. Only aliases the
+ * pipeline recorded (project_aliases), never an address-prefix guess.
+ */
+export async function slugForAlias(slug: string): Promise<string | null> {
   const db = getDb();
-  const pattern = oldUnlistedSlugPattern(slug);
-  if (!db || !pattern) return null;
-  const rows = await safe("slugForOldUnlisted", () =>
-    db
-      .select({ slug: t.projects.slug })
-      .from(t.hooks)
-      .innerJoin(t.projects, eq(t.projects.id, t.hooks.projectId))
-      .where(sql`lower(${t.hooks.address}) like ${pattern}`)
-      .orderBy(t.hooks.address)
-      .limit(1), []);
-  return rows[0]?.slug && rows[0].slug !== slug ? rows[0].slug : null;
+  if (!db || !isSlugShaped(slug)) return null;
+  const rows = await safe(
+    "slugForAlias",
+    async () =>
+      rowsOf<{ slug: string }>(
+        await db.execute(sql`select p.slug from project_aliases a join ${t.projects} p on p.id = a.project_id
+                             where a.old_slug = ${slug} limit 1`),
+      ),
+    [],
+  );
+  const to = rows[0]?.slug;
+  return to && to !== slug ? to : null;
 }
 
 export async function getAllSlugs(): Promise<string[]> {
