@@ -472,3 +472,27 @@ def test_an_rfq_hook_with_several_real_counterparties_is_not_concentrated(conn, 
     _optimism_ready(conn)
     score.run(conn, ctx)
     assert not daily(conn, rfq).is_wash
+
+
+def test_a_whale_with_unknown_tvl_and_eight_swaps_is_judged_by_its_swaps(conn, ctx):
+    """Re-review 1: TVL unknown, 8 known swaps carrying $436M, no pool_stats row, a chain the indexer does not cover. No
+    TVL rule can judge it, but 8 swaps prove at most 8 wallets: the 7-day rule applies through the swap bound."""
+    p = insert_project(conn, "Blind", first_seen=NOW - timedelta(days=60), slug="blind")
+    insert_hook(conn, "0xbl", 4663, project_id=p, name="Blind")
+    insert_pool(conn, "0xblp", 4663, "0xbl", created=NOW - timedelta(days=60))
+    days = [END - timedelta(days=i) for i in range(4)]
+    series(conn, "0xblp", 4663, {d: 109_000_000.0 for d in days}, tvl=None, tx={d: 2 for d in days})
+    insert_snap(conn, "0xblp", 4663, END - timedelta(days=13), None, 0.0, 0, vol_day=1_000_000.0)    # a prior week
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_wash and "7d" in d.wash_reason.split(",") and d.score_trending == 0.0 and not d.is_spam
+    assert out["trending"] == 0
+
+
+def test_two_swaps_carrying_a_million_prove_concentration_anywhere(conn, ctx):
+    p = insert_project(conn, "Pair", first_seen=NOW - timedelta(days=60), slug="pair")
+    insert_hook(conn, "0xpa", 4663, project_id=p, name="Pair")
+    insert_pool(conn, "0xpap", 4663, "0xpa", created=NOW - timedelta(days=60))
+    series(conn, "0xpap", 4663, {END: 3_000_000.0}, tvl=None, tx={END: 2})
+    score.run(conn, ctx)
+    assert "concentrated" in daily(conn, p).wash_reason.split(",")
