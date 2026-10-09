@@ -366,22 +366,35 @@ def code_hashes(http: Http, addrs_by_net: dict[str, set[str]]) -> dict[tuple[str
     return out
 
 
-def code_facts(http: Http, addrs_by_net: dict[str, set[str]]) -> dict[tuple[str, str], tuple[str, bool] | None]:
-    """(canonical code_hash, is_proxy) per (net, address) from eth_getCode. None = the RPC answered with no code (a
-    definitive miss); absent = not answered (retry later)."""
+def code_facts(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | None = None,
+               max_fail: int = 3) -> dict[tuple[str, str], tuple[str, bool] | None]:
+    """(canonical code_hash, is_proxy) per (net, address) from eth_getCode, 10 per batch. None = the RPC answered with no
+    code (a definitive miss); absent = not answered (retry later). A chain stops after max_fail consecutive unanswered
+    batches; everything stops at `deadline` (time.monotonic())."""
     out: dict[tuple[str, str], tuple[str, bool] | None] = {}
     for net, addrs in addrs_by_net.items():
-        addrs = sorted(addrs)
-        rpc = CHAINS[net][3]
-        calls = [{"jsonrpc": "2.0", "id": i, "method": "eth_getCode", "params": [a, "latest"]} for i, a in enumerate(addrs)]
-        res = {r.get("id"): r for r in http.rpc_batch(rpc, calls) if isinstance(r, dict)}
-        for i, a in enumerate(addrs):
-            r = res.get(i)
-            if r is None or "error" in r:
+        addrs, rpc, fails = sorted(addrs), CHAINS[net][3], 0
+        for k in range(0, len(addrs), 10):
+            if deadline is not None and time.monotonic() > deadline:
+                log(f"code facts: time budget spent, {CHAINS[net][1]} and later chains wait for the next run")
+                return out
+            chunk = addrs[k:k + 10]
+            calls = [{"jsonrpc": "2.0", "id": i, "method": "eth_getCode", "params": [a, "latest"]} for i, a in enumerate(chunk)]
+            res = {r.get("id"): r for r in http.rpc_batch(rpc, calls) if isinstance(r, dict)}
+            if not res:
+                fails += 1
+                if fails >= max_fail:
+                    log(f"{CHAINS[net][1]}: {fails} unanswered code batches in a row, skipping the rest this run")
+                    break
                 continue
-            code = r.get("result")
-            h = canonical_code_hash(code) if isinstance(code, str) else None
-            out[(net, a)] = (h, is_proxy_code(code)) if h else None
+            fails = 0
+            for i, a in enumerate(chunk):
+                r = res.get(i)
+                if r is None or "error" in r:
+                    continue
+                code = r.get("result")
+                h = canonical_code_hash(code) if isinstance(code, str) else None
+                out[(net, a)] = (h, is_proxy_code(code)) if h else None
         log(f"{CHAINS[net][1]}: code facts for {sum(1 for a in addrs if (net, a) in out)}/{len(addrs)} hooks")
     return out
 

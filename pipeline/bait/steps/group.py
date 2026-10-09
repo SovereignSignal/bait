@@ -4,6 +4,7 @@ regrouped first; moved and renamed projects leave aliases. is_factory when a pro
 from __future__ import annotations
 
 import os
+import time
 
 import sqlalchemy as sa
 
@@ -211,7 +212,7 @@ def _provisional(name: str, norm: str | None) -> bool:
     return not n or n.startswith(("contract:", "code:")) or name.startswith("Unlisted hook")
 
 
-def _rpc_code_facts(ctx, rows) -> dict:
+def _rpc_code_facts(ctx, rows, deadline: float) -> dict:
     """{(chain_id, address): (code_hash, is_proxy) | None} from free public-RPC eth_getCode for keyless chains. None means
     the chain answered with no code; a missing key means no answer. {} when KEYLESS=0 (tests) or on failure."""
     if os.environ.get("KEYLESS", "1") == "0":
@@ -226,39 +227,62 @@ def _rpc_code_facts(ctx, rows) -> dict:
     if not by_net:
         return {}
     try:
-        got = K.code_facts(keyless_http(ctx), by_net)
+        got = K.code_facts(keyless_http(ctx), by_net, deadline=deadline)
     except Exception as e:
         log.warning("group: code facts lookup failed: %s", e)
         return {}
     return {(K.CHAINS[net][0], addr): v for (net, addr), v in got.items()}
 
 
+def _refresh_budget_s() -> float:
+    try:
+        return float(os.environ.get("REHASH_BUDGET_S", "") or 120)
+    except ValueError:
+        return 120.0
+
+
 def _refresh_code_facts(conn, ctx, out: dict) -> None:
     """Proxy status is a bytecode fact. Rows with a legacy sha1 code_hash (keyless, 40 chars) or a hash whose proxy status
     is unknown (written before is_proxy existed, or by the on-chain/snapshot steps) get both from eth_getCode: canonical
-    hash and is_proxy. New unassigned hooks first. A hash that changed, or one now known not to be a proxy, marks the
-    hook for regroup. One-off on the same transition: a generic stored contract name ("ERC1967Proxy") is cleared so the
-    lookup, which now resolves implementations, runs again. Unanswered rows keep their values and retry next run."""
+    hash and is_proxy. New unassigned hooks first, then a window over the rest that moves on every day, so rows an RPC
+    never answers do not block the queue. REHASH_BUDGET_S (default 120) bounds the wall clock; a definitive miss (the
+    chain has no code there) nulls code_hash. A hash that changed, or one now known not to be a proxy, marks the hook
+    for regroup. One-off on the same transition: a generic stored contract name ("ERC1967Proxy") is cleared so the
+    lookup, which now resolves implementations, runs again."""
     need = sa.or_(sa.func.length(hooks.c.code_hash) == 40, sa.and_(hooks.c.code_hash.is_not(None), hooks.c.is_proxy.is_(None)))
     cols = (hooks.c.address, hooks.c.chain_id, hooks.c.project_id, hooks.c.code_hash, hooks.c.contract_name)
-    todo = conn.execute(sa.select(*cols).where(need).order_by(hooks.c.project_id.is_not(None), hooks.c.chain_id,
-                                                              hooks.c.address).limit(CODE_FACTS_BATCH)).all()
+    order = (hooks.c.chain_id, hooks.c.address)
+    todo = conn.execute(sa.select(*cols).where(need, hooks.c.project_id.is_(None)).order_by(*order)
+                        .limit(CODE_FACTS_BATCH)).all()
+    room = CODE_FACTS_BATCH - len(todo)
+    rest = sa.select(*cols).where(need, hooks.c.project_id.is_not(None)).order_by(*order)
+    total = conn.execute(sa.select(sa.func.count()).select_from(rest.subquery())).scalar_one() if room > 0 else 0
+    if total:
+        start = (ctx.day.toordinal() * room) % total
+        window = conn.execute(rest.offset(start).limit(room)).all()
+        if len(window) < room and start:
+            window += conn.execute(rest.limit(min(room - len(window), start))).all()
+        todo += window
     if not todo:
         return
-    got = _rpc_code_facts(ctx, todo)
+    got = _rpc_code_facts(ctx, todo, time.monotonic() + _refresh_budget_s())
     for r in todo:
         key = (r.chain_id, r.address)
-        if key not in got or got[key] is None:
-            continue
-        h, proxy = got[key]
-        vals = {"code_hash": h, "is_proxy": proxy}
-        if r.project_id is not None and (h != r.code_hash or not proxy):
-            vals["regroup"] = True
-        if r.contract_name is not None and useful_name(r.contract_name) is None:
-            vals.update(contract_name=None, name_checked_at=None)
+        if key not in got:
+            continue                                     # not answered: kept, asked again on a later run
+        if got[key] is None:
+            vals = {"code_hash": None, "is_proxy": None}
+            out["code_missing"] += 1
+        else:
+            h, proxy = got[key]
+            vals = {"code_hash": h, "is_proxy": proxy}
+            if r.project_id is not None and (h != r.code_hash or not proxy):
+                vals["regroup"] = True
+            if r.contract_name is not None and useful_name(r.contract_name) is None:
+                vals.update(contract_name=None, name_checked_at=None)
+            out["code_refreshed"] += 1
         conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == r.address, hooks.c.chain_id == r.chain_id))
-        out["code_refreshed"] += 1
-    log.info("group: code facts for %d of %d hooks", out["code_refreshed"], len(todo))
+    log.info("group: code facts for %d of %d hooks, %d without code", out["code_refreshed"], len(todo), out["code_missing"])
 
 
 def _split_proxy_families(conn, ctx) -> int:

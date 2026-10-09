@@ -73,3 +73,21 @@ def test_blockscout_flags_proxies_from_bytecode_and_proxy_type():
     assert bs({"deployed_bytecode": "0x6080" + SLOT}).fetch_code(8453, a).is_proxy is True
     assert bs({"deployed_bytecode": "0x6080", "proxy_type": "eip1967"}).fetch_code(8453, a).is_proxy is True
     assert bs({"deployed_bytecode": "0x6080"}).fetch_code(8453, a).is_proxy is False
+
+
+def test_code_facts_stops_a_silent_chain_after_three_batches_and_at_the_deadline():
+    import time
+    from bait import keyless as K
+
+    class Silent:
+        def __init__(self):
+            self.calls = 0
+
+        def rpc_batch(self, url, calls):
+            self.calls += 1
+            return []
+    addrs = {f"0x{i:040x}" for i in range(50)}                                        # 5 batches of 10
+    rpc = Silent()
+    assert K.code_facts(rpc, {"base": addrs, "ink": set()}) == {} and rpc.calls == 3
+    late = Silent()
+    assert K.code_facts(late, {"base": addrs}, deadline=time.monotonic() - 1) == {} and late.calls == 0
