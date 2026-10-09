@@ -30,7 +30,7 @@ class Exa:
         from ..costs import exa_usd
         price = exa_usd(n, highlights=True)
         self.meter.check("exa", price)
-        d = http.post_json(self.c, "https://api.exa.ai/search", json=body, headers=self.headers)
+        d = http.post_json_paid(self.c, "https://api.exa.ai/search", json=body, headers=self.headers)
         self.meter.record("exa", price, detail=query[:120])
         out = []
         for r in d.get("results", []):
