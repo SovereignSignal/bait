@@ -569,3 +569,78 @@ def test_a_known_wallet_bound_overrides_the_swap_bound_on_ready_chains_too(conn,
     _optimism_ready(conn)
     score.run(conn, ctx)
     assert not daily(conn, p).is_wash
+
+
+def test_pools_n_counts_every_pool_of_a_launchpad_past_the_indexer_cap(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xpad").values(pools_total=104_000))
+    other = insert_project(conn, "Other", first_seen=NOW - timedelta(days=30), slug="other")
+    insert_hook(conn, "0xother", 8453, project_id=other, name="Other")
+    for p, h in (("0xpp1", "0xpad"), ("0xop1", "0xother"), ("0xop2", "0xother")):
+        insert_pool(conn, p, 8453, h, created=NOW - timedelta(days=30))
+        series(conn, p, 8453, {END: 1000.0}, tvl=100.0, tx={END: 5})
+    score.run(conn, ctx)
+    assert (daily(conn, pad).pools_n, daily(conn, other).pools_n) == (104_000, 2)
+
+
+def test_a_hooks_aggregate_pool_adds_volume_but_is_not_a_pool(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    for p in ("0xpp1", db.hook_pool_id("0xpad")):
+        insert_pool(conn, p, 8453, "0xpad", created=NOW - timedelta(days=30) if p == "0xpp1" else None)
+    series(conn, "0xpp1", 8453, {END: 1000.0}, tvl=100.0, tx={END: 5})
+    series(conn, db.hook_pool_id("0xpad"), 8453, {END: 500.0}, tx={END: 40})
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert (d.vol_24h, d.swaps_24h, d.pools_n) == (1500.0, 45, 1)
+
+
+def test_a_launchpad_whose_only_usage_is_an_unpriced_aggregate_has_unknown_volume_not_zero(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    insert_pool(conn, "0xidle", 8453, "0xpad", created=NOW - timedelta(days=30))       # stored, never snapshotted
+    agg = db.hook_pool_id("0xpad")
+    insert_pool(conn, agg, 8453, "0xpad", created=None)
+    insert_snap(conn, agg, 8453, END, None, None, None, vol_day=None, tx_day=3)        # folded swaps, all unpriced
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert (d.vol_24h, d.vol_7d, d.pools_n) == (None, None, 0)
+
+
+def test_folded_usage_shows_in_the_totals_but_never_ranks_trending(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    insert_pool(conn, "0xpp1", 8453, "0xpad", created=NOW - timedelta(days=60))
+    agg = db.hook_pool_id("0xpad")
+    insert_pool(conn, agg, 8453, "0xpad", created=None)
+    days = [END - timedelta(days=i) for i in range(14)]
+    series(conn, "0xpp1", 8453, {d: 1_000.0 for d in days}, tvl=50_000.0, tx={d: 10 for d in days})
+    series(conn, agg, 8453, {d: (1_000_000.0 if d > END - timedelta(days=7) else 0.0) for d in days}, tx={d: 10 for d in days})
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert d.vol_7d == 7_000.0 + 7_000_000.0                                            # displayed totals include it
+    assert d.score_trending == pytest.approx(score.score_trending(7_000.0, 7_000.0))     # ranking does not
+
+
+def test_wash_shares_use_unfolded_volume_so_folded_usage_cannot_dilute_a_wash_pool(conn, ctx):
+    """A capped project: its sampled wash pool carries 60% of the unfolded volume; the hook's aggregate pool (folded swaps,
+    which no rule can judge) equals the unfolded total. Counted in the denominator it would cut the share to 30%."""
+    pad = _onchain_project(conn, "Pad", "0xwash", wallets=1, vol_per_day=60_000_000)            # $420M, one wallet
+    insert_pool(conn, "0xclean", 10, "0xPad", created=NOW - timedelta(days=60))
+    series(conn, "0xclean", 10, {END - timedelta(days=i): 40_000_000.0 for i in range(14)}, tvl=50_000_000,
+           tx={END - timedelta(days=i): 500 for i in range(14)})
+    for i in range(7):
+        d = END - timedelta(days=i)
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id="0xclean", day=d, swaps=500, wallets=60,
+                                                             volume_usd=40_000_000))
+        for w in range(60):
+            conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id="0xclean", day=d, address=f"0xc{w}", swaps=1))
+    agg = db.hook_pool_id("0xPad")
+    insert_pool(conn, agg, 10, "0xPad", created=None)
+    series(conn, agg, 10, {END - timedelta(days=i): 100_000_000.0 for i in range(14)}, tvl=None,
+           tx={END - timedelta(days=i): 5_000 for i in range(14)})
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert d.is_wash and "7d" in d.wash_reason.split(",") and d.score_trending == 0.0

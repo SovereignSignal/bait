@@ -7,7 +7,7 @@ from datetime import date, timedelta
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 
-from ..db import indexer_state, pool_daily_onchain, pool_wallet_day, upsert, utcnow, v4_pools
+from ..db import HOOK_POOL_PREFIX, as_utc, hook_pool_counts, indexer_state, pool_daily_onchain, pool_wallet_day, upsert, utcnow, v4_pools
 
 CHUNK = 500
 WALLET_RETAIN_DAYS = 30
@@ -48,6 +48,119 @@ def upsert_pools(conn: sa.Connection, rows: list[dict]) -> int:
     return len(rows)
 
 
+def insert_late_pools(conn: sa.Connection, rows: list[dict]) -> int:
+    """Pools that were not rows and just swapped. A row's own "sampled" flag wins (default true: past its hook's cap,
+    already counted in hook_pool_counts); a pool missing for another reason comes with sampled = false."""
+    ins = _ins(conn)
+    for i in range(0, len(rows), CHUNK):
+        conn.execute(ins(v4_pools).values([{"sampled": True, **r} for r in rows[i:i + CHUNK]])
+                     .on_conflict_do_nothing(index_elements=["chain_id", "pool_id"]))
+    return len(rows)
+
+
+def store_pools(conn: sa.Connection, chain_id: int, rows: list[dict], cap: int) -> tuple[list[dict], list[dict]]:
+    """One page's hooked pools under the per-hook cap -> (stored, unstored). A hook keeps at most `cap` v4_pools rows, the
+    first to arrive; past that its pools only add to hook_pool_counts.pools_total (every pool of the hook, stored or
+    not). Runs inside the page's transaction, before the upsert, so a page that fails rolls its counters back too.
+    A capped hook counts only blocks after its last_block: a page seen twice (re-backfill from 0) is counted once.
+    cap <= 0: no new caps (hooks already capped keep counting)."""
+    if not rows:
+        return [], []
+    by_hook: dict[str, list[dict]] = {}
+    for r in rows:
+        by_hook.setdefault(r["hook_address"], []).append(r)
+    hooks = sorted(by_hook)
+    counters = hook_counters(conn, chain_id, hooks)
+    have: dict[str, int] = {}
+    open_hooks = [h for h in hooks if h not in counters]
+    if cap > 0:
+        for i in range(0, len(open_hooks), CHUNK):
+            have.update(conn.execute(sa.select(v4_pools.c.hook_address, sa.func.count()).where(
+                v4_pools.c.chain_id == chain_id, v4_pools.c.hook_address.in_(open_hooks[i:i + CHUNK]))
+                .group_by(v4_pools.c.hook_address)).all())
+    stored, unstored, counts = [], [], []
+    for h in hooks:
+        rs, c = by_hook[h], counters.get(h)
+        if c is not None:                      # past the cap: count what is new, store nothing
+            fresh = [r for r in rs if c.last_block is None or (r["block_number"] or 0) > c.last_block]
+            if fresh:
+                unstored += fresh
+                counts.append(_counted(chain_id, h, c.pools_total, c.first_block, c.last_block, c.last_seen, fresh))
+            continue
+        n = have.get(h, 0)
+        if cap <= 0 or n + len(rs) <= cap:
+            stored += rs
+            continue
+        # crossing the cap. A row already stored (this page seen before) is neither stored again nor counted twice.
+        ids, seen = [r["pool_id"] for r in rs], set()
+        for i in range(0, len(ids), CHUNK):
+            seen.update(conn.execute(sa.select(v4_pools.c.pool_id).where(
+                v4_pools.c.chain_id == chain_id, v4_pools.c.pool_id.in_(ids[i:i + CHUNK]))).scalars())
+        new = [r for r in rs if r["pool_id"] not in seen]
+        room = max(cap - n, 0)
+        stored += new[:room]
+        over = new[room:]
+        if over:
+            unstored += over
+            last = max((r["block_number"] for r in rs if r.get("block_number") is not None), default=None)
+            seen_at = max((as_utc(r["block_time"]) for r in rs if r.get("block_time") is not None), default=None)
+            counts.append(_counted(chain_id, h, n + len(new) - len(over), None, last, seen_at, over))
+    upsert(conn, hook_pool_counts, counts, keys=["chain_id", "hook_address"])
+    upsert_pools(conn, stored)
+    return stored, unstored
+
+
+def hook_counters(conn: sa.Connection, chain_id: int, hooks) -> dict:
+    """hook address -> hook_pool_counts row, for the hooks past the cap among `hooks`."""
+    hooks, out = sorted(set(hooks)), {}
+    for i in range(0, len(hooks), CHUNK):
+        for c in conn.execute(sa.select(hook_pool_counts).where(
+                hook_pool_counts.c.chain_id == chain_id, hook_pool_counts.c.hook_address.in_(hooks[i:i + CHUNK]))):
+            out[c.hook_address] = c
+    return out
+
+
+def add_hook_usage(conn: sa.Connection, chain_id: int, adds: dict[str, list]) -> None:
+    """adds: hook -> [sampled rows inserted, swaps folded into its aggregate pool, their USD]. Increments, in the page's
+    transaction (after the compare-and-set), so a page that loses the race adds nothing."""
+    rows = [{"c": chain_id, "h": h, "s": s, "n": n, "v": v} for h, (s, n, v) in adds.items() if s or n or v]
+    if rows:
+        t = hook_pool_counts.c
+        conn.execute(sa.update(hook_pool_counts).where(t.chain_id == sa.bindparam("c"), t.hook_address == sa.bindparam("h"))
+                     .values(sampled_total=t.sampled_total + sa.bindparam("s"), swaps_total=t.swaps_total + sa.bindparam("n"),
+                             volume_usd_total=t.volume_usd_total + sa.bindparam("v")), rows)
+
+
+def _counted(chain_id: int, hook: str, total: int, first, last, seen_at, rows: list[dict]) -> dict:
+    """The hook_pool_counts row after counting `rows` (pools of the hook that are not stored)."""
+    blocks = [r["block_number"] for r in rows if r.get("block_number") is not None]
+    times = [as_utc(r["block_time"]) for r in rows if r.get("block_time") is not None]
+    firsts, lasts = [b for b in (first, *blocks) if b is not None], [b for b in (last, *blocks) if b is not None]
+    seens = [t for t in (as_utc(seen_at), *times) if t is not None]
+    return {"chain_id": chain_id, "hook_address": hook, "pools_total": total + len(rows),
+            "first_block": min(firsts) if firsts else None, "last_block": max(lasts) if lasts else None,
+            "last_seen": max(seens) if seens else None}
+
+
+def widen_lookup_floor(conn: sa.Connection, chain_id: int) -> None:
+    """History was reset (an RPC-mode hole, a fresh backfill): pools past a cap may sit below any first_block recorded
+    since, so lookups by pool id start at the chain's PoolManager deployment block when recorded (chains.py), else 0."""
+    from .chains import CHAIN_BY_ID
+    ch = CHAIN_BY_ID.get(chain_id)
+    floor = (ch.deploy_block if ch is not None else None) or 0
+    t = hook_pool_counts.c
+    conn.execute(sa.update(hook_pool_counts).where(t.chain_id == chain_id, sa.or_(t.first_block.is_(None), t.first_block > floor))
+                 .values(first_block=floor))
+
+
+def capped_floor(conn: sa.Connection, chain_id: int) -> int | None:
+    """None: no hook on this chain is past the cap, so every hooked pool is a row. Else the oldest block a hooked pool
+    that is not a row can have (where the lookup by pool id starts)."""
+    n, first = conn.execute(sa.select(sa.func.count(), sa.func.min(hook_pool_counts.c.first_block))
+                            .where(hook_pool_counts.c.chain_id == chain_id)).one()
+    return None if not n else (first or 0)
+
+
 def pool_count(conn: sa.Connection, chain_id: int) -> int:
     return conn.execute(sa.select(sa.func.count()).select_from(v4_pools).where(v4_pools.c.chain_id == chain_id)).scalar() or 0
 
@@ -71,7 +184,13 @@ def all_pools(conn: sa.Connection, chain_id: int) -> dict[str, tuple[str, str]]:
 
 def reset_swaps_from(conn: sa.Connection, chain_id: int, day: date) -> None:
     """Swap counting (re)starts at the first block of `day`: drop what was counted from that day on so the
-    incremental upserts below never double count."""
+    incremental upserts below never double count. Days of a hook's aggregate pool also come out of its all-time totals."""
+    folded = conn.execute(sa.select(pool_daily_onchain.c.pool_id, sa.func.sum(pool_daily_onchain.c.swaps),
+                                    sa.func.sum(pool_daily_onchain.c.volume_usd))
+                          .where(pool_daily_onchain.c.chain_id == chain_id, pool_daily_onchain.c.day >= day,
+                                 pool_daily_onchain.c.pool_id.like(HOOK_POOL_PREFIX + "%"))
+                          .group_by(pool_daily_onchain.c.pool_id)).all()
+    add_hook_usage(conn, chain_id, {p[len(HOOK_POOL_PREFIX):]: [0, -(n or 0), -(v or 0.0)] for p, n, v in folded})
     conn.execute(sa.delete(pool_daily_onchain).where(pool_daily_onchain.c.chain_id == chain_id, pool_daily_onchain.c.day >= day))
     conn.execute(sa.delete(pool_wallet_day).where(pool_wallet_day.c.chain_id == chain_id, pool_wallet_day.c.day >= day))
 

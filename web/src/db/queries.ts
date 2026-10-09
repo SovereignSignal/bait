@@ -376,7 +376,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
           from ${t.pools} p
           join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
           join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${end}
-          where h.project_id = any(${idArray}) and p.chain_id = any(${KNOWN_CHAINS})
+          -- 'hook:<address>' is a capped hook's aggregate of pools the indexer does not store: usage, not a pool
+          where h.project_id = any(${idArray}) and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'
           order by h.project_id, s.tvl_usd desc nulls last`)
       : [],
     // Rolling 24h volume and buy/sell counts, latest pool_stats day. Table may be missing: null, not a failure.
@@ -588,7 +589,7 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         from ${t.poolSnapshots} x
         where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${from7} and ${end}
       ) w on true
-      where h.project_id = ${projectId} and p.chain_id = any(${KNOWN_CHAINS})
+      where h.project_id = ${projectId} and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'
       order by s.tvl_usd desc nulls last
       limit 50`),
     safe<unknown>(

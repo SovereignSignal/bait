@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 
-from ..db import as_utc, pool_stats, pool_top_wallets, pools, savepoint, upsert
+from ..db import HOOK_POOL_PREFIX, as_utc, pool_stats, pool_top_wallets, pools, savepoint, upsert
 from ..rules import is_wash_24h, wallets_lower_bound
 from . import RunContext, log
 
@@ -78,7 +78,7 @@ def select_pools(conn, ctx: RunContext, limit: int, wash_limit: int = 0) -> tupl
     """(top `limit` pools the bare 24h wash test does not flag, top `wash_limit` it does), each by 24h volume."""
     q = (sa.select(pool_stats)
          .join(pools, (pools.c.pool_id == pool_stats.c.pool_id) & (pools.c.chain_id == pool_stats.c.chain_id))
-         .where(pool_stats.c.day == ctx.day))
+         .where(pool_stats.c.day == ctx.day, pool_stats.c.pool_id.not_like(HOOK_POOL_PREFIX + "%")))   # no trades feed
     if ctx.chains:
         q = q.where(pool_stats.c.chain_id.in_(ctx.chains))
     rows = sorted(conn.execute(q), key=lambda r: -(r.vol_24h or 0.0))

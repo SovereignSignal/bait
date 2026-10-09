@@ -246,3 +246,28 @@ def test_onchain_pool_stats_carry_distinct_wallets_and_the_closed_day_boundary(c
     st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PA)).one()
     assert (st.wallets_24h, st.traders_24h) == (7, 7)
     assert db.as_utc(st.window_end) == datetime(2026, 10, 6, tzinfo=timezone.utc)    # REF (10-05) ends 10-06 00:00
+
+
+def test_hooks_get_their_true_pool_count_including_pools_past_the_indexer_cap(conn, ctx):
+    _setup(conn)
+    conn.execute(sa.insert(db.hook_pool_counts).values(chain_id=8453, hook_address=HOOK, pools_total=5000, first_block=150,
+                                                       last_block=900))
+    out = onchain.run(conn, ctx)
+    tot = {(r.chain_id, r.address): r.pools_total for r in conn.execute(sa.select(db.hooks))}
+    assert (tot[(8453, HOOK)], tot[(8453, HOOK2)], tot[(143, HOOK3)], out["hook_totals"]) == (5000, 1, 1, 3)
+    assert onchain.run(conn, ctx)["hook_totals"] == 0                    # unchanged: nothing rewritten
+
+
+def test_a_capped_hooks_folded_swaps_reach_its_usage_through_its_aggregate_pool(conn, ctx):
+    _setup(conn)
+    agg = db.hook_pool_id(HOOK)
+    conn.execute(sa.insert(db.hook_pool_counts).values(chain_id=8453, hook_address=HOOK, pools_total=5000, first_block=150,
+                                                       last_block=900, swaps_total=4, volume_usd_total=80.0))
+    _daily(conn, 8453, agg, REF, 4, 3, 80.0)
+    out = onchain.run(conn, ctx)
+    p = conn.execute(sa.select(db.pools).where(db.pools.c.pool_id == agg)).one()
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == agg)).one()
+    assert (p.hook_address, p.chain_id, out["hook_pools"]) == (HOOK, 8453, 1)
+    assert (st.vol_24h, st.wallets_24h, st.vol_source) == (80.0, 3, "hook_total")
+    assert _snaps(conn, agg)[REF][1] is not None                        # a daily series like any pool's
+    assert onchain.run(conn, ctx)["hook_pools"] == 0
