@@ -145,3 +145,20 @@ def test_wash_7d_ignores_a_chain_whose_swaps_are_not_caught_up(conn, ctx):
     _optimism_ready(conn, swap_time=NOW - timedelta(days=2))
     out = score.run(conn, ctx)
     assert out["wash_7d"] == 0 and not daily(conn, wash).is_spam
+
+
+def test_held_back_pool_with_null_volume_is_left_out_of_both_weeks(conn, ctx):
+    # Two pools of one project. The normal one did $1,000 in each week. The other's on-chain volume became unknown during
+    # this week (onchain wrote NULL cumulative volume from that day on): it must not read as $0 this week next to its
+    # $5,000 last week, which would fake a crash in the trending ratio.
+    p = insert_project(conn, "Mixed", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xm", 8453, project_id=p, name="Mixed")
+    for pool, prev_week, cur in (("0xnormal", 1_000, 2_000), ("0xheld", 5_000, None)):
+        insert_pool(conn, pool, 8453, "0xm", created=NOW - timedelta(days=60))
+        insert_snap(conn, pool, 8453, DAY - timedelta(days=14), 0, 0, 0)
+        insert_snap(conn, pool, 8453, DAY - timedelta(days=7), 0, prev_week, 10)
+        insert_snap(conn, pool, 8453, DAY, 0, cur, 20)
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xheld", chain_id=8453, day=DAY, vol_24h=None, traders_24h=3))
+    score.run(conn, ctx)
+    d = daily(conn, p)
+    assert (d.vol_7d, d.vol_7d_prev) == (1_000, 1_000)
