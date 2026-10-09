@@ -122,3 +122,16 @@ giving the space back to the volume needs `VACUUM FULL v4_pools, pools` (an excl
 dump and restore. The deletes write WAL as they go; it is recycled at checkpoints (bounded by `max_wal_size`), so watch the
 volume during the run rather than expecting it to fall. Rerunnable: a second `--yes` right away finds nothing to delete. Later, it can delete a few rows the first run kept: the
 newest-N window per hook moves as sampled rows arrive. SIGTERM (a redeploy) stops it between batches.
+
+## One-off repairs (package 9)
+
+Repairs run inside the `pipeline` service (Postgres has no public endpoint): set its start command to the repair
+command, then restart the service's deployment (`deploymentRestart`), which runs the start command at once (checked
+2026-10-09). Wait for the process to exit, then clear the start command so the image `CMD` (`python -m bait run`) is
+back. Start with `python -m bait repair all --since 14 --dry-run`; paid steps (`repair prose`) run only after the
+owner's go. See `pipeline/README.md` "Repair".
+
+- A repair still running at 06:00 UTC makes Railway skip that night's cron run. Repairs stop at `--stop-at` (05:30 by
+  default) and refuse to start between it and 06:30, but check the deployment has exited before 06:00.
+- Revert any `SPEND_DAILY_USD` / `SPEND_MONTHLY_USD` override made for a repair, and clear the start command, before
+  06:00 UTC, or the nightly runs with them.

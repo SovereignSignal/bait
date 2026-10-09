@@ -402,14 +402,23 @@ def code_facts(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | 
     return out
 
 
+def fetch_daily(http: Http, net: str, pool_id: str, limit: int = 15) -> list[tuple[int, float]] | None:
+    """One pool's daily candles, oldest first, as (UTC day start in unix seconds, USD volume). The newest candle is the
+    running day when the pool traded today. GeckoTerminal sends candles only for days with trades, and no trade counts.
+    None when the call failed (HTTP error, 404, network)."""
+    res = http.gt(f"/networks/{net}/pools/{pool_id}/ohlcv/day?aggregate=1&limit={limit}&currency=usd")
+    if res is None:
+        return None
+    lst = ((res.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+    return sorted((int(r[0]), float(r[5] or 0)) for r in lst)
+
+
 def fetch_ohlcv(http: Http, hooked: list[dict], cap: int) -> None:
     ranked = sorted(hooked, key=lambda p: -float(p["attrs"]["volume_usd"]["h24"] or 0))
     if len(ranked) > cap:
         log(f"OHLCV capped at {cap} of {len(ranked)} hooked pools; the rest carry 24h volume only")
     for p in ranked[:cap]:
-        res = http.gt(f"/networks/{p['net']}/pools/{p['attrs']['address']}/ohlcv/day?aggregate=1&limit=15&currency=usd")
-        lst = (((res or {}).get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
-        p["daily"] = sorted([(int(r[0]), float(r[5] or 0)) for r in lst])
+        p["daily"] = fetch_daily(http, p["net"], p["attrs"]["address"]) or []
 
 
 def fetch_trades(http: Http, net: str, pool_id: str) -> list[dict] | None:

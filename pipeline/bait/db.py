@@ -168,6 +168,14 @@ project_daily = sa.Table(
     sa.Index("project_daily_day_score_idx", "day", "score_trending"),
 )
 
+# Package 9 (`repair rescore`): the pre-repair copy of each re-scored day, so `repair rescore --restore` can put it back.
+# Same columns as project_daily, no defaults or foreign key (a copy, never read by the feed). create_all creates it; drop
+# it in the cleanup that removes the legacy cumulative columns (DESIGN.md "Data issues backlog").
+project_daily_p9_backup = sa.Table(
+    "project_daily_p9_backup", metadata,
+    *[sa.Column(c.name, c.type, primary_key=c.primary_key) for c in project_daily.c],
+)
+
 signals = sa.Table(
     "signals", metadata,
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), primary_key=True),

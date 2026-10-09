@@ -311,6 +311,8 @@ shortlist instead of up to 400 names.
   limit 30 for the keyless pools first.
 - Remove `volume_usd_cum` / `tx_count_cum` once package 9 has re-scored: windows read only the per-day columns (the
   cumulative NULL is still p5's "volume unknown from here on" marker and `tx_count_cum` is is_spam's lifetime count).
+- Drop `project_daily_p9_backup` (package 9's pre-repair copy of re-scored days, defined in `pipeline/bait/db.py`) in the
+  same cleanup, once the re-scored days are verified.
 - To check: optimism 0x69afa...7fff ($642M in 7 days, all of its history, 3 pools: wash check); robinhood
   0xe5e70...e044 (10,082 pools, $231M in 7 days, launchpad pattern, unlabeled everywhere).
 

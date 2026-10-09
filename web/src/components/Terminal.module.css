@@ -89,6 +89,7 @@ select.pill option { background: var(--panel); color: var(--fg); }
   .back { display: inline-flex; align-items: center; gap: 6px; color: var(--fg2); font-weight: 600; padding: 2px 2px 0; }
   .dock { display: flex; }
   .shell[data-view="detail"] .app { padding-bottom: 160px; }
+  .tabs { gap: 0; } /* five tabs overflowed a 360 px viewport by 4 px */
   .tab, .watchTab { min-height: 44px; display: inline-flex; align-items: center; }
   .chip { padding: 9px 12px; }
   .dock > * { min-height: 44px; justify-content: center; }
