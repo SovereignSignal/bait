@@ -22,7 +22,7 @@ from ..config import env
 from .chains import select_chains
 from .core import ChainStats, Rpc, Settings, plan, rpc_endpoint, sync_hypersync, sync_rpc
 from .hypersync import HyperSync, HyperSyncAuthError
-from .prices import PriceBook
+from .prices import PriceBook, PricesUnavailable
 from . import store
 
 log = logging.getLogger("bait.indexer")
@@ -39,6 +39,7 @@ class Runner:
         self.should_stop = should_stop or (lambda: False)
         self.migrate = migrate                         # -> bool; retried each loop until it succeeds
         self._schema_ok = migrate is None
+        self._price_fails: dict[int, int] = {}           # chain id -> consecutive loops ending in PricesUnavailable
         self.prices = PriceBook(client)
         self.loops = 0
         self._pruned_on = None
@@ -76,9 +77,17 @@ class Runner:
                     _, url, window = rpc_endpoint(ch)
                     rpc = self._rpc.setdefault(ch.chain_id, Rpc(url, self.client))
                     out[ch.slug] = sync_rpc(self.engine, ch, rpc, window, self.settings)
+                self._price_fails.pop(ch.chain_id, None)
             except HyperSyncAuthError as e:
                 log.error("chain=%s HyperSync rejected the token (check HYPERSYNC_API_TOKEN): %s", ch.slug, e)
                 out[ch.slug] = ChainStats(mode=self.mode, error="auth")
+            except PricesUnavailable as e:  # the page is retried next loop; a short DefiLlama blip is routine
+                n = self._price_fails[ch.chain_id] = self._price_fails.get(ch.chain_id, 0) + 1
+                if n >= 3:
+                    log.warning("chain=%s DefiLlama unavailable for %d consecutive loops; swap cursor held: %s", ch.slug, n, e)
+                else:
+                    log.info("chain=%s DefiLlama unavailable (%d in a row); page retried next loop: %s", ch.slug, n, e)
+                out[ch.slug] = ChainStats(mode=self.mode, error="prices")
             except Exception as e:  # one chain failing must not stop the others
                 log.warning("chain=%s sync failed: %s: %s", ch.slug, type(e).__name__, e)
                 out[ch.slug] = ChainStats(mode=self.mode, error=type(e).__name__)

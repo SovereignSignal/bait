@@ -590,3 +590,35 @@ def test_runner_survives_a_connect_error_while_taking_the_chain_lock(engine, mon
                core.Settings())
     out = r.run_once()
     assert out["ethereum"].error == "lock" and seen == ["base"]
+
+
+def test_a_rejected_batch_is_split_so_one_bad_id_does_not_unprice_the_rest():
+    def llama(request):
+        ids = request.url.path.split("/prices/current/")[1].split(",")
+        if f"base:{TOKX}" in ids:
+            return httpx.Response(400, json={"message": "bad coin id"})
+        return httpx.Response(200, json={"coins": {i: {"price": 2000.0, "confidence": 0.99} for i in ids if i == "coingecko:ethereum"}})
+    pb = PriceBook(httpx.Client(transport=httpx.MockTransport(llama)))
+    assert pb.get(BASE, [ZERO, TOKX]) == {ZERO: (2000.0, 18)}
+
+
+def test_runner_warns_after_three_consecutive_price_outages_on_a_chain(engine, monkeypatch, caplog):
+    from bait.indexer.prices import PricesUnavailable
+    results = iter([PricesUnavailable("base"), PricesUnavailable("base"), PricesUnavailable("base"), None, PricesUnavailable("base")])
+
+    def fake_sync(e, ch, hs, p, s, **kw):
+        r = next(results)
+        if r is not None:
+            raise r
+        return core.ChainStats(mode="hypersync")
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync", fake_sync)
+    r = Runner(engine, "tok", select_chains("base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings())
+    warned = []
+    for _ in range(5):
+        caplog.clear()
+        with caplog.at_level("INFO", logger="bait.indexer"):
+            out = r.run_once()
+        warned.append(any(rec.levelname == "WARNING" and "consecutive" in rec.getMessage() for rec in caplog.records))
+        assert out["base"].error in ("prices", None)
+    assert warned == [False, False, True, False, False]    # third in a row warns; a success resets the count

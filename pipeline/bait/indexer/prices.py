@@ -57,6 +57,9 @@ STABLES: dict[int, dict[str, int]] = {
 }
 
 
+_REJECTED = object()            # _fetch: DefiLlama answered 4xx (not 429) for the batch
+
+
 class PricesUnavailable(RuntimeError):
     """DefiLlama did not answer for a batch. The caller must not commit the page: a swap stored at $0 is never revalued."""
 
@@ -82,7 +85,7 @@ class PriceBook:
         failed = 0
         for i in range(0, len(missing), BATCH):
             chunk = missing[i:i + BATCH]
-            got = self._fetch(chunk)
+            got = self._fetch_split(chunk)
             if got is None:  # transient failure: nothing cached, the caller retries the page
                 failed += len(chunk)
                 continue
@@ -102,7 +105,21 @@ class PriceBook:
                 out[a] = (1.0, stables[a])
         return out
 
-    def _fetch(self, ids: list[str]) -> dict[str, tuple[float, int]] | None:
+    def _fetch_split(self, ids: list[str]) -> dict[str, tuple[float, int]] | None:
+        """A 4xx (not 429) rejects the whole batch, usually because of one id: split and retry the halves, so only an id
+        DefiLlama rejects on its own is treated as unpriced. None = a transient failure in some part."""
+        got = self._fetch(ids)
+        if got is not _REJECTED:
+            return got
+        if len(ids) == 1:
+            log.warning("defillama rejected %s; treated as unpriced", ids[0])
+            return {}
+        mid = len(ids) // 2
+        left, right = self._fetch_split(ids[:mid]), self._fetch_split(ids[mid:])
+        return None if left is None or right is None else left | right
+
+    def _fetch(self, ids: list[str]):
+        """-> {coin id: (price, decimals)}, None on a transient failure, or _REJECTED on a non-429 4xx."""
         self.calls += 1
         try:
             r = self.client.get(LLAMA + ",".join(ids), headers={"User-Agent": "bait-indexer/0.1"}, timeout=30)
@@ -113,8 +130,7 @@ class PriceBook:
             log.warning("defillama HTTP %s for %d coins; page retried next loop", r.status_code, len(ids))
             return None
         if r.status_code != 200:
-            log.warning("defillama HTTP %s for %d coins; treated as unpriced", r.status_code, len(ids))
-            return {}
+            return _REJECTED
         try:
             coins = (r.json() or {}).get("coins") or {}
         except ValueError as e:
