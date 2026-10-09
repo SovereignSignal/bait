@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { applyTab, movers, weekDelta } from "./feed";
 import { usd } from "./format";
-import { pace, rowMetric, walletsText, washLine } from "./present";
+import { digestItem, pace, rowMetric, walletsText, washLine } from "./present";
 import type { RowView } from "./types";
 
 const row = (over: Partial<RowView>): RowView => ({
@@ -50,4 +50,10 @@ test("an unknown 7-day volume renders as unknown, never trends and sorts last", 
   assert.deepEqual(rowMetric({ vol24h: null, vol7d: null }, false), { v: null, win: "7d" });
   assert.equal(usd(rowMetric({ vol24h: null, vol7d: null }, false).v), "–");
   assert.equal(pace(5_000, null), 0);
+});
+test("a digest card keeps an unknown 7-day volume unknown", () => {
+  const c = { slug: "x", name: "X", what_line: null, vol_7d: null };
+  assert.deepEqual(digestItem(c, "trending"), { slug: "x", name: "X", kind: "trending", line: "", vol7d: null });
+  assert.equal(usd(digestItem(c, "new").vol7d), "–");
+  assert.equal(digestItem({ ...c, vol_7d: 1_500 }, "new").vol7d, 1_500);
 });

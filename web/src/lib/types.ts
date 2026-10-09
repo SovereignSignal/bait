@@ -258,7 +258,8 @@ export interface DigestItem {
   name: string;
   kind: "new" | "trending";
   line: string;
-  vol7d: number;
+  /** null = unknown 7-day volume, rendered "–" */
+  vol7d: number | null;
 }
 
 export interface DigestView {
