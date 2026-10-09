@@ -490,3 +490,12 @@ def test_backfill_keeps_estimates_before_the_first_candle_and_never_fills_unknow
     r = _rows(engine, "0xpe")
     assert [(r[DAY - i * D].volume_usd_day, r[DAY - i * D].estimated) for i in (6, 5, 4, 3, 2)] == [
         (500.0, True), (0.0, False), (100.0, False), (9.0, True), (0.0, False)]
+
+
+def test_paid_prose_needs_an_explicit_cap(tmp_path, monkeypatch):
+    from bait.__main__ import main
+    _at(monkeypatch, 12)
+    url, e = _cli_db(tmp_path)
+    assert main(["repair", "prose", "--blurbs", "--yes", "--database-url", url]) == 2
+    assert main(["repair", "prose", "--blurbs", "--dry-run", "--database-url", url]) == 0       # the plan needs none
+    assert _receipts(e) == []
