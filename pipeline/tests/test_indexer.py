@@ -468,3 +468,17 @@ def test_two_indexers_on_the_same_page_count_it_once(engine, monkeypatch):
     monkeypatch.undo()
     _, daily, _, state = _tables(engine)
     assert state.swap_block == 1700 and daily == {(PA, date(2026, 9, 22)): (3, 2, 6000.0)}
+
+
+def test_swap_block_time_is_the_newest_block_of_the_committed_page(engine):
+    _seed_pool_and_cursor(engine)
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    _, _, _, st = _tables(engine)
+    assert st.swap_block == 1700 and db.as_utc(st.swap_block_time) == core.utc(T0 + 1300 * BT)   # last swap in 1000..1700
+
+
+def test_caught_up_quiet_chain_anchors_swap_block_time_at_the_head(engine):
+    _sync_until_done(engine, FakeHyperSync(), core.Settings())
+    _, _, _, st = _tables(engine)
+    end = HEAD - BASE.lag + 1                         # newest swap is block 2500; the anchor reads block end-1
+    assert db.as_utc(st.swap_block_time) == core.utc(T0 + (end - 1) * BT)
