@@ -440,8 +440,8 @@ from . import db
 from . import keyless as K
 from .clients.claude import prose_estimate, what_line_prompt, why_blurb_prompt
 from .costs import BudgetExceeded, Meter
-from .db import (api_spend, as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pools, project_daily,
-                 project_daily_p9_backup, projects, run_receipts, upsert)
+from .db import (api_spend, as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pools, project_daily, projects,
+                 run_receipts, upsert)
 from .steps import RunContext, enrich, log, score, signals
 from .steps.snapshot import keyless_http
 
@@ -697,7 +697,7 @@ def trending_top(conn, day: date, n: int = 10) -> list[str]:
 
 def backup_day(conn, day: date) -> int:
     """Copy the day's project_daily rows into project_daily_p9_backup once: the first copy is the pre-repair state."""
-    b = project_daily_p9_backup
+    b = db.project_daily_p9_backup
     if conn.execute(sa.select(sa.func.count()).select_from(b).where(b.c.day == day)).scalar_one():
         return 0
     conn.execute(sa.insert(b).from_select(_COLS, sa.select(*[project_daily.c[n] for n in _COLS])
@@ -708,7 +708,7 @@ def backup_day(conn, day: date) -> int:
 
 def restore_day(conn, day: date) -> int | None:
     """Put the backed-up rows of `day` back (projects merged away since are skipped). None when there is no backup."""
-    b = project_daily_p9_backup
+    b = db.project_daily_p9_backup
     if not conn.execute(sa.select(sa.func.count()).select_from(b).where(b.c.day == day)).scalar_one():
         return None
     conn.execute(sa.delete(project_daily).where(project_daily.c.day == day))
