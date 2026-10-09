@@ -6,6 +6,7 @@ import type {
   Category,
   ChainId,
   DigestView,
+  Eligibility,
   HookFlags,
   HookView,
   PoolView,
@@ -34,7 +35,8 @@ interface Raw {
   txs: number;
   pools: number;
   hooks: number;
-  routable: boolean;
+  routable: Eligibility;
+  hooklisted: boolean;
   audited: boolean;
   upg: boolean;
   flags: string[];
@@ -148,6 +150,7 @@ function build(raw: Raw, i: number): ProjectDetail {
     properties: { dynamicFee: dynamic, upgradeable: raw.upg },
     verifiedSource: true,
     auditUrl: raw.audited ? "https://github.com/Uniswap/hooklist" : null,
+    hooklisted: raw.hooklisted,
     deployer: null,
     firstSeenAt,
   }));
@@ -171,6 +174,7 @@ function build(raw: Raw, i: number): ProjectDetail {
         tx7d: 0,
         vol24h: t.v24,
         wallets24h: t.w,
+        eligibility: "unknown" as const, // derive() evaluates it
       };
     })
     .sort((a, b) => b.tvlUsd - a.tvlUsd);
@@ -197,9 +201,10 @@ function build(raw: Raw, i: number): ProjectDetail {
     chains,
     flagLabels: [],
     verified: true,
+    hooklisted: raw.hooklisted,
     upgradeable: raw.upg,
     metrics: { tvlUsd: raw.tvl, vol7d: raw.vol7, vol7dPrev: raw.prev, swaps7d: raw.txs * 7, poolsN: raw.pools, hooksN: raw.hooks },
-    signals: { smartMoneyLps: null, lastCommitAt: null, lastExaHitAt: null, routable: false, auditCount: raw.audited ? 1 : 0 },
+    signals: { smartMoneyLps: null, lastCommitAt: null, lastExaHitAt: null, routable: raw.routable, auditCount: raw.audited ? 1 : 0 },
     receipts: (raw.rec ?? []).map(receipt),
     topPool: top ? { poolId: top.poolId, chainId: top.chainId, token0Symbol: top.token0Symbol, token1Symbol: top.token1Symbol, hookAddress: hookAddr } : null,
     usage: {

@@ -61,6 +61,8 @@ export interface HookView {
   properties: Partial<HookProperties>;
   verifiedSource: boolean;
   auditUrl: string | null;
+  /** in the Uniswap hooklist as of the last ingest; null = not yet evaluated */
+  hooklisted: boolean | null;
   deployer: string | null;
   firstSeenAt: string; // ISO
 }
@@ -83,6 +85,8 @@ export interface PoolView {
   vol24h: number | null;
   /** pool_stats.traders_24h, latest day */
   wallets24h: number | null;
+  /** routing eligibility of this pool, evaluated with its own fee (set by derive in db/queries.ts) */
+  eligibility: Eligibility;
 }
 
 /** 24h usage per project. null = no data yet (table empty, missing, or not backfilled). */
@@ -142,7 +146,7 @@ export interface SignalsView {
   lastCommitAt: string | null;
   /** ISO of the last Exa hit, if any */
   lastExaHitAt: string | null;
-  routable: boolean;
+  routable: Eligibility;
   auditCount: number;
 }
 
@@ -172,6 +176,8 @@ export interface ProjectSummary {
   /** short flag labels for the well foot, e.g. ["beforeSwap", "returnsDelta"] */
   flagLabels: string[];
   verified: boolean;
+  /** at least one of the project's hooks is in the Uniswap hooklist */
+  hooklisted: boolean;
   upgradeable: boolean;
   metrics: Metrics;
   signals: SignalsView;
@@ -212,7 +218,7 @@ export interface RowView {
   vol7dPrev: number;
   vol24h: number | null;
   tvlUsd: number;
-  routable: boolean;
+  routable: Eligibility;
   audited: boolean;
   /** hook addresses (lowercase, capped) for address-prefix search */
   hooks: string[];

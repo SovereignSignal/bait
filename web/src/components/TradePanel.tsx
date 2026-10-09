@@ -77,7 +77,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           </b>
         </div>
         {link &&
-          (p.signals.routable ? (
+          (p.signals.routable === "eligible" ? (
             <a className={s.cta} href={link} target="_blank" rel="noopener">
               Swap on Uniswap
             </a>
