@@ -1,6 +1,7 @@
 """Unlisted hooks named from verified source: lookup caps/rechecks, rename, per-chain merge, curated clash, generic names."""
 from datetime import timedelta
 
+import pytest
 import sqlalchemy as sa
 
 from bait import db
@@ -106,10 +107,11 @@ class _Resp:
 
 class _Http:
     def __init__(self, routes):
-        self.routes, self.urls = routes, []
+        self.routes, self.urls, self.params = routes, [], []
 
     def get(self, url, params=None):
         self.urls.append(url)
+        self.params.append(params)
         for frag, resp in self.routes.items():
             if frag in url:
                 return resp
@@ -174,3 +176,48 @@ def test_same_name_same_chain_without_evidence_stays_two_projects(conn, ctx):
     assert out["projects_merged"] == 0 and out["names_split"] == 1
     assert proj[p1].name == "OrderHook" and proj[p2].name == "OrderHook 0x0000…000b"
     assert proj[p2].slug == "orderhook-0x0000-000b" and _aliases(conn)["unlisted-00000b-8453"] == (p2, "renamed")
+
+
+def test_proxy_resolves_to_its_implementation_name():
+    src = {"compilation": {"name": "ERC1967Proxy"},
+           "proxyResolution": {"isProxy": True, "implementations": [{"address": A(2), "name": "OrderBookHook"}]}}
+    h = _Http({"sourcify.dev": _Resp(200, src)})
+    assert ContractNames(None, http_client=h).lookup(4663, A(1)) == ("OrderBookHook", "sourcify")
+    assert h.params[0] == {"fields": "compilation.name,proxyResolution"}
+    bs = {"name": "ERC1967Proxy", "is_verified": True, "implementations": [{"address_hash": A(2), "name": "OrderBookHook"}]}
+    h = _Http({"robinhoodchain.blockscout.com": _Resp(200, bs)})
+    assert ContractNames(None, http_client=h).lookup(4663, A(1)) == ("OrderBookHook", "blockscout")
+
+
+def test_transient_failure_raises_and_every_source_outcome_is_counted():
+    from bait.clients.contract_names import LookupTransient
+    cn = ContractNames(None, http_client=_Http({"sourcify.dev": _Resp(503, {}),
+                                                 "robinhoodchain.blockscout.com": _Resp(403, "challenge")}))
+    with pytest.raises(LookupTransient):
+        cn.lookup(4663, A(1))
+    assert cn.outcomes == {"sourcify:error": 1, "blockscout_pro:skipped": 1, "blockscout:miss": 1, "routescan:miss": 1}
+    only_cloudflare = _Http({"robinhoodchain.blockscout.com": _Resp(403, "challenge")})
+    assert ContractNames(None, http_client=only_cloudflare).lookup(4663, A(1)) is None    # a real miss
+
+
+def test_transient_lookups_are_asked_again_and_generic_hooklist_names_are_looked_up(conn, ctx):
+    from bait.clients.contract_names import LookupTransient
+    _unlisted(conn, A(30), 4663, vol=9)
+    p2 = _unlisted(conn, A(31), 8453, vol=8)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(31)).values(name="ERC1967Proxy", hooklisted=True))
+
+    class Flaky(FakeNames):
+        def lookup(self, chain_id, address):
+            if address == A(30):
+                self.calls.append((chain_id, address))
+                raise LookupTransient(address)
+            return super().lookup(chain_id, address)
+
+    ctx.clients["names"] = flaky = Flaky({A(31): "OrderBookHook"})
+    out = {}
+    names.run(conn, ctx, out)
+    assert out["names_transient"] == 1
+    assert conn.execute(sa.select(db.hooks.c.name_checked_at).where(db.hooks.c.address == A(30))).scalar_one() is None
+    assert conn.execute(sa.select(db.projects.c.name).where(db.projects.c.id == p2)).scalar_one() == "OrderBookHook"
+    names.run(conn, ctx, {})
+    assert flaky.calls.count((4663, A(30))) == 2                                       # not parked for 14 days
