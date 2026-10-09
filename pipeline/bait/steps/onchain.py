@@ -9,15 +9,16 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
    for known hooks' pools with no pools row); a row is rewritten only when a value changed. A Postgres size line (pg_database_size vs DISK_LIMIT_GB) is logged every night.
    token0/token1 are only set on insert, so GeckoTerminal/subgraph symbols survive; created_at = Initialize block time.
 3. Usage (chains whose indexer_state is backfilled and updated within ONCHAIN_MAX_STALE_HOURS): for each pool with
-   pool_daily_onchain rows in day-14..day, pool_snapshots becomes a cumulative volume / swap series from the on-chain daily
-   numbers (zero-seeded the day before, like snapshot keyless), replacing the pool's earlier snapshots so one scale is
-   used; TVL keeps the latest GeckoTerminal/subgraph reserve (the indexer does not compute TVL). pool_stats(day) gets
-   vol_24h / traders_24h from the last complete UTC day. On-chain is exact, so it overrides keyless values for those pools.
+   pool_daily_onchain rows in day-14..day, pool_snapshots gets one row per day from `start` (volume_usd_day, tx_count_day;
+   the legacy cumulative columns zero-seeded the day before), replacing the pool's rows from `start` on; older rows and the
+   seed day's daily values are kept so a past day can be re-scored. TVL keeps the latest GeckoTerminal/subgraph reserve (the indexer does not compute TVL). pool_stats(day) gets
+   vol_24h / traders_24h / wallets_24h (distinct) from the last complete UTC day, window_end = its end. On-chain is exact, so it overrides keyless values for those pools.
    While a chain's on-chain history is shorter than the 14-day window, pools keyless already snapshots keep their
    keyless series (only pool_stats is overridden). Volume the chain cannot measure (custom-accounting hooks, pool-days
    mostly unpriced) never overrides keyless numbers; pool_stats.vol_source says which source won. The rule is per day:
    from the first unknown day on, the series carries NULL volume, or the keyless series is kept when that day is on or
    before the reference day, and pool_stats keeps keyless volume exactly when the series' reference day is unknown.
+   Pools whose keyless series is kept still get exact tx_count_day from the indexer.
 """
 from __future__ import annotations
 
@@ -35,6 +36,7 @@ from . import RunContext, log
 
 WINDOW_DAYS = 14
 CHUNK = 500
+SNAP_KEYS = ["pool_id", "chain_id", "day"]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -277,46 +279,70 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
     bad_from = {pid: _unknown_from(hook_of.get(pid), daily.get(pid, {}), start) for pid in chunk}
     held_back = {pid for pid, b in bad_from.items() if b is not None and b <= ref}
     replace = [pid for pid in chunk if (full or pid not in has_window) and not (pid in held_back and pid in has_window)]
-    snap_rows = []
+    snap_rows, seeds = [], []
     for pid in replace:
         cum_v, cum_n = 0.0, 0
-        snap_rows.append({"pool_id": pid, "chain_id": cid, "day": start - timedelta(days=1), "tvl_usd": tvl.get(pid),
-                          "volume_usd_cum": 0.0, "tx_count_cum": 0})
+        seeds.append({"pool_id": pid, "chain_id": cid, "day": start - timedelta(days=1), "tvl_usd": tvl.get(pid),
+                      "volume_usd_cum": 0.0, "tx_count_cum": 0})
         d = start
         while d <= ctx.day:
             n, _, v, _ = daily.get(pid, {}).get(d, (0, 0, 0.0, 0))
             cum_v += v
             cum_n += n
+            unknown = bad_from[pid] is not None and d >= bad_from[pid]
             snap_rows.append({"pool_id": pid, "chain_id": cid, "day": d, "tvl_usd": tvl.get(pid),
-                              "volume_usd_cum": None if bad_from[pid] is not None and d >= bad_from[pid] else cum_v,
-                              "tx_count_cum": cum_n})
+                              "volume_usd_cum": None if unknown else cum_v, "tx_count_cum": cum_n,
+                              "volume_usd_day": None if unknown else v, "tx_count_day": n, "estimated": False})
             d += timedelta(days=1)
     if replace:
+        # Rewrites the series from `start` on. The seed day only resets the legacy cumulative (its daily values stay) and
+        # older days are kept, so `score --day <past day>` still finds their daily values.
         conn.execute(sa.delete(pool_snapshots).where(pool_snapshots.c.chain_id == cid, pool_snapshots.c.pool_id.in_(replace),
-                                                     pool_snapshots.c.day <= ctx.day))
+                                                     pool_snapshots.c.day >= start, pool_snapshots.c.day <= ctx.day))
+        for i in range(0, len(seeds), CHUNK):
+            upsert(conn, pool_snapshots, seeds[i:i + CHUNK], keys=SNAP_KEYS, update=["tvl_usd", "volume_usd_cum", "tx_count_cum"])
         for i in range(0, len(snap_rows), CHUNK):
-            upsert(conn, pool_snapshots, snap_rows[i:i + CHUNK], keys=["pool_id", "chain_id", "day"])
+            upsert(conn, pool_snapshots, snap_rows[i:i + CHUNK], keys=SNAP_KEYS)
+    replaced = set(replace)
+    _swap_counts(conn, cid, [pid for pid in chunk if pid not in replaced], daily, start, ref)
     out["series_replaced"] += len(replace)
     out["pools_usage"] += len(chunk)
     if ref < coverage:
         return  # no complete on-chain day yet
+    window_end = datetime.combine(ref + timedelta(days=1), dtime.min, tzinfo=timezone.utc)   # the closed day `ref` ends here
     stat_rows, held = [], []
     for pid in chunk:
         _, w, v, _ = daily.get(pid, {}).get(ref, (0, 0, 0.0, 0))
         hook = hook_of.get(pid)
         if pid in held_back:
             held.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": None, "traders_24h": w,
-                         "vol_source": "hook" if hook and custom_accounting(hook) else "unpriced"})
+                         "wallets_24h": w, "window_end": window_end, "vol_source": "hook" if hook and custom_accounting(hook) else "unpriced"})
             if extras_stats is not None and (pid, cid) in extras_stats:  # keyless volume kept; no entry = unknown, not $0
                 extras_stats[(pid, cid)] = (extras_stats[(pid, cid)][0], w)
         else:
-            stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": w, "vol_source": "onchain"})
+            stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": w,
+                              "wallets_24h": w, "window_end": window_end, "vol_source": "onchain"})
             if extras_stats is not None:
                 extras_stats[(pid, cid)] = (v, w)
     keys = ["pool_id", "chain_id", "day"]
     for i in range(0, len(stat_rows), CHUNK):
-        upsert(conn, pool_stats, stat_rows[i:i + CHUNK], keys=keys, update=["vol_24h", "traders_24h", "vol_source"])
+        upsert(conn, pool_stats, stat_rows[i:i + CHUNK], keys=keys, update=["vol_24h", "traders_24h", "wallets_24h", "window_end", "vol_source"])
     for i in range(0, len(held), CHUNK):  # keyless vol_24h survives; a new row gets NULL (unknown), never $0
-        upsert(conn, pool_stats, held[i:i + CHUNK], keys=keys, update=["traders_24h", "vol_source"])
+        upsert(conn, pool_stats, held[i:i + CHUNK], keys=keys, update=["traders_24h", "wallets_24h", "window_end", "vol_source"])
     out["stats"] += len(stat_rows) + len(held)
     out["vol_unknown"] += len(held)
+
+
+def _swap_counts(conn, cid: int, pids: list[str], daily: dict, start: date, ref: date) -> None:
+    """Pools whose keyless series is kept (history shorter than the window, or volume held back) still get exact swap
+    counts: on a ready chain the indexer sees every swap, so a day without a row is 0. Only existing rows are updated."""
+    if not pids or ref < start:
+        return
+    params, d = [], start
+    while d <= ref:
+        params += [{"p": pid, "d": d, "n": daily.get(pid, {}).get(d, (0, 0, 0.0, 0))[0]} for pid in pids]
+        d += timedelta(days=1)
+    conn.execute(sa.update(pool_snapshots)
+                 .where(pool_snapshots.c.chain_id == cid, pool_snapshots.c.pool_id == sa.bindparam("p"),
+                        pool_snapshots.c.day == sa.bindparam("d"))
+                 .values(tx_count_day=sa.bindparam("n")), params)
