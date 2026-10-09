@@ -3,6 +3,8 @@
 .title { min-width: 0; flex: 1; }
 .titleLine { display: flex; align-items: center; gap: 8px; }
 .head h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; font-weight: 700; overflow-wrap: anywhere; }
+.what { margin: 6px 0 0; font-size: 15px; line-height: 1.45; color: var(--fg2); max-width: 70ch; text-wrap: pretty; }
+.whereSub { display: none; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .where { font-size: 12px; text-align: right; color: var(--fg2); }
 .star { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: var(--fg3); flex: 0 0 auto; }
@@ -15,7 +17,7 @@
 .val { font-size: 16px; font-weight: 700; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .chart { padding: 14px 16px 10px; }
-.chart h3, .blk h3 { margin: 0 0 8px; font-size: 13px; color: var(--fg2); font-weight: 600; }
+.chart h2, .blk h2 { margin: 0 0 8px; font-size: 13px; color: var(--fg2); font-weight: 600; }
 .h3row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .h3row span { font-size: 12px; color: var(--fg3); }
 .bars { display: block; width: 100%; height: auto; }

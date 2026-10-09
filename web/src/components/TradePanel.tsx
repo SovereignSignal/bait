@@ -1,4 +1,4 @@
-// Right column: pool action card (links out to Uniswap), buys vs sells, what it does, hook facts.
+// Right column: pool action card (links out to Uniswap), buys vs sells, hook facts.
 import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
 import { pace } from "@/lib/present";
@@ -91,7 +91,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
 
       {hasBs && (
         <div className={`panel ${s.card}`}>
-          <h3>Last 24h</h3>
+          <h2>Last 24h</h2>
           <div className={s.bsTop}>
             <span className="up num">{int(u.buys24h)} buys</span>
             <span className="down num">{int(u.sells24h)} sells</span>
@@ -107,11 +107,6 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           </div>
         </div>
       )}
-
-      <div className={`panel ${s.card}`}>
-        <h3>What it does</h3>
-        <div className={s.what}>{p.whatLine || "No description in the registry."}</div>
-      </div>
 
       <div className={`panel ${s.card}`}>
         <div className={s.kv}>
