@@ -8,6 +8,7 @@
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
 import { receiptRelevant } from "@/lib/relevance";
 import { resolveSymbols } from "@/lib/symbols";
+import { isUnlisted, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
@@ -274,7 +275,10 @@ type GithubValue = { last_commit_at?: string | null };
 type ExaValue = { latest?: string | null };
 type Enrichment = { secondary_categories?: Category[]; color?: string; parallel?: { audit_url?: string | null } };
 
-type TopPoolRow = { project_id: number; pool_id: string; chain_id: number; hook_address: string; token0_symbol: string | null; token1_symbol: string | null };
+type TopPoolRow = {
+  project_id: number; pool_id: string; chain_id: number; hook_address: string;
+  token0_symbol: string | null; token1_symbol: string | null; token0_id: string | null; token1_id: string | null;
+};
 type DayUsageRow = { project_id: number; vol24: unknown; tx24: unknown };
 type StatsUsageRow = { project_id: number; wallets: unknown; buys: unknown; sells: unknown; buyers: unknown; sellers: unknown };
 type SmartRow = { project_id: number; smart: unknown };
@@ -307,7 +311,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
     latest
       ? db.execute<TopPoolRow>(sql`
           select distinct on (h.project_id) h.project_id, p.pool_id, p.chain_id, p.hook_address,
-                 p.token0->>'symbol' as token0_symbol, p.token1->>'symbol' as token1_symbol
+                 p.token0->>'symbol' as token0_symbol, p.token1->>'symbol' as token1_symbol,
+                 p.token0->>'id' as token0_id, p.token1->>'id' as token1_id
           from ${t.pools} p
           join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
           join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${latest}
@@ -379,6 +384,20 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
   const statsBy = statsUsage ? new Map(rowsOf<StatsUsageRow>(statsUsage).map((r) => [Number(r.project_id), r])) : null;
   const smartBy = smartUsage ? new Map(rowsOf<SmartRow>(smartUsage).map((r) => [Number(r.project_id), num(r.smart) ?? 0])) : null;
 
+  // Unnamed projects show their busiest pair; indexer-only pools need symbols resolved first (cached, never throws).
+  const unlistedIds = new Set(projectRows.filter((p) => isUnlisted(p.name)).map((p) => p.id));
+  const needSym = rowsOf<TopPoolRow>(topPools).filter((r) => unlistedIds.has(Number(r.project_id)) && knownChain(Number(r.chain_id)));
+  const sym = await resolveSymbols(
+    needSym.flatMap((r) => [
+      ...(r.token0_symbol || !r.token0_id ? [] : [{ chainId: Number(r.chain_id), address: r.token0_id }]),
+      ...(r.token1_symbol || !r.token1_id ? [] : [{ chainId: Number(r.chain_id), address: r.token1_id }]),
+    ]),
+  );
+  for (const r of needSym) {
+    r.token0_symbol = r.token0_symbol ?? (r.token0_id ? sym({ chainId: Number(r.chain_id), address: r.token0_id }) : null);
+    r.token1_symbol = r.token1_symbol ?? (r.token1_id ? sym({ chainId: Number(r.chain_id), address: r.token1_id }) : null);
+  }
+
   const out: ProjectDetail[] = [];
   for (const p of projectRows) {
     const d = dailyBy.get(p.id);
@@ -423,7 +442,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
       derive({
         id: p.id,
         slug: p.slug,
-        name: p.name,
+        name: unlistedLabel(p.name, top?.token0_symbol ?? null, top?.token1_symbol ?? null),
         category: (p.category as Category | null) ?? "other",
         secondaryCategories: enrichment.secondary_categories ?? [],
         isFactory: p.isFactory,

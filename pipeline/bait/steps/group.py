@@ -108,6 +108,10 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             unassigned = _unassigned(conn)
     out["unassigned"] = len(unassigned)
 
+    # Name what is still "Unlisted hook ..." from verified source (free), merging same-named hooks on a chain.
+    from . import names
+    names.run(conn, ctx, out)
+
     # Factories: > 20 hooks.
     counts = conn.execute(sa.select(hooks.c.project_id, sa.func.count()).where(hooks.c.project_id.is_not(None)).group_by(hooks.c.project_id)).all()
     factory_ids = [pid for pid, n in counts if n >= FACTORY_MIN_HOOKS]
