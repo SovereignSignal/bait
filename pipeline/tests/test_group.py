@@ -1,15 +1,19 @@
+import copy
+import json
+
 import sqlalchemy as sa
 
 from bait import db
 from bait.clients.blockscout import CodeInfo
 from bait.steps import group, ingest
-from tests.conftest import insert_hook
+from tests.conftest import NOW, insert_hook, insert_project
 
 
 def test_group_by_name_and_factories(conn, ctx):
     ingest.run(conn, ctx)
     out = group.run(conn, ctx)
-    assert out["by_name"] == 300 and out["created"] == 91 and out["unassigned"] == 0
+    # 9 template-named hooks (CustomHook x2, TestHook, FeeHook x3, Counter x2, SwapFeeHook) no longer merge by name
+    assert out["by_name"] == 291 and out["created"] == 95 and out["unassigned"] == 0
     assert out["factories"] == 3   # EulerSwap 51, OrketHook 47, StrategyFeeHook 34 (> 20)
     rows = conn.execute(sa.select(db.projects.c.name, db.projects.c.is_factory, db.projects.c.slug, db.projects.c.what_line)).all()
     by = {r.name: r for r in rows}
@@ -128,3 +132,90 @@ def test_regroup_column_is_added_to_an_existing_hooks_table(tmp_path):
     with e.begin() as c:
         assert c.execute(sa.text("SELECT regroup FROM hooks")).scalar_one() == 0
         assert sa.inspect(c).has_table("project_aliases")
+
+
+def A(n):
+    return "0x" + f"{n:040x}"
+
+
+def _unlisted_project(conn, addr, chain_id, **hook):
+    pid = insert_project(conn, f"Unlisted hook {addr[:6]}…{addr[-4:]}", NOW, slug=f"unlisted-hook-{addr[:6]}-{addr[-4:]}")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == pid).values(norm_name=None))
+    insert_hook(conn, addr, chain_id, project_id=pid, **hook)
+    return pid
+
+
+def _hooklist(tmp_path, fixture_entries, *hooks):
+    out = []
+    for addr, chain_id, name in hooks:
+        e = copy.deepcopy(fixture_entries[0])
+        e["hook"].update(address=addr, chainId=chain_id, name=name)
+        out.append(e)
+    path = tmp_path / "hooklist.json"
+    path.write_text(json.dumps(out))
+    return str(path)
+
+
+def _alias(conn, slug):
+    return conn.execute(sa.select(db.project_aliases.c.project_id, db.project_aliases.c.reason)
+                        .where(db.project_aliases.c.old_slug == slug)).first()
+
+
+def test_hooklisted_later_renames_its_contract_project_in_place(conn, ctx, tmp_path, fixture_entries):
+    pid = insert_project(conn, "OrderHook (Base)", NOW, slug="orderhook-base")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == pid).values(norm_name="contract:8453:order"))
+    insert_hook(conn, A(1), 8453, project_id=pid)
+    conn.execute(sa.update(db.hooks).values(hooklisted=False, contract_name="OrderHook"))
+    ctx.hooklist_file = _hooklist(tmp_path, fixture_entries, (A(1), 8453, "OrderHook"))
+    ingest.run(conn, ctx)
+    out = group.run(conn, ctx)
+    assert out["promoted"] == 1 and out["created"] == 0
+    assert [(p.id, p.name, p.norm_name, p.slug) for p in conn.execute(sa.select(db.projects))] == [(pid, "OrderHook", "order", "orderhook")]
+    assert tuple(_alias(conn, "orderhook-base")) == (pid, "renamed")
+    assert conn.execute(sa.select(db.hooks.c.regroup)).scalar_one() is False
+
+
+def test_hooklisted_later_joins_the_curated_project_and_old_link_redirects(conn, ctx, tmp_path, fixture_entries):
+    bunni = insert_project(conn, "Bunni", NOW, slug="bunni")
+    lone = _unlisted_project(conn, A(2), 8453)
+    conn.execute(sa.update(db.hooks).values(hooklisted=False))
+    ctx.hooklist_file = _hooklist(tmp_path, fixture_entries, (A(2), 8453, "BunniHook"))
+    ingest.run(conn, ctx)
+    out = group.run(conn, ctx)
+    assert out["moved"] == 1 and out["retired"] == 1
+    assert conn.execute(sa.select(db.hooks.c.project_id)).scalar_one() == bunni
+    assert lone not in {r.id for r in conn.execute(sa.select(db.projects.c.id))}
+    assert tuple(_alias(conn, "unlisted-hook-0x0000-0002")) == (bunni, "regroup:name")
+
+
+def test_legacy_sha1_hash_is_rehashed_and_the_clone_joins_the_registered_project(conn, ctx, monkeypatch):
+    canon = "0x" + "c" * 64
+    saturn = insert_project(conn, "Saturn", NOW, slug="saturn")
+    insert_hook(conn, A(3), 8453, project_id=saturn, name="Saturn", code_hash=canon)   # Blockscout wrote this one
+    _unlisted_project(conn, A(4), 8453, code_hash="f" * 40)                            # keyless sha1: never matched
+    other = _unlisted_project(conn, A(5), 1, code_hash="e" * 40)                      # RPC did not answer: kept
+    asked = []
+    monkeypatch.setattr(group, "_rpc_code_hashes", lambda ctx, rows, out: asked.extend(rows) or {(8453, A(4)): canon})
+    out = group.run(conn, ctx)
+    pid = {r.address: (r.project_id, r.code_hash) for r in conn.execute(sa.select(db.hooks))}
+    assert out["hashes_rehashed"] == 1 and len(asked) == 2
+    assert pid[A(4)] == (saturn, canon) and pid[A(5)] == (other, "e" * 40)
+    assert tuple(_alias(conn, "unlisted-hook-0x0000-0004")) == (saturn, "regroup:code_hash")
+
+
+def test_rule1_adopts_a_same_chain_contract_project_only_with_evidence(conn, ctx):
+    order = insert_project(conn, "OrderHook (Base)", NOW, slug="orderhook-base")
+    pool = insert_project(conn, "PoolHook", NOW, slug="poolhook")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == order).values(norm_name="contract:8453:order"))
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == pool).values(norm_name="contract:8453:pool"))
+    insert_hook(conn, A(6), 8453, project_id=order)
+    insert_hook(conn, A(7), 8453, project_id=pool)
+    insert_hook(conn, A(8), 8453, name="OrderHook")
+    insert_hook(conn, A(9), 8453, name="PoolHook")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(6), A(8)])).values(deployer="0x" + "d" * 40))
+    out = group.run(conn, ctx)
+    assert out["adopted"] == 1 and out["created"] == 1 and out["by_name"] == 2
+    p = {r.id: r for r in conn.execute(sa.select(db.projects))}
+    assert (p[order].name, p[order].norm_name, p[order].slug) == ("OrderHook", "order", "orderhook")
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert pid[A(8)] == order and pid[A(9)] not in (pool, None)                       # a name alone does not merge
