@@ -219,3 +219,33 @@ def test_rule1_adopts_a_same_chain_contract_project_only_with_evidence(conn, ctx
     assert (p[order].name, p[order].norm_name, p[order].slug) == ("OrderHook", "order", "orderhook")
     pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
     assert pid[A(8)] == order and pid[A(9)] not in (pool, None)                       # a name alone does not merge
+
+
+def test_proxy_named_project_is_split_and_proxies_never_join_by_bytecode(conn, ctx):
+    proxy = insert_project(conn, "ERC1967Proxy", NOW, slug="erc1967proxy")
+    insert_hook(conn, A(11), 8453, project_id=proxy, name="ERC1967Proxy", code_hash="0xp")
+    insert_hook(conn, A(12), 56, project_id=proxy, name="ERC1967Proxy", code_hash="0xp")
+    insert_hook(conn, A(13), 8453, code_hash="0xp")                                    # on-chain proxy clone
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(13)).values(contract_name="ERC1967Proxy"))
+    out = group.run(conn, ctx)
+    assert out["split"] == 1 and out["by_code"] == 0 and out["by_name"] == 0
+    rows = conn.execute(sa.select(db.projects.c.name, db.projects.c.slug).join(db.hooks)).all()
+    assert len({r.slug for r in rows}) == 3 and all(r.name.startswith("Unlisted hook 0x") for r in rows)
+    assert _alias(conn, "erc1967proxy") is None                                       # no single right redirect
+
+
+def test_template_named_hooks_group_by_deployer_never_by_name(conn, ctx):
+    acme = insert_project(conn, "Acme", NOW, slug="acme")
+    other = insert_project(conn, "Other", NOW, slug="other")
+    insert_hook(conn, A(21), 8453, project_id=acme, name="Acme")
+    insert_hook(conn, A(22), 8453, project_id=other, name="Other")
+    for n in (23, 24, 25):
+        insert_hook(conn, A(n), 8453, name="FeeHook")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(21), A(23)])).values(deployer="0x" + "d" * 40))
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(22), A(25)]))
+                 .values(deployer="0x4e59b44847b379578588920ca78fbf26c0b4956c"))
+    out = group.run(conn, ctx)
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert out["by_deployer"] == 1 and out["by_name"] == 0
+    assert pid[A(23)] == acme and pid[A(25)] != other and pid[A(24)] != pid[A(25)]
+    assert "FeeHook" not in {r.name for r in conn.execute(sa.select(db.projects.c.name))}
