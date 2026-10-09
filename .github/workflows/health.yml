@@ -1,17 +1,19 @@
 name: Bait health
-# Daily after the 06:00 UTC pipeline run. A failed scheduled run makes GitHub email the repo owner,
-# which is the alert: stale nightly data or a stalled indexer.
+# Daily at 08:30 UTC, after the 08:00 deadline for the 06:00 UTC pipeline run. A failed scheduled run makes GitHub
+# email the repo owner, which is the alert: a missing or failed nightly receipt, or any stalled chain.
 on:
   schedule:
-    - cron: "30 7 * * *"
+    - cron: "30 8 * * *"
   workflow_dispatch: {}
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      URL: https://bait-production-2706.up.railway.app
     steps:
       - name: Check /api/health
         run: |
-          code=$(curl -s -o body.json -w '%{http_code}' --max-time 60 https://bait-production-2706.up.railway.app/api/health)
+          code=$(curl -s -o body.json -w '%{http_code}' --max-time 60 "$URL/api/health")
           cat body.json; echo
-          test "$code" = "200"
+          test "$code" = "200" && grep -q '"ok":true' body.json

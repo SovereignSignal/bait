@@ -268,3 +268,17 @@ export const radarItems = pgTable(
   },
   (t) => [index("radar_items_kind_published_idx").on(t.kind, t.publishedAt)],
 );
+
+// ---------- run receipts (db/migrations/0009_run_receipts.sql): one row per nightly pipeline run ----------
+
+export const runReceipts = pgTable("run_receipts", {
+  id: serial("id").primaryKey(),
+  day: date("day").notNull(),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }).notNull(),
+  exitCode: integer("exit_code").notNull(),
+  softErrors: integer("soft_errors").notNull().default(0),
+  steps: jsonb("steps").$type<Record<string, Record<string, unknown>>>().notNull(),
+  codeSha: text("code_sha"),
+  notes: text("notes"),
+});
