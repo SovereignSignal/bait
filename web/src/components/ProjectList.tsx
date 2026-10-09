@@ -4,9 +4,9 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
-import { applyTab, availableCategories, feedHref, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
+import { applyTab, availableCategories, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
-import { categoryShort, chainNames, deltaText } from "@/lib/present";
+import { categoryShort, chainNames, deltaText, rowMetric } from "@/lib/present";
 import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
 import { StarIcon } from "./Icons";
@@ -105,35 +105,29 @@ function ProjectListView({ rows, selected, now, query, launches, launchesNow }: 
             {watching ? "Star a project to keep it here. Saved on this device only." : rows.length ? "Nothing matches this filter." : "Nothing indexed yet."}
           </div>
         ) : (
-          list.map((r, i) => (
-            <Link key={r.slug} className={s.row} href={projectHref(r.slug, query)} aria-current={r.slug === selected ? "true" : undefined}>
-              <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} />
-              <div className={s.meta}>
-                <div className={s.n}>
-                  {tabForRows === "trending" && <span className={`${s.rank} num`}>{r.rank ?? i + 1}</span>}
-                  {r.name}
+          list.map((r, i) => {
+            const m = rowMetric(r, tabForRows === "new");
+            const sub = r.whatLine || [r.category !== "other" ? categoryShort(r.category) : "", chainNames(r.chains)].filter(Boolean).join(" · ");
+            return (
+              <Link key={r.slug} className={s.row} href={projectHref(r.slug, query)} aria-current={r.slug === selected ? "true" : undefined}>
+                <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} />
+                <div className={s.meta}>
+                  <div className={s.n}>
+                    {tabForRows === "trending" && <span className={`${s.rank} num`}>{r.rank ?? i + 1}</span>}
+                    {r.name}
+                  </div>
+                  <div className={s.s}>{sub}</div>
                 </div>
-                <div className={s.s}>
-                  {categoryShort(r.category)} · {chainNames(r.chains)}
+                <div className={s.r}>
+                  <div className={`${s.v} num`}>
+                    {usd(m.v)}
+                    <span className={s.win}>{m.win}</span>
+                  </div>
+                  <div className={`${s.d} num ${tabForRows === "new" ? "mut" : ""}`}>{tabForRows === "new" ? ago(r.firstSeenAt, now) : <Delta r={r} />}</div>
                 </div>
-              </div>
-              <div className={s.r}>
-                {tabForRows === "new" ? (
-                  <>
-                    <div className={`${s.v} num`}>{usd(r.vol24h ?? 0)}</div>
-                    <div className={`${s.d} mut`}>24h · {ago(r.firstSeenAt, now)}</div>
-                  </>
-                ) : (
-                  <>
-                    <div className={`${s.v} num`}>{usd(r.vol7d)}</div>
-                    <div className={`${s.d} num`}>
-                      <Delta r={r} />
-                    </div>
-                  </>
-                )}
-              </div>
-            </Link>
-          ))
+              </Link>
+            );
+          })
         )}
       </div>
     </aside>
@@ -151,23 +145,30 @@ export function MoversFallback({ rows }: { rows: RowView[] }) {
 }
 
 function MoversView({ rows, query }: { rows: RowView[]; query: FeedQuery }) {
-  if (!rows.length) return null;
+  const shown = moversFor(rows, query.chain);
+  if (!shown.length) return null;
   return (
     <section className={s.movers} aria-label="Top movers this week">
-      {rows.map((r) => (
-        <Link key={r.slug} className={s.mover} href={projectHref(r.slug, query)}>
-          <span className={s.who}>
-            <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} size="sm" />
-            {r.name}
-          </span>
-          <span className={s.what}>
-            <span className={`${s.big} num`}>{usd(r.isNew ? (r.vol24h ?? r.vol7d) : r.vol7d)}</span>
-            <span className={`${s.delta} num`}>
-              <Delta r={r} />
+      {shown.map((r) => {
+        const m = rowMetric(r, r.isNew);
+        return (
+          <Link key={r.slug} className={s.mover} href={projectHref(r.slug, query)}>
+            <span className={s.who}>
+              <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} size="sm" />
+              {r.name}
             </span>
-          </span>
-        </Link>
-      ))}
+            <span className={s.what}>
+              <span className={`${s.big} num`}>
+                {usd(m.v)}
+                <span className={s.win}>{m.win}</span>
+              </span>
+              <span className={`${s.delta} num`}>
+                <Delta r={r} />
+              </span>
+            </span>
+          </Link>
+        );
+      })}
     </section>
   );
 }

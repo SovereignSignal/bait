@@ -22,7 +22,7 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .movers::-webkit-scrollbar { display: none; }
 .mover { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); min-width: 178px; }
 .mover:hover { background: var(--hover); }
-.who { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
+.who { font-feature-settings: "calt" 0; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
 .what { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .big { font-weight: 700; font-size: 16px; }
 .delta { font-weight: 600; font-size: 13px; }
@@ -52,11 +52,12 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .row:hover { background: var(--hover); }
 .row[aria-current="true"] { background: var(--panel2); }
 .meta { min-width: 0; flex: 1; }
-.n { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.n { font-feature-settings: "calt" 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .s { font-size: 12px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .r { text-align: right; flex: 0 0 auto; }
 .v { font-weight: 600; }
 .d { font-size: 12px; font-weight: 600; }
+.win { margin-left: 3px; font-size: 10px; font-weight: 500; color: var(--fg3); }
 .rank { color: var(--fg3); margin-right: 6px; }
 
 .back { display: none; }
