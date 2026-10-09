@@ -39,6 +39,7 @@ class Runner:
         self.should_stop = should_stop or (lambda: False)
         self.migrate = migrate                         # -> bool; retried each loop until it succeeds
         self._schema_ok = migrate is None
+        self.schema_locked = 0                         # consecutive loops the migration waited on a table lock
         self._price_fails: dict[int, int] = {}           # chain id -> consecutive loops ending in PricesUnavailable
         self.prices = PriceBook(client)
         self.loops = 0
@@ -52,8 +53,13 @@ class Runner:
         if not self._schema_ok:
             self._schema_ok = self.migrate()
             if not self._schema_ok:
-                log.warning("schema migration waiting on a table lock; no chain synced this loop, retrying next loop")
+                self.schema_locked += 1
+                log.log(logging.ERROR if self.schema_locked >= 3 else logging.WARNING,
+                        "schema migration waiting on a table lock (%d loops in a row); no chain synced, retrying next loop",
+                        self.schema_locked)
+                log.info("%s", heartbeat(self.loops, self.mode, out, schema_locked=self.schema_locked))
                 return out
+            self.schema_locked = 0
         for ch in self.chains:
             if self.should_stop():
                 log.info("stop requested: leaving the loop before chain=%s", ch.slug)
@@ -107,7 +113,7 @@ class Runner:
         return out
 
 
-def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats]) -> str:
+def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats], schema_locked: int = 0) -> str:
     parts = []
     for slug, s in stats.items():
         if s.error:
@@ -117,7 +123,8 @@ def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats]) -> str:
         extra = f",swaps={s.swaps}" + (f",unpriced={s.unpriced}" if s.unpriced else "") if s.swaps else ""
         parts.append(f"{slug}:lag={lag},new={s.new_pools}{extra}")
     total_new = sum(s.new_pools for s in stats.values())
-    return f"heartbeat loop={loop} mode={mode} new_pools={total_new} " + " ".join(parts)
+    locked = f"schema_locked={schema_locked} " if schema_locked else ""
+    return f"heartbeat loop={loop} mode={mode} new_pools={total_new} {locked}" + " ".join(parts)
 
 
 def main(argv: list[str] | None = None) -> int:
