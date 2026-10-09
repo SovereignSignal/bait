@@ -132,3 +132,21 @@ def test_swap_cursor_cas_loser_waits_on_the_row_lock_then_matches_nothing(pg_eng
     assert result == {"b": "moved"}                            # READ COMMITTED re-checks swap_block = 10 after A commits
     with pg_engine.connect() as c:
         assert store.get_state(c, 8453).swap_block == 20
+
+
+def test_onchain_pool_copy_skips_unchanged_rows_and_reports_db_size(pg_engine):
+    from datetime import datetime, timezone
+    from bait.steps import onchain
+    hook = "0x" + "a" * 36 + "0080"
+    with pg_engine.begin() as c:
+        c.execute(sa.insert(db.hooks).values(address=hook, chain_id=8453, name="H", first_seen_at=NOW, flags={}, properties={}))
+        c.execute(sa.insert(db.v4_pools).values(chain_id=8453, pool_id="0x" + "a" * 64, hook_address=hook, currency0="0x0",
+                                                currency1="0x1", fee=3000, tick_spacing=60, block_number=7,
+                                                block_time=datetime(2026, 8, 1, tzinfo=timezone.utc)))
+    with pg_engine.begin() as c:
+        out = onchain.run(c, _ctx())
+    assert out["pools_written"] == 1 and out["db_gb"] is not None
+    with pg_engine.begin() as c:
+        c.execute(sa.delete(db.onchain_watermarks))                 # force a re-read of the same row
+        out = onchain.run(c, _ctx())
+    assert out["pools"] == 1 and out["pools_written"] == 0         # read again, not rewritten

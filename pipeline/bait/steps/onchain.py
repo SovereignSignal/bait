@@ -4,7 +4,9 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
 1. Hooks: every v4_pools hook missing from `hooks` becomes an unlisted hook row (name None, like snapshot keyless), busiest
    first, at most ONCHAIN_MAX_NEW_HOOKS (500) per night so the group step's Claude long tail stays bounded; code_hash from
    keyless.code_hashes where a public RPC exists for the chain (KEYLESS != 0), else None.
-2. Pools: every v4_pools row whose hook is in `hooks` is upserted into `pools` (any chain; the web filters unknown chains).
+2. Pools: every v4_pools row whose hook is in `hooks` is upserted into `pools` (any chain; the web filters unknown chains),
+   incrementally (per-chain `onchain_watermarks` on `block_number`, plus every pool of a newly known hook); a row is
+   rewritten only when a value changed. A Postgres size line (pg_database_size vs DISK_LIMIT_GB) is logged every night.
    token0/token1 are only set on insert, so GeckoTerminal/subgraph symbols survive; created_at = Initialize block time.
 3. Usage (chains whose indexer_state is backfilled and updated within ONCHAIN_MAX_STALE_HOURS): for each pool with
    pool_daily_onchain rows in day-14..day, pool_snapshots becomes a cumulative volume / swap series from the on-chain daily
@@ -23,8 +25,9 @@ from datetime import date, datetime, time as dtime, timedelta, timezone
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 
-from ..db import (as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pools, upsert,
-                  v4_pools)
+from ..db import (as_utc, hooks, indexer_state, onchain_watermarks, pool_daily_onchain, pool_snapshots, pool_stats, pools,
+                  upsert, v4_pools)
+from ..indexer.chains import CHAINS
 from ..rules import custom_accounting, flags_from_address
 from . import RunContext, log
 
@@ -41,7 +44,9 @@ def _env_int(name: str, default: int) -> int:
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"v4_pools": 0, "hooks_added": 0, "hooks_deferred": 0, "code_hashes": 0, "pools": 0,
-           "pools_usage": 0, "series_replaced": 0, "stats": 0, "chains_usage": 0, "chains_stale": 0, "vol_unknown": 0, "errors": 0}
+           "pools_usage": 0, "series_replaced": 0, "stats": 0, "chains_usage": 0, "chains_stale": 0, "vol_unknown": 0, "errors": 0,
+           "pools_written": 0, "db_gb": None, "disk_warn": 0}
+    _disk_check(conn, out)
     where = [v4_pools.c.chain_id.in_(ctx.chains)] if ctx.chains else []
     out["v4_pools"] = conn.execute(sa.select(sa.func.count()).select_from(v4_pools).where(*where)).scalar() or 0
     if not out["v4_pools"]:
@@ -50,8 +55,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     known = _add_hooks(conn, ctx, where, out)
     _upsert_pools(conn, ctx, known, out)
     _usage(conn, ctx, out)
-    log.info("onchain v4_pools=%d hooks_added=%d deferred=%d pools=%d usage_pools=%d series=%d stats=%d",
-             out["v4_pools"], out["hooks_added"], out["hooks_deferred"], out["pools"], out["pools_usage"],
+    log.info("onchain v4_pools=%d hooks_added=%d deferred=%d pools=%d pools_written=%d usage_pools=%d series=%d stats=%d",
+             out["v4_pools"], out["hooks_added"], out["hooks_deferred"], out["pools"], out["pools_written"], out["pools_usage"],
              out["series_replaced"], out["stats"])
     return out
 
@@ -110,28 +115,76 @@ def _code_hashes(ctx: RunContext, rows, out: dict) -> dict[tuple[int, str], str]
 
 
 def _upsert_pools(conn, ctx: RunContext, known: set[tuple[str, int]], out: dict) -> None:
+    """v4_pools -> pools for known hooks, incrementally: 1) per chain, rows above the block watermark (Initialize history
+    only grows upward per chain); 2) every pool of a known hook with no pools row yet (hooks that became known tonight,
+    incl. ones the cap deferred while their pools passed the watermark). Unchanged rows are never rewritten."""
+    marks = {r.chain_id: r.pools_block for r in conn.execute(sa.select(onchain_watermarks))}
+    chain_ids = {c.chain_id for c in CHAINS} | set(marks) | {r[0] for r in conn.execute(sa.select(indexer_state.c.chain_id))}
+    for cid in sorted(chain_ids):
+        if ctx.chains and cid not in ctx.chains:
+            continue
+        # strictly above the watermark block: a block's Initialize logs are committed in one indexer page, never split
+        floor = -1 if marks.get(cid) is None else marks[cid]
+        last = top = None
+        while True:
+            q = sa.select(v4_pools).where(v4_pools.c.chain_id == cid, v4_pools.c.block_number > floor)
+            if last is not None:
+                q = q.where(sa.tuple_(v4_pools.c.block_number, v4_pools.c.pool_id) > sa.tuple_(sa.literal(last[0]), sa.literal(last[1])))
+            batch = conn.execute(q.order_by(v4_pools.c.block_number, v4_pools.c.pool_id).limit(2000)).all()
+            if not batch:
+                break
+            last = top = (batch[-1].block_number, batch[-1].pool_id)
+            _copy_pools(conn, [r for r in batch if (r.hook_address, r.chain_id) in known], out)
+        if top is not None:
+            upsert(conn, onchain_watermarks, [{"chain_id": cid, "pools_block": top[0], "updated_at": ctx.now}], keys=["chain_id"])
+    orphans = conn.execute(sa.select(hooks.c.chain_id, hooks.c.address).where(
+        ~sa.exists().where(pools.c.chain_id == hooks.c.chain_id, pools.c.hook_address == hooks.c.address),
+        sa.exists().where(v4_pools.c.chain_id == hooks.c.chain_id, v4_pools.c.hook_address == hooks.c.address))).all()
+    for h in orphans:
+        if ctx.chains and h.chain_id not in ctx.chains:
+            continue
+        rows = conn.execute(sa.select(v4_pools).where(v4_pools.c.chain_id == h.chain_id, v4_pools.c.hook_address == h.address)).all()
+        for i in range(0, len(rows), 2000):
+            _copy_pools(conn, rows[i:i + 2000], out)
+
+
+def _copy_pools(conn, batch, out: dict) -> None:
     ins = postgresql.insert if conn.dialect.name == "postgresql" else sqlite.insert
-    last = (-1, "")
-    while True:
-        q = (sa.select(v4_pools).where(sa.tuple_(v4_pools.c.chain_id, v4_pools.c.pool_id) > sa.tuple_(sa.literal(last[0]), sa.literal(last[1])))
-             .order_by(v4_pools.c.chain_id, v4_pools.c.pool_id).limit(2000))
-        if ctx.chains:
-            q = q.where(v4_pools.c.chain_id.in_(ctx.chains))
-        batch = conn.execute(q).all()
-        if not batch:
-            break
-        last = (batch[-1].chain_id, batch[-1].pool_id)
-        rows = [{"pool_id": r.pool_id, "chain_id": r.chain_id, "hook_address": r.hook_address,
-                 "token0": {"id": r.currency0, "symbol": None}, "token1": {"id": r.currency1, "symbol": None},
-                 "fee": r.fee, "tick_spacing": r.tick_spacing, "created_at": r.block_time}
-                for r in batch if (r.hook_address, r.chain_id) in known]
-        for i in range(0, len(rows), CHUNK):
-            stmt = ins(pools).values(rows[i:i + CHUNK])
-            stmt = stmt.on_conflict_do_update(index_elements=["pool_id", "chain_id"], set_={
-                "hook_address": stmt.excluded.hook_address, "fee": stmt.excluded.fee, "tick_spacing": stmt.excluded.tick_spacing,
-                "created_at": sa.func.coalesce(stmt.excluded.created_at, pools.c.created_at)})
-            conn.execute(stmt)
-        out["pools"] += len(rows)
+    rows = [{"pool_id": r.pool_id, "chain_id": r.chain_id, "hook_address": r.hook_address,
+             "token0": {"id": r.currency0, "symbol": None}, "token1": {"id": r.currency1, "symbol": None},
+             "fee": r.fee, "tick_spacing": r.tick_spacing, "created_at": r.block_time} for r in batch]
+    for i in range(0, len(rows), CHUNK):
+        stmt = ins(pools).values(rows[i:i + CHUNK])
+        ex = stmt.excluded
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["pool_id", "chain_id"],
+            set_={"hook_address": ex.hook_address, "fee": ex.fee, "tick_spacing": ex.tick_spacing,
+                  "created_at": sa.func.coalesce(ex.created_at, pools.c.created_at)},
+            where=sa.or_(pools.c.hook_address.is_distinct_from(ex.hook_address), pools.c.fee.is_distinct_from(ex.fee),
+                         pools.c.tick_spacing.is_distinct_from(ex.tick_spacing),
+                         sa.and_(ex.created_at.is_not(None), pools.c.created_at.is_distinct_from(ex.created_at))))
+        # RETURNING, not rowcount: a multi-row VALUES insert reports rowcount -1 on psycopg
+        out["pools_written"] += len(conn.execute(stmt.returning(pools.c.pool_id)).all())
+    out["pools"] += len(rows)
+
+
+def _disk_check(conn, out: dict) -> None:
+    """Nightly size line. pg_database_size covers this database only (no WAL): an estimate of the volume's use."""
+    if conn.dialect.name != "postgresql":
+        return
+    size = conn.execute(sa.text("SELECT pg_database_size(current_database())")).scalar_one()
+    try:
+        limit = float(os.environ.get("DISK_LIMIT_GB", "") or 50)
+    except ValueError:
+        limit = 50.0
+    gb = size / 1024 ** 3
+    pct = 100 * gb / limit
+    out["db_gb"] = round(gb, 2)
+    if pct >= 60:
+        out["disk_warn"] = 1
+        log.warning("onchain disk: database %.1f GB is %.0f%% of the %.0f GB volume (DISK_LIMIT_GB)", gb, pct, limit)
+    else:
+        log.info("onchain disk: database %.1f GB, %.0f%% of %.0f GB", gb, pct, limit)
 
 
 def ref_day(ctx: RunContext) -> date:
