@@ -307,18 +307,21 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
 
 - Wallet counts are a lower bound: the distinct count when known, else max(buyers, sellers), never buyers + sellers.
   For the 7-day rules off ready chains it is the largest daily bound of the week's 7 pool_stats days (one quiet day is not
-  "0 wallets"); with no wallet data at all, the swaps behind the 7-day volume are an upper bound (8 swaps prove < 50).
+  "0 wallets"); with no wallet data at all, the swaps behind the 7-day volume are an upper bound (8 swaps prove < 50),
+  but only when they are exact: the indexer's UTC days on ready chains. Keyless counts are rolling 06:00-to-06:00
+  buys + sells filed under the day before (a launch's first hours land in a day the pool has no row for), so they
+  never bound wallets, and no swap bound is used against a known wallet lower bound above the rule's threshold.
   Missing pool_wallet_day rows are unknown, never 0 wallets.
 - `24h`: pool >= $250K in 24 h through <= 25 wallets, and corroborated.
-- `7d` (indexer, ready chains): pool >= $1M over 7 days through <= 10 distinct wallets, and corroborated. On any chain,
-  <= 10 known swaps carrying >= $1M prove <= 10 wallets; that concentration is its own corroboration.
+- `7d` (indexer, ready chains): pool >= $1M over 7 days through <= 10 distinct wallets, and corroborated. Also,
+  <= 10 exact swaps carrying >= $1M prove <= 10 wallets; that concentration is its own corroboration.
 - Corroborated: 7-day volume > 50x a known TVL, or no liquidity (>= $1M in 7 days with a known TVL <= $1,000), or
   symmetric traders. Few wallets alone also describes private / RFQ hooks (Arrakis private hook) with real liquidity.
   No liquidity never counts for a custom-accounting hook (address bit 3): its liquidity lives in the hook. A missing
   GeckoTerminal reserve is unknown TVL, not $0.
 - `concentrated`: >= $1M in 7 days carried by at most 2 known distinct wallets: pool_wallet_day on ready chains;
   elsewhere an exact count (pool_stats.wallets_24h) on every day that carries volume, with the union of those days'
-  pool_top_wallets addresses as the week's count (rotating pairs are not concentrated); or <= 2 swaps. No TVL
+  pool_top_wallets addresses as the week's count (rotating pairs are not concentrated); or <= 2 exact swaps. No TVL
   corroboration, custom-accounting hooks included: one wallet moving $1M through its own pool is not usage; an RFQ hook
   with 5-10 real counterparties stays clear. A legitimate two-counterparty desk moving $1M+ will carry the
   "concentrated" badge and never rank: an accepted cost, and the badge text is accurate.
