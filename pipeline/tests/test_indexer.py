@@ -645,3 +645,19 @@ def test_runner_escalates_repeated_schema_locks_and_reports_them_in_the_heartbea
         beats.append([rec.getMessage() for rec in caplog.records if rec.getMessage().startswith("heartbeat")])
     assert levels == [["WARNING"], ["WARNING"], ["ERROR"]]
     assert [b[0].split("schema_locked=")[1].split()[0] for b in beats] == ["1", "2", "3"]
+
+
+def test_pool_cap_schema_is_additive_on_an_existing_database():
+    e = db.make_engine("sqlite://")
+    with e.begin() as c:
+        c.execute(sa.text("CREATE TABLE v4_pools (chain_id integer, pool_id text, hook_address text NOT NULL, currency0 text NOT NULL, "
+                          "currency1 text NOT NULL, fee integer, tick_spacing integer, sqrt_price_x96 text, tick integer, "
+                          "block_number bigint, block_time timestamp, tx_hash text, PRIMARY KEY (chain_id, pool_id))"))
+        c.execute(sa.text("INSERT INTO v4_pools (chain_id, pool_id, hook_address, currency0, currency1) VALUES (1, '0xp', '0xh', '0x0', '0x1')"))
+    db.create_all(e)
+    assert "v4_pools.sampled" in db.add_missing_columns(e)
+    with e.connect() as c:
+        assert c.execute(sa.text("SELECT sampled FROM v4_pools")).scalar_one() == 0
+    assert {c["name"] for c in sa.inspect(e).get_columns("hook_pool_counts")} == {
+        "chain_id", "hook_address", "pools_total", "first_block", "last_block", "last_seen"}
+    assert "pools_total" in {c["name"] for c in sa.inspect(e).get_columns("hooks")}
