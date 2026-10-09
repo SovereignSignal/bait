@@ -1,5 +1,6 @@
 """CLI: python -m bait run --day YYYY-MM-DD [--steps a,b] [--chains base,ethereum] [--hooklist-file f] [--force-digest]
-       python -m bait init-db   (create tables; for local SQLite dev, Postgres uses db/migrations)."""
+       python -m bait init-db   (create tables; for local SQLite dev, Postgres uses db/migrations).
+       python -m bait repair backfill-days|rescore|prose|verify|all ...   (package 9 one-off data repair; see repair.py)"""
 from __future__ import annotations
 
 import argparse
@@ -11,7 +12,7 @@ from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
 
-from . import db, logsetup
+from . import db, logsetup, repair
 from .config import CHAIN_BY_SLUG
 from .costs import Meter, format_preview, preview
 from .steps import STEP_ORDER, RunContext, log
@@ -50,6 +51,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     cp.add_argument("--signals-limit", type=int, default=50)
     i = sub.add_parser("init-db", help="create tables via SQLAlchemy metadata")
     i.add_argument("--database-url", default=None)
+    rp = sub.add_parser("repair", help="one-off data repair (package 9): backfill-days, rescore, prose, verify, all")
+    repair.add_parsers(rp.add_subparsers(dest="repair_cmd", required=True))
     return ap.parse_args(argv)
 
 
@@ -73,6 +76,8 @@ def main(argv: list[str] | None = None) -> int:
             log.error("schema: required columns still missing (%s) after a lock timeout; not running. Retry when the "
                       "table lock is free (the indexer applies them on its next loop).", ", ".join(missing))
             return 4
+    if args.cmd == "repair":
+        return repair.main(args, engine)
     meter = Meter(engine)
     if args.cmd == "cost-preview":
         with engine.connect() as conn:
