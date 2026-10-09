@@ -181,6 +181,7 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     vol7 / tvl: the pool's closed 7-day volume and latest TVL from the snapshots."""
     stats = {(r.pool_id, r.chain_id): r for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day))}
     lb = {k: wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h) for k, r in stats.items()}
+    lb7 = _wallets_7d_lower_bound(conn, day)
     top: dict[tuple, list] = {}
     for r in conn.execute(sa.select(pool_top_wallets.c.pool_id, pool_top_wallets.c.chain_id, pool_top_wallets.c.volume_usd,
                                     pool_top_wallets.c.buys, pool_top_wallets.c.sells).where(pool_top_wallets.c.day == day)):
@@ -191,9 +192,9 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
         "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k]))
                 for k, r in stats.items()},
         "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k, 0), tvl.get(k), sym.get(k, False))) for k, v in vol_on.items()},
-        "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), wallets_7d[k] if k in wallets_7d else lb.get(k)))
+        "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), wallets_7d[k] if k in wallets_7d else lb7.get(k)))
                     for k, v in vol7.items()},
-        "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), wallets_7d[k] if k in wallets_7d else lb.get(k)))
+        "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), wallets_7d[k] if k in wallets_7d else lb7.get(k)))
                          for k, v in vol7.items()},
         "symmetric": {k: (r.vol_24h_rolling or 0.0, sym[k]) for k, r in stats.items()},
     }
@@ -210,6 +211,19 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
             if washed / total >= WASH_SHARE:
                 reasons.setdefault(pid, []).append(reason)
     return reasons
+
+
+def _wallets_7d_lower_bound(conn, day: date) -> dict[tuple, int]:
+    """Per pool off ready chains: a lower bound of the wallets behind its 7-day volume, the largest daily lower bound over
+    the 7 stored pool_stats days (day-6 .. day, each covering the 24 h before it). One quiet day's 0 buyers / 0 sellers
+    is not a 7-day count. A pool with no known day is absent (unknown), so the 7-day wallet rules cannot fire on it."""
+    out: dict[tuple, int] = {}
+    for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day >= day - 6 * _D, pool_stats.c.day <= day)):
+        n = wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h)
+        if n is not None:
+            k = (r.pool_id, r.chain_id)
+            out[k] = max(out.get(k, 0), n)
+    return out
 
 
 def _onchain_7d(conn, end: date, chains: list[int]) -> tuple[dict, dict]:

@@ -334,3 +334,20 @@ def test_a_project_whose_only_pool_has_unknown_volume_stores_null_volume_not_zer
     d = daily(conn, p)
     assert (d.vol_24h, d.vol_7d, d.vol_7d_prev) == (None, None, None)
     assert d.score_trending == 0.0 and d.pools_n == 1 and d.tvl_usd == 5_000
+
+
+def test_a_quiet_day_is_not_a_seven_day_wallet_count(conn, ctx):
+    """A launchpad pool did $2M through thousands of wallets on the first day of the week and has been quiet since; its
+    TVL is $500 now. Yesterday's 0 buyers / 0 sellers must not read as "fewer than 50 wallets" for the 7-day rules."""
+    p = insert_project(conn, "Launch", first_seen=NOW - timedelta(days=60), slug="launch")
+    insert_hook(conn, "0xla", 8453, project_id=p, name="Launch")
+    insert_pool(conn, "0xlap", 8453, "0xla", created=NOW - timedelta(days=60))
+    series(conn, "0xlap", 8453, {END - timedelta(days=i): (2_000_000.0 if i == 6 else 0.0) for i in range(7)}, tvl=500.0,
+           tx={END - timedelta(days=i): (6_000 if i == 6 else 0) for i in range(7)})
+    for i in range(7):                       # pool_stats(day) covers the day before: day-6 holds the busy day END-6
+        busy = i == 6
+        conn.execute(sa.insert(db.pool_stats).values(pool_id="0xlap", chain_id=8453, day=DAY - timedelta(days=i),
+                                                     vol_24h=2_000_000.0 if busy else 0.0, traders_24h=6_000 if busy else 0,
+                                                     buyers_24h=3_000 if busy else 0, sellers_24h=3_000 if busy else 0))
+    score.run(conn, ctx)
+    assert not daily(conn, p).is_wash
