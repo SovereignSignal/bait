@@ -237,3 +237,10 @@ def test_a_small_delegatecalling_runtime_of_no_known_shape_is_unknown():
     assert proxy_kind(small + "00" * 1100) is None                                  # a full contract may delegatecall
     assert proxy_kind("0x6080604052") is None
     assert code_evidence(SimpleNamespace(code_hash="0xd", is_proxy=None, proxy_kind="unknown")) is None
+
+
+def test_a_project_that_moved_a_million_is_never_spam():
+    assert is_spam([(0, 8)]) is True                                  # $0 TVL, 8 swaps lifetime
+    assert is_spam([(0, 8)], volume=436_000_000) is False             # ...but $436M moved (Optimism 0x69af)
+    assert is_spam([(0, 8)], volume=999_999) is True
+    assert is_spam([], volume=5_000_000) is True                      # no pools is still spam

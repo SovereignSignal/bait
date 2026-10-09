@@ -308,8 +308,9 @@ def test_no_liquidity_flags_the_optimism_0x69af_shape(conn, ctx):
     _optimism_ready(conn)
     out = score.run(conn, ctx)
     d = daily(conn, p)
-    assert d.is_wash and d.wash_reason == "7d,no_liquidity" and d.score_trending == 0.0 and not d.is_new
-    assert (out["wash_7d"], out["wash_no_liquidity"], out["wash_vol_tvl"]) == (1, 1, 0)
+    assert d.is_wash and {"7d", "no_liquidity"} <= set(d.wash_reason.split(",")) and d.score_trending == 0.0 and not d.is_new
+    assert not d.is_spam               # $0 TVL and 8 swaps, but $436M moved: listed in All with the badge, never a 404
+    assert (out["wash_7d"], out["wash_no_liquidity"], out["wash_vol_tvl"], out["spam"]) == (1, 1, 0, 0)
 
 
 def test_24h_rule_spares_a_private_rfq_hook_with_real_liquidity(conn, ctx):

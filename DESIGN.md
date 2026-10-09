@@ -96,8 +96,10 @@ a project's pools on ready chains, otherwise an upper bound (`wallets_exact = fa
 - Trending: vol_7d >= $10k; score = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)
   tie-break TVL delta; top 20
 - Alive: GitHub commit <= 30d OR Exa hit <= 30d
-- Spam filter: no pools, or all pools under $100 TVL and < 10 swaps lifetime -> hidden everywhere (404). Wash-like
-  volume is not spam: see "Wash rules (package 8)".
+- Spam filter: no pools, or all pools under $100 TVL and < 10 swaps lifetime -> hidden everywhere (404). A project
+  whose lifetime or 7-day volume is $1M or more is never spam, so a wash-like whale (Optimism 0x69af: $436M through 8
+  swaps at $0 TVL) is listed in All with its red badge instead of 404ing. Wash-like volume is not spam: see "Wash rules
+  (package 8)".
 
 ## Pipeline (Railway cron service, Python, nightly ~06:00 UTC)
 

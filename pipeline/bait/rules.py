@@ -206,10 +206,17 @@ def is_new(first_seen_at: datetime, day: date, max_pool_tvl: float, swaps_7d: in
     return first_seen_at >= cutoff and (max_pool_tvl > 1_000 or swaps_7d >= 10)
 
 
-def is_spam(pool_stats: list[tuple[float, int]]) -> bool:
-    """pool_stats = [(tvl_usd, tx_count_cum)]. No pools, or all pools under $100 TVL and < 10 txs lifetime."""
+SPAM_EXEMPT_VOL = 1_000_000
+
+
+def is_spam(pool_stats: list[tuple[float, int]], volume: float = 0.0) -> bool:
+    """pool_stats = [(tvl_usd, tx_count_cum)]. No pools, or all pools under $100 TVL and < 10 txs lifetime. A project that
+    moved >= $1M (lifetime or 7-day; a lower bound is enough) is never spam: a wash-like whale such as Optimism 0x69af
+    ($436M through 8 swaps at $0 TVL) is listed in All with its badge instead of 404ing."""
     if not pool_stats:
         return True
+    if volume >= SPAM_EXEMPT_VOL:
+        return False
     return all((tvl or 0) < 100 and (txs or 0) < 10 for tvl, txs in pool_stats)
 
 
