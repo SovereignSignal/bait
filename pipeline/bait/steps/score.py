@@ -241,7 +241,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
                                            if k not in wallets_7d and v >= WASH_MIN_VOL_7D}))
     # wallets behind a pool's 7-day volume: on-chain distinct count, else the week's lower bound, else its swap count
     w7 = {k: wallets_7d.get(k, lb7.get(k, swaps7.get(k))) for k in vol7}
-    wallet_known = {pool_project[k][0] for k in (set(wallets_7d) | set(lb7) | set(swaps7) | {k for k, n in lb.items() if n is not None})
+    # "unverified" needs that no rule could judge the project: no wallet count, no non-zero bound, no swap count
+    wallet_known = {pool_project[k][0] for k in (set(wallets_7d) | set(lb7) | set(swaps7) | {k for k, n in lb.items() if n})
                     if k in pool_project}
     judged = {
         "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k], k in custom))
@@ -280,7 +281,7 @@ def _wallets_7d_lower_bound(conn, day: date) -> dict[tuple, int]:
     out: dict[tuple, int] = {}
     for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day >= day - 6 * _D, pool_stats.c.day <= day)):
         n = wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h)
-        if n is not None:
+        if n:                                  # 0 (a quiet day) is no wallet count for a pool that had volume: unknown
             k = (r.pool_id, r.chain_id)
             out[k] = max(out.get(k, 0), n)
     return out

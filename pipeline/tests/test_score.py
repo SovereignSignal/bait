@@ -524,3 +524,17 @@ def test_concentrated_off_ready_chains_needs_the_same_few_wallets_every_day(conn
     assert "concentrated" not in (daily(conn, rotating).wash_reason or "")
     assert "concentrated" not in (daily(conn, one_exact).wash_reason or "")
     assert "concentrated" in (daily(conn, same).wash_reason or "")
+
+
+def test_a_quiet_days_zero_wallets_is_unknown_for_a_pool_with_volume(conn, ctx):
+    """A launch pool did $2M early in the week; its only pool_stats row is a quiet day (0 buyers, 0 sellers). Zero is
+    not a wallet count for $2M: neither vol_tvl nor no_liquidity may fire on that basis alone."""
+    p = insert_project(conn, "Quiet", first_seen=NOW - timedelta(days=60), slug="quiet")
+    insert_hook(conn, "0xqu", 8453, project_id=p, name="Quiet")
+    insert_pool(conn, "0xqup", 8453, "0xqu", created=NOW - timedelta(days=60))
+    series(conn, "0xqup", 8453, {END - timedelta(days=5): 2_000_000.0, END: 0.0}, tvl=500.0)
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xqup", chain_id=8453, day=DAY, vol_24h=0.0, traders_24h=0,
+                                                 buyers_24h=0, sellers_24h=0))
+    score.run(conn, ctx)
+    reasons = (daily(conn, p).wash_reason or "").split(",")
+    assert "vol_tvl" not in reasons and "no_liquidity" not in reasons
