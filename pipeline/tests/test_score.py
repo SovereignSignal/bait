@@ -621,3 +621,26 @@ def test_folded_usage_shows_in_the_totals_but_never_ranks_trending(conn, ctx):
     d = daily(conn, pad)
     assert d.vol_7d == 7_000.0 + 7_000_000.0                                            # displayed totals include it
     assert d.score_trending == pytest.approx(score.score_trending(7_000.0, 7_000.0))     # ranking does not
+
+
+def test_wash_shares_use_unfolded_volume_so_folded_usage_cannot_dilute_a_wash_pool(conn, ctx):
+    """A capped project: its sampled wash pool carries 60% of the unfolded volume; the hook's aggregate pool (folded swaps,
+    which no rule can judge) equals the unfolded total. Counted in the denominator it would cut the share to 30%."""
+    pad = _onchain_project(conn, "Pad", "0xwash", wallets=1, vol_per_day=60_000_000)            # $420M, one wallet
+    insert_pool(conn, "0xclean", 10, "0xPad", created=NOW - timedelta(days=60))
+    series(conn, "0xclean", 10, {END - timedelta(days=i): 40_000_000.0 for i in range(14)}, tvl=50_000_000,
+           tx={END - timedelta(days=i): 500 for i in range(14)})
+    for i in range(7):
+        d = END - timedelta(days=i)
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id="0xclean", day=d, swaps=500, wallets=60,
+                                                             volume_usd=40_000_000))
+        for w in range(60):
+            conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id="0xclean", day=d, address=f"0xc{w}", swaps=1))
+    agg = db.hook_pool_id("0xPad")
+    insert_pool(conn, agg, 10, "0xPad", created=None)
+    series(conn, agg, 10, {END - timedelta(days=i): 100_000_000.0 for i in range(14)}, tvl=None,
+           tx={END - timedelta(days=i): 5_000 for i in range(14)})
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert d.is_wash and "7d" in d.wash_reason.split(",") and d.score_trending == 0.0
