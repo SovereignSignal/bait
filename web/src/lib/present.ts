@@ -91,6 +91,7 @@ export function walletsText(n: number | null, exact: boolean | null): string {
 const WASH_TEXT: Record<string, string> = {
   "24h": "$250K+ in a day through 25 or fewer wallets",
   "7d": "$1M+ in 7 days through 10 or fewer wallets",
+  concentrated: "$1M+ in 7 days through 2 or fewer wallets",
   vol_tvl: "7-day volume over 300x its liquidity from fewer than 50 wallets",
   no_liquidity: "$1M+ in 7 days through a pool with $1K or less of liquidity",
   symmetric: "its top wallets buy and sell in equal counts and carry most of the volume",

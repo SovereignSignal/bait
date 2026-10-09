@@ -48,7 +48,8 @@ def test_score_hand_computed(conn, ctx):
     assert d.is_new is False           # pipeline first saw it 3d ago, but its pool is 60d old: not new
     assert d.is_spam is False
     assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_24h": 0, "wash_7d": 0,
-                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_unverified": 0}
+                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_unverified": 0,
+                   "wash_concentrated": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):
@@ -141,7 +142,7 @@ def test_wash_7d_from_indexer_one_wallet_hundreds_of_millions(conn, ctx):
     _optimism_ready(conn)
     out = score.run(conn, ctx)
     w = daily(conn, wash)
-    assert w.is_wash and not w.is_spam and w.wash_reason == "7d,vol_tvl" and w.score_trending == 0.0
+    assert w.is_wash and not w.is_spam and w.wash_reason == "7d,concentrated,vol_tvl" and w.score_trending == 0.0
     assert not daily(conn, busy).is_wash and not daily(conn, small).is_wash
     assert out["wash_7d"] == 1
 
@@ -435,7 +436,7 @@ def test_rescoring_a_past_day_does_not_depend_on_indexer_freshness_now(conn, ctx
     first = daily(conn, wash).wash_reason
     ctx.now = NOW + timedelta(days=5)            # updated_at (NOW) is now days stale
     score.run(conn, ctx)
-    assert first == "7d,vol_tvl" and daily(conn, wash).wash_reason == first
+    assert first == "7d,concentrated,vol_tvl" and daily(conn, wash).wash_reason == first
 
 
 def test_pruned_wallet_rows_are_unknown_not_zero_wallets(conn, ctx):
@@ -444,3 +445,30 @@ def test_pruned_wallet_rows_are_unknown_not_zero_wallets(conn, ctx):
     _optimism_ready(conn)
     out = score.run(conn, ctx)
     assert out["wash_7d"] == 0 and "7d" not in (daily(conn, wash).wash_reason or "").split(",")
+
+
+def test_one_wallet_moving_a_million_through_its_own_custom_hook_is_concentrated(conn, ctx):
+    """The real Optimism 0x69af...7fff: every permission bit set (bit 3 too, so no_liquidity does not judge it), one
+    wallet, 8 swaps, $436M, TVL 0. One wallet moving $1M+ through its own pool needs no TVL corroboration."""
+    p = insert_project(conn, "Desk7fff", first_seen=NOW - timedelta(days=60), slug="desk7fff")
+    hook = "0x69af" + "0" * 32 + "7fff"
+    insert_hook(conn, hook, 10, project_id=p, name="Desk7fff")
+    insert_pool(conn, "0x69affp", 10, hook, created=NOW - timedelta(days=60))
+    days = [END - timedelta(days=i) for i in range(4)]
+    series(conn, "0x69affp", 10, {d: 109_000_000.0 for d in days}, tvl=0.0, tx={d: 2 for d in days})
+    for d in days:
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id="0x69affp", day=d, swaps=2, wallets=1,
+                                                             volume_usd=109_000_000.0))
+        conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id="0x69affp", day=d, address="0xdesk", swaps=2))
+    _optimism_ready(conn)
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_wash and "concentrated" in d.wash_reason.split(",") and d.score_trending == 0.0 and not d.is_spam
+    assert out["wash_concentrated"] == 1
+
+
+def test_an_rfq_hook_with_several_real_counterparties_is_not_concentrated(conn, ctx):
+    rfq = _onchain_project(conn, "Rfq5", "0xrfq5", wallets=5, vol_per_day=500_000, tvl=5_000_000)
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    assert not daily(conn, rfq).is_wash
