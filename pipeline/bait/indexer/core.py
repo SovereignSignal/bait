@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from ..db import as_utc
 from .chains import CHAINS, IndexedChain
 from .decode import INITIALIZE_TOPIC, decode_initialize, decode_swap, is_hooked, num, utc
-from .hypersync import HyperSync, initialize_query, page, swap_query
+from .hypersync import HyperSync, initialize_by_id_query, initialize_query, page, swap_query
 from .prices import PriceBook, swap_usd
 from . import store
 
@@ -37,12 +37,14 @@ class Settings:
     topic_chunk: int = 500           # pool ids per Swap query in topic mode
     rpc_max_windows: int = 30        # RPC mode: eth_getLogs windows per chain per loop before jumping to the head
     pools_per_hook: int = 2000       # v4_pools rows per (chain, hook); past it pools are counted, not stored (0 = no cap)
+    pool_lookups: int = 10           # HyperSync calls per chain per loop to find pools past the cap that swap
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(max_pages=_env_int("INDEXER_MAX_PAGES", 40), topic_filter_max=_env_int("INDEXER_TOPIC_FILTER_MAX", 2000),
                    topic_chunk=max(1, _env_int("INDEXER_TOPIC_CHUNK", 500)), rpc_max_windows=_env_int("INDEXER_RPC_MAX_WINDOWS", 30),
-                   pools_per_hook=_env_int("INDEXER_POOLS_PER_HOOK", 2000))
+                   pools_per_hook=_env_int("INDEXER_POOLS_PER_HOOK", 2000),
+                   pool_lookups=max(0, _env_int("INDEXER_POOL_LOOKUPS", 10)))
 
 
 @dataclass
@@ -52,6 +54,8 @@ class ChainStats:
     swap_lag: int | None = None
     new_pools: int = 0
     capped: int = 0                  # Initialize logs past the per-hook cap: counted in hook_pool_counts, not stored
+    late: int = 0                    # pools past the cap inserted on their first swap (sampled)
+    lookups: int = 0                 # HyperSync calls spent finding them
     swaps: int = 0
     unpriced: int = 0
     pages: int = 0
@@ -76,6 +80,59 @@ class SwapAgg:
         self.wallets[k] = self.wallets.get(k, 0) + 1
         self.swaps += 1
         self.unpriced += usd is None
+
+
+class LookupBudget(RuntimeError):
+    """This loop's HyperSync budget for pool lookups is spent; the swap page waits for the next loop."""
+
+
+class PoolResolver:
+    """Keys of hooked pools that are not v4_pools rows (past their hook's cap, or pruned), for when one of them swaps.
+    One per chain, kept by the Runner across loops. First `recent` (rows this process left out of v4_pools, the newest
+    RECENT_MAX), then one HyperSync Initialize query by pool id (topic1) over [floor, page end) per `topic_chunk` ids, at
+    most `pool_lookups` calls per loop. `absent` remembers ids that are not hooked pools (unhooked pools are most of a
+    scan page); it is only valid for the floor it was built with, so it is cleared when the floor moves down."""
+    RECENT_MAX = 50_000
+    ABSENT_MAX = 1_000_000
+
+    def __init__(self):
+        self.recent: dict[str, dict] = {}
+        self.absent: set[str] = set()
+        self.absent_floor: int | None = None
+        self.calls = 0
+
+    def remember(self, rows) -> None:
+        for r in rows:
+            self.recent[r["pool_id"]] = r
+        if len(self.recent) > self.RECENT_MAX:          # keep the newest half
+            self.recent = dict(list(self.recent.items())[-(self.RECENT_MAX // 2):])
+
+    def resolve(self, hs: HyperSync, chain: IndexedChain, ids, floor: int, to_block: int, settings: Settings) -> dict[str, dict]:
+        """-> {pool_id: v4_pools row} for the ids that are hooked pools. A swap at a block below to_block means the pool
+        was initialized below it, so one scan of [floor, to_block) settles every id it asked for."""
+        if self.absent_floor is None or floor < self.absent_floor:
+            self.absent.clear()
+            self.absent_floor = floor
+        found = {i: self.recent[i] for i in ids if i in self.recent}
+        need = sorted(i for i in ids if i not in found and i not in self.absent)
+        for k in range(0, len(need), settings.topic_chunk):
+            if self.calls >= settings.pool_lookups:
+                raise LookupBudget(f"pool lookup budget spent ({self.calls} calls), {len(need) - k} ids left")
+            chunk, got, cur = need[k:k + settings.topic_chunk], {}, floor
+            while cur < to_block:
+                logs, blocks, _, nb, _ = page(hs.query(initialize_by_id_query(chain.pool_manager, cur, to_block, chunk)))
+                self.calls += 1
+                if nb is None or nb <= cur:
+                    raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={nb})")
+                for r in hooked_pools_from_page(chain.chain_id, logs, blocks):
+                    got[r["pool_id"]] = r
+                cur = nb
+            self.remember(got.values())
+            found.update(got)
+            self.absent.update(i for i in chunk if i not in got)
+        if len(self.absent) > self.ABSENT_MAX:
+            self.absent.clear()
+        return found
 
 
 def plan(token: str | None, chains: list[IndexedChain] | None = None) -> tuple[str, list[IndexedChain]]:
@@ -155,8 +212,11 @@ def _start_swap_phase(engine, chain: IndexedChain, hs: HyperSync, swap_from: int
 
 
 def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices: PriceBook | None,
-                   settings: Settings, now: datetime | None = None, should_stop=None) -> ChainStats:
+                   settings: Settings, now: datetime | None = None, should_stop=None,
+                   resolver: PoolResolver | None = None) -> ChainStats:
     stop = should_stop or (lambda: False)
+    resolver = resolver or PoolResolver()
+    resolver.calls = 0
     st = ChainStats(mode="hypersync")
     now = now or datetime.now(timezone.utc)
     head = hs.height()
@@ -190,6 +250,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
         with engine.begin() as conn:
             stored, over = store.store_pools(conn, chain.chain_id, rows, settings.pools_per_hook)   # before the upsert, same tx
             store.set_state(conn, chain.chain_id, initialize_block=nb, head_block=head)
+        resolver.remember(over)
         st.new_pools += len(stored)
         st.capped += len(over)
         init_from = nb
@@ -201,12 +262,13 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     swap_end = min(init_from, end)      # never count swaps past the block our pool list is complete for
     with engine.connect() as conn:
         n_pools = store.pool_count(conn, chain.chain_id)
-    if n_pools == 0:
+        floor = store.capped_floor(conn, chain.chain_id)   # None: no hook past the cap, every hooked pool is a row
+    if n_pools == 0 and floor is None:
         if swap_from < swap_end:
             with engine.begin() as conn:
                 store.advance_swap_cursor(conn, chain.chain_id, swap_from, swap_end, head)
             swap_from = swap_end
-    elif n_pools <= settings.topic_filter_max:
+    elif n_pools <= settings.topic_filter_max and floor is None:
         st.mode = "hypersync/topic"
         with engine.connect() as conn:
             known = store.all_pools(conn, chain.chain_id)
@@ -247,8 +309,17 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
                     ids.add(s["pool_id"])
             with engine.connect() as conn:
                 known = store.pools_by_id(conn, chain.chain_id, ids)
+            late: dict[str, dict] = {}
+            unknown = ids - set(known)
+            if floor is not None and unknown:      # some may be hooked pools past the cap: find their keys
+                try:
+                    late = resolver.resolve(hs, chain, unknown, floor, nb, settings)
+                except LookupBudget as e:
+                    log.info("chain=%s %s; the swap page at block %d waits for the next loop", chain.slug, e, swap_from)
+                    break
+                known.update({p: (r["currency0"], r["currency1"]) for p, r in late.items()})
             aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
-            swap_time = _commit_swaps(engine, chain, agg, swap_from, nb, head, st) or swap_time
+            swap_time = _commit_swaps(engine, chain, agg, swap_from, nb, head, st, list(late.values())) or swap_time
             swap_from = nb
 
     if swap_from >= end and (swap_time is None or now - swap_time > ANCHOR_MAX_AGE):
@@ -256,6 +327,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
         if ts is not None:
             with engine.begin() as conn:
                 store.advance_swap_cursor(conn, chain.chain_id, swap_from, swap_from, head, utc(ts))
+    st.lookups = resolver.calls
     st.init_lag = max(end - init_from, 0)
     st.swap_lag = max(end - swap_from, 0)
     if not state.backfilled and init_from >= end and swap_from >= end:
@@ -266,11 +338,14 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
 
 
 def _commit_swaps(engine: sa.Engine, chain: IndexedChain, agg: SwapAgg, expected: int, cursor: int, head: int,
-                  st: ChainStats) -> datetime | None:
+                  st: ChainStats, late=()) -> datetime | None:
+    """late: pools past their hook's cap that swapped in this page; inserted (sampled) with the page, after the CAS."""
     block_time = utc(agg.seen_ts) if agg.seen_ts else None
     with engine.begin() as conn:
         store.advance_swap_cursor(conn, chain.chain_id, expected, cursor, head, block_time)   # first: a loser fails before writing
+        store.insert_late_pools(conn, list(late))
         store.apply_swaps(conn, chain.chain_id, agg.daily, agg.wallets)
+    st.late += len(late)
     st.swaps += agg.swaps
     st.unpriced += agg.unpriced
     return block_time

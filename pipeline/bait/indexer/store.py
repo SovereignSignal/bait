@@ -48,6 +48,15 @@ def upsert_pools(conn: sa.Connection, rows: list[dict]) -> int:
     return len(rows)
 
 
+def insert_late_pools(conn: sa.Connection, rows: list[dict]) -> int:
+    """Pools past their hook's cap that just swapped: rows with sampled = true. hook_pool_counts already counts them."""
+    ins = _ins(conn)
+    for i in range(0, len(rows), CHUNK):
+        conn.execute(ins(v4_pools).values([{**r, "sampled": True} for r in rows[i:i + CHUNK]])
+                     .on_conflict_do_nothing(index_elements=["chain_id", "pool_id"]))
+    return len(rows)
+
+
 def store_pools(conn: sa.Connection, chain_id: int, rows: list[dict], cap: int) -> tuple[list[dict], list[dict]]:
     """One page's hooked pools under the per-hook cap -> (stored, unstored). A hook keeps at most `cap` v4_pools rows, the
     first to arrive; past that its pools only add to hook_pool_counts.pools_total (every pool of the hook, stored or

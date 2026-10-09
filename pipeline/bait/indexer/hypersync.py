@@ -135,6 +135,16 @@ def initialize_query(pool_manager: str, from_block: int, to_block: int) -> dict:
     }
 
 
+def initialize_by_id_query(pool_manager: str, from_block: int, to_block: int, pool_ids: list[str]) -> dict:
+    """Initialize logs of these pool ids (topic1): the key of a hooked pool that is not a v4_pools row (core.PoolResolver)."""
+    return {
+        "from_block": from_block, "to_block": to_block,
+        "logs": [{"address": [pool_manager], "topics": [[INITIALIZE_TOPIC], list(pool_ids)]}],
+        "field_selection": {"block": BLOCK_FIELDS, "log": LOG_FIELDS},
+        "max_num_logs": MAX_NUM_LOGS,
+    }
+
+
 def swap_query(pool_manager: str, from_block: int, to_block: int, pool_ids: list[str] | None = None) -> dict:
     topics = [[SWAP_TOPIC]]
     if pool_ids:
