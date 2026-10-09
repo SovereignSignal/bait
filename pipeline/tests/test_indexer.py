@@ -573,3 +573,20 @@ def test_runner_retries_a_locked_schema_migration_next_loop(engine, monkeypatch)
     assert set(r.run_once()) == {"base"} and seen == ["base"]
     r.run_once()
     assert len(tries) == 2                             # not re-run once it succeeded
+
+
+def test_runner_survives_a_connect_error_while_taking_the_chain_lock(engine, monkeypatch):
+    seen = []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: seen.append(ch.slug) or core.ChainStats(mode="hypersync"))
+    real = db.try_advisory_lock
+
+    def flaky(engine_, key):
+        if key.endswith(":1"):
+            raise sa.exc.OperationalError("SELECT pg_try_advisory_lock", {}, Exception("connection refused"))
+        return real(engine_, key)
+    monkeypatch.setattr(db, "try_advisory_lock", flaky)
+    r = Runner(engine, "tok", select_chains("ethereum,base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings())
+    out = r.run_once()
+    assert out["ethereum"].error == "lock" and seen == ["base"]
