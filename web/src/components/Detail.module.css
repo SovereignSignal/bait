@@ -2,7 +2,7 @@
 .head { display: flex; align-items: center; gap: 14px; padding: 16px; flex-wrap: wrap; }
 .title { min-width: 0; flex: 1; }
 .titleLine { display: flex; align-items: center; gap: 8px; }
-.head h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; font-weight: 700; overflow-wrap: anywhere; }
+.head h1 { margin: 0; font-size: 22px; letter-spacing: -.02em; font-weight: 700; overflow-wrap: break-word; }
 .what { margin: 6px 0 0; font-size: 15px; line-height: 1.45; color: var(--fg2); max-width: 70ch; text-wrap: pretty; }
 .whereSub { display: none; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
@@ -21,7 +21,7 @@
 .h3row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .h3row span { font-size: 12px; color: var(--fg3); }
 .bars { display: block; width: 100%; height: auto; }
-.ax { fill: var(--fg3); font-size: 10px; font-family: var(--font); }
+.axis { display: flex; justify-content: space-between; gap: 8px; padding-top: 6px; font-size: 11px; color: var(--fg3); }
 .gl { stroke: var(--line); stroke-width: 1; }
 .chartEmpty { padding: 20px 0; color: var(--fg2); }
 
@@ -33,6 +33,10 @@
 .table th:first-child, .table td:first-child { text-align: left; }
 .table td { padding: 8px 6px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
 .table td a:hover { color: var(--pink2); }
+.stack { display: none; list-style: none; margin: 0; padding: 0; }
+.stack li { padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.stack li:first-child { border-top: 0; }
+.stackSub { margin-top: 3px; font-size: 12px; color: var(--fg2); }
 .more { font-size: 12px; color: var(--fg3); padding-top: 8px; }
 
 /* derived events */
@@ -80,4 +84,11 @@ a.trade:hover { background: var(--hover); }
 }
 @media (max-width: 820px) {
   .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .head { flex-wrap: nowrap; gap: 12px; }
+  .head h1 { font-size: 20px; }
+  .where { display: none; }
+  .whereSub { display: block; margin-top: 2px; font-size: 12px; color: var(--fg2); }
+  .star { width: 44px; height: 44px; }
+  .tw { display: none; }
+  .stack { display: block; }
 }

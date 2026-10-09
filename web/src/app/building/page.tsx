@@ -35,7 +35,7 @@ export default async function BuildingPage({ searchParams }: { searchParams: Pro
     <div className={t.shell}>
       <main className={r.app} id="main" tabIndex={-1}>
         <RadarList items={items} kind={kind} now={now} />
-        <section className={r.side} aria-label="Just launched">
+        <section className={r.side} id="launches" aria-label="Just launched">
           <JustLaunched initial={launches} now={Date.now()} />
           <div className={`panel ${r.about}`}>
             <h2>What is on the radar</h2>

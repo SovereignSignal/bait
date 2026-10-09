@@ -1,7 +1,8 @@
 "use client";
 // Client state shared by the top bar, the list and the dock across navigations:
 // search text, the mobile search toggle, and the localStorage watchlist.
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 const KEY = "bait:watchlist";
 
@@ -16,6 +17,8 @@ interface TerminalState {
   closeSearch: () => void;
   watchOnly: boolean;
   setWatchOnly: (on: boolean) => void;
+  /** came from the feed page (for the back link) */
+  fromFeed: () => boolean;
   topMatch: string | null;
   setTopMatch: (href: string | null) => void;
   watchlist: string[];
@@ -46,7 +49,24 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   const [q, setQ] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
-  const [watchOnly, setWatchOnly] = useState(false);
+  const [watchOnly, setWatchOnlyState] = useState(false);
+  const pathname = usePathname();
+  const last = useRef<string | null>(null);
+  const fromFeedRef = useRef(false);
+  useEffect(() => {
+    fromFeedRef.current = last.current === "/";
+    last.current = pathname;
+    if (pathname?.startsWith("/p/")) setSearchOpen(false);
+  }, [pathname]);
+  const fromFeed = useCallback(() => fromFeedRef.current, []);
+  useEffect(() => setWatchOnlyState(new URLSearchParams(window.location.search).get("w") === "1"), []);
+  const setWatchOnly = useCallback((on: boolean) => {
+    setWatchOnlyState(on);
+    const u = new URL(window.location.href);
+    if (on) u.searchParams.set("w", "1");
+    else u.searchParams.delete("w");
+    window.history.replaceState(null, "", u);
+  }, []);
   const [topMatch, setTopMatch] = useState<string | null>(null);
   const [watchlist, setWatchlist] = useState<string[]>([]);
 
@@ -69,8 +89,8 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   const closeSearch = useCallback(() => setSearchOpen(false), []);
 
   const value = useMemo(
-    () => ({ q, setQ, searchOpen, focusTick, openSearch, closeSearch, watchOnly, setWatchOnly, topMatch, setTopMatch, watchlist, toggleWatch }),
-    [q, searchOpen, focusTick, openSearch, closeSearch, watchOnly, topMatch, watchlist, toggleWatch],
+    () => ({ q, setQ, searchOpen, focusTick, openSearch, closeSearch, watchOnly, setWatchOnly, fromFeed, topMatch, setTopMatch, watchlist, toggleWatch }),
+    [q, searchOpen, focusTick, openSearch, closeSearch, watchOnly, setWatchOnly, fromFeed, topMatch, watchlist, toggleWatch],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
