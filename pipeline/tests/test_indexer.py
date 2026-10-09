@@ -540,3 +540,20 @@ def test_unpriced_swaps_are_counted_not_silently_zero(engine):
     with engine.connect() as c:
         r = c.execute(sa.select(db.pool_daily_onchain)).one()
     assert (r.swaps, r.unpriced_swaps, r.volume_usd) == (3, 3, 0.0)
+
+
+def test_fallback_prices_wrapped_native_and_stables_when_llama_has_no_quote():
+    from bait.indexer.prices import STABLES, WRAPPED_NATIVE
+
+    def llama(request):
+        ids = request.url.path.split("/prices/current/")[1].split(",")
+        coins = {"coingecko:ethereum": {"price": 2500.0, "confidence": 0.99}} if "coingecko:ethereum" in ids else {}
+        return httpx.Response(200, json={"coins": coins})
+    pb = PriceBook(httpx.Client(transport=httpx.MockTransport(llama)))
+    rh_weth = WRAPPED_NATIVE[4663]
+    assert pb.get(CHAIN_BY_ID[4663], [rh_weth, TOKX]) == {rh_weth: (2500.0, 18)}     # Robinhood WETH via the ETH coin id
+    assert pb.get(BASE, [USDC]) == {USDC: (1.0, 6)}                                    # no DefiLlama quote for USDC
+    for cid, addr in WRAPPED_NATIVE.items():
+        assert cid in CHAIN_BY_ID and addr == addr.lower() and len(addr) == 42
+    for cid, m in STABLES.items():
+        assert cid in CHAIN_BY_ID and all(a == a.lower() and len(a) == 42 and d in (6, 18) for a, d in m.items())
