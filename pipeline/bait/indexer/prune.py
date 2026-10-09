@@ -6,7 +6,7 @@ any activity (rows in pool_daily_onchain, pool_snapshots, pool_stats or pool_top
 with their `pools` rows (the nightly copy put every pool of a known hook there). hook_pool_counts records the hook's true
 pool count with the first delete, so nothing but the rows is lost; a deleted pool that later swaps for real comes back as
 a sampled row. --yes works per chain under the indexer's advisory lock (bait-indexer:<chain_id>), BATCH rows per
-transaction, and stops between batches on SIGTERM. It does not VACUUM: Postgres autovacuum makes the space reusable inside
+transaction, and stops between batches on SIGTERM (exit 4; exit 3 when a chain's lock was not granted). It does not VACUUM: Postgres autovacuum makes the space reusable inside
 the database, and the volume does not shrink.
 """
 from __future__ import annotations
@@ -101,7 +101,10 @@ def _lock(engine, chain_id: int, wait: float, stop):
 
 def _prune_hook(engine, chain_id: int, o: Over, batch: int, stop, out: dict) -> int:
     deleted, last = 0, None
-    while not stop():
+    while True:
+        if stop():
+            out["stopped"] = True
+            break
         with engine.begin() as conn:
             q = sa.select(v4_pools.c.pool_id, v4_pools.c.block_number).where(*_candidates(chain_id, o))
             if last is not None:
@@ -134,7 +137,8 @@ def _prune_hook(engine, chain_id: int, o: Over, batch: int, stop, out: dict) -> 
 def prune_pools(engine, keep: int, apply: bool, chain_ids: list[int], batch: int = BATCH, lock_wait: float = 600.0,
                 should_stop=None) -> dict:
     stop = should_stop or (lambda: False)
-    out = {"hooks": 0, "rows": 0, "pools_rows": 0, "est_bytes": 0, "batches": 0, "locked": [], "db_before": _db_bytes(engine),
+    out = {"hooks": 0, "rows": 0, "pools_rows": 0, "est_bytes": 0, "batches": 0, "locked": [], "stopped": False,
+           "db_before": _db_bytes(engine),
            "db_after": None}
     log.info("prune-pools %s keep=%d chains=%s database=%s", "apply" if apply else "dry run", keep,
              ",".join(map(str, chain_ids)), _mb(out["db_before"]))
@@ -155,6 +159,9 @@ def prune_pools(engine, keep: int, apply: bool, chain_ids: list[int], batch: int
                              cid, o.hook, o.rows, keep, n, with_pools, _mb(est))
             continue
         lock = _lock(engine, cid, lock_wait, stop)
+        if lock is None and stop():
+            out["stopped"] = True
+            break
         if lock is None:
             out["locked"].append(cid)
             log.warning("prune-pools chain_id=%d: another process holds bait-indexer:%d; chain skipped", cid, cid)
@@ -164,6 +171,7 @@ def prune_pools(engine, keep: int, apply: bool, chain_ids: list[int], batch: int
                 over = hooks_over(conn, cid, keep)
             for o in over:
                 if stop():
+                    out["stopped"] = True
                     break
                 before = out["pools_rows"]
                 n = _prune_hook(engine, cid, o, batch, stop, out)
@@ -175,6 +183,8 @@ def prune_pools(engine, keep: int, apply: bool, chain_ids: list[int], batch: int
             lock.close()
     if apply:
         out["db_after"] = _db_bytes(engine)
+    if out["stopped"]:
+        log.warning("prune-pools stopped early on a signal, between batches: every committed batch stands, rerun --yes to finish")
     log.info("prune-pools %s: hooks=%d rows=%d pools_rows=%d batches=%d est=%s database %s -> %s (deleted space is reused "
              "after autovacuum; the volume does not shrink)", "done" if apply else "dry run", out["hooks"], out["rows"],
              out["pools_rows"], out["batches"], _mb(out["est_bytes"]), _mb(out["db_before"]), _mb(out["db_after"]))
@@ -214,4 +224,4 @@ def main(argv: list[str]) -> int:
     finally:
         for s, h in old.items():
             signal.signal(s, h)
-    return 3 if out["locked"] else 0
+    return 4 if out.get("stopped") else 3 if out["locked"] else 0
