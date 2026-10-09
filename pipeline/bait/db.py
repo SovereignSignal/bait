@@ -68,6 +68,7 @@ hooks = sa.Table(
     sa.Column("regroup", sa.Boolean, nullable=False, server_default=sa.false()),  # ingest named it / code_hash landed; group clears
     sa.Column("is_proxy", sa.Boolean),         # from the bytecode (EIP-1967 slot / EIP-1167 clone) or explorer; NULL = unknown
     sa.Column("proxy_kind", sa.Text),          # eip1167 | eip1967 | explorer | unknown; an eip1167 clone's hash is evidence
+    sa.Column("pools_total", sa.BigInteger),   # every pool initialized through it (step onchain, 0013); NULL = not indexed
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), index=True),
     sa.Column("first_seen_at", TS, nullable=False),
 )
@@ -262,6 +263,7 @@ v4_pools = sa.Table(
     sa.Column("block_number", sa.BigInteger),
     sa.Column("block_time", TS),
     sa.Column("tx_hash", sa.Text),
+    sa.Column("sampled", sa.Boolean, nullable=False, server_default=sa.false()),  # inserted on its first swap, hook past the cap (0013)
     sa.Index("v4_pools_hook_idx", "chain_id", "hook_address"),
 )
 
@@ -305,6 +307,19 @@ onchain_watermarks = sa.Table(
     sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
     sa.Column("pools_block", sa.BigInteger),
     sa.Column("updated_at", TS),
+)
+
+# Hooks past the indexer's per-hook cap (INDEXER_POOLS_PER_HOOK, 0013). pools_total = every pool initialized through the
+# hook, stored in v4_pools or not. Only Initialize blocks after last_block are counted, so a page seen twice counts once.
+# first_block = oldest pool of the hook that is not a row: the floor of the indexer's lookup by pool id.
+hook_pool_counts = sa.Table(
+    "hook_pool_counts", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("hook_address", sa.Text, primary_key=True),
+    sa.Column("pools_total", sa.BigInteger, nullable=False, server_default="0"),
+    sa.Column("first_block", sa.BigInteger),
+    sa.Column("last_block", sa.BigInteger),
+    sa.Column("last_seen", TS),
 )
 # --- /indexer ---
 
@@ -374,6 +389,8 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("project_daily", "wallets_exact", "boolean"),
     ("project_daily", "is_wash", "boolean NOT NULL DEFAULT false"),
     ("project_daily", "wash_reason", "text"),
+    ("v4_pools", "sampled", "boolean NOT NULL DEFAULT false"),
+    ("hooks", "pools_total", "bigint"),
 ]
 
 
