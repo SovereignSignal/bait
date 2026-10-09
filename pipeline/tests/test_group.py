@@ -373,3 +373,15 @@ def test_code_refresh_window_rotates_past_unreachable_rows(conn, ctx, monkeypatc
         group.run(conn, ctx)
         ctx.day += timedelta(days=1)
     assert sorted(seen) == [A(92), A(93), A(94)]
+
+
+def test_a_hook_marked_for_name_and_code_regroups_on_both(conn, ctx):
+    code = "0x" + "e" * 64
+    bunni = insert_project(conn, "Bunni", NOW, slug="bunni")
+    _unlisted_project(conn, A(101), 8453, code_hash=code)
+    _unlisted_project(conn, A(102), 8453, code_hash=code)                         # a clone nobody marked
+    conn.execute(sa.update(db.hooks).values(is_proxy=False))
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(101)).values(name="BunniHook", regroup=True))
+    group.run(conn, ctx)
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert pid[A(101)] == bunni and pid[A(102)] == bunni
