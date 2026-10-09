@@ -293,6 +293,29 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
 ]
 
 
+# Indexes the web's hot queries need on tables that already exist in production. (name, table, column SQL).
+ADDITIVE_INDEXES: list[tuple[str, str, str]] = [
+    ("v4_pools_block_time_idx", "v4_pools", "block_time DESC NULLS LAST, block_number DESC"),
+    ("pool_stats_day_idx", "pool_stats", "day"),
+    ("pool_top_wallets_day_idx", "pool_top_wallets", "day"),
+]
+
+
+def add_missing_indexes(engine: sa.Engine, indexes: Iterable[tuple[str, str, str]] = ADDITIVE_INDEXES) -> list[str]:
+    """CREATE INDEX IF NOT EXISTS for each (both dialects support it). Tables that do not exist are skipped."""
+    done: list[str] = []
+    with engine.begin() as conn:
+        insp = sa.inspect(conn)
+        for name, table, cols in indexes:
+            if not insp.has_table(table):
+                continue
+            if conn.dialect.name == "sqlite":
+                cols = cols.replace(" NULLS LAST", "")  # SQLite has no NULLS LAST in index definitions
+            conn.execute(sa.text(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}" ({cols})'))
+            done.append(name)
+    return done
+
+
 def backfill_address_flags(conn: sa.Connection) -> int:
     """Hooks discovered on-chain were stored with flags={}; derive them from the address bits. Idempotent."""
     from .rules import flags_from_address

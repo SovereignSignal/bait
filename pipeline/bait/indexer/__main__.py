@@ -101,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     interval = float(os.environ.get("INDEXER_INTERVAL", "") or 60)
     engine = db.make_engine(args.database_url)
     db.create_all(engine)
+    db.add_missing_indexes(engine)
     token = env("HYPERSYNC_API_TOKEN")
     client = httpx.Client(follow_redirects=True)
     runner = Runner(engine, token, chains, client, Settings.from_env())

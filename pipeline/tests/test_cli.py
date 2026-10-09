@@ -32,3 +32,14 @@ def test_run_exits_3_when_lock_is_held(monkeypatch, tmp_path):
     rc = main(["run", "--database-url", f"sqlite:///{tmp_path}/x.sqlite", "--steps", "ingest",
                "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
     assert rc == 3
+
+
+def test_additive_indexes_are_created_idempotently(tmp_path):
+    from bait import db
+    e = db.make_engine(f"sqlite:///{tmp_path}/i.sqlite")
+    db.create_all(e)
+    assert db.add_missing_indexes(e) == [n for n, *_ in db.ADDITIVE_INDEXES]
+    assert db.add_missing_indexes(e) == [n for n, *_ in db.ADDITIVE_INDEXES]   # IF NOT EXISTS: same list, no error
+    with e.connect() as c:
+        names = {r[1] for r in c.exec_driver_sql("PRAGMA index_list('v4_pools')")}
+    assert "v4_pools_block_time_idx" in names
