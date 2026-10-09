@@ -20,7 +20,7 @@ import sqlalchemy as sa
 
 from ..db import (as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
-from ..rules import (WASH_REASONS, WASH_SHARE, corroborated, is_new, is_spam, is_symmetric, is_wash_7d, is_wash_24h, is_wash_no_liquidity,
+from ..rules import (WASH_REASONS, WASH_SHARE, corroborated, custom_accounting, is_new, is_spam, is_symmetric, is_wash_7d, is_wash_24h, is_wash_no_liquidity,
                      is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
 from .onchain import ready_chains
@@ -39,11 +39,13 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     w24, w7, wp = (end, end), (end - 6 * _D, end), (end - 13 * _D, end - 7 * _D)
     hook_to_project = {(r.chain_id, r.address): r.project_id for r in conn.execute(
         sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id).where(hooks.c.project_id.is_not(None)))}
-    pool_project = {}
+    pool_project, custom = {}, set()   # custom: pools of custom-accounting hooks (liquidity lives in the hook)
     for p in conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id, pools.c.hook_address, pools.c.created_at)):
         pid = hook_to_project.get((p.chain_id, p.hook_address))
         if pid:
             pool_project[(p.pool_id, p.chain_id)] = (pid, as_utc(p.created_at).date() if p.created_at else None)
+            if _custom(p.hook_address):
+                custom.add((p.pool_id, p.chain_id))
     by_pool: dict[tuple, dict] = {}
     for s in conn.execute(sa.select(pool_snapshots).where(pool_snapshots.c.day >= wp[0], pool_snapshots.c.day <= end)):
         by_pool.setdefault((s.pool_id, s.chain_id), {})[s.day] = s
@@ -87,7 +89,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 a[name + "_known"] = False
 
     ready = ready_chains(conn, ctx)
-    reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7)
+    reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom)
     wallets = _wallets(conn, day, end, ready, pool_project)
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
@@ -128,6 +130,14 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         log.info("score: %d wash-like projects (%s)", len(reasons), " ".join(f"{k}={v}" for k, v in counts.items()))
     return {"projects": len(rows), "with_pools": len(agg), "new": sum(r["is_new"] for r in rows),
             "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(reasons), **counts}
+
+
+def _custom(hook: str | None) -> bool:
+    """rules.custom_accounting, False for an address that is not hex (never a real hook)."""
+    try:
+        return bool(hook) and custom_accounting(hook)
+    except ValueError:
+        return False
 
 
 def _empty() -> dict:
@@ -190,7 +200,7 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
 
 
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,
-          tvl: dict, swaps7: dict) -> tuple[dict[int, list[str]], set[int]]:
+          tvl: dict, swaps7: dict, custom: set[tuple]) -> tuple[dict[int, list[str]], set[int]]:
     """Wash reasons per project (DESIGN.md "Wash rules"). Each rule judges pools; a project gets the reason when the
     pools it flags carry >= WASH_SHARE of the project's volume in that rule's window. Pools with unknown volume are never
     judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers. Every few-wallet
@@ -212,11 +222,11 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     wallet_known = {pool_project[k][0] for k in (set(wallets_7d) | set(lb7) | set(swaps7) | {k for k, n in lb.items() if n is not None})
                     if k in pool_project}
     judged = {
-        "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k]))
+        "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k], k in custom))
                 for k, r in stats.items()},
-        "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k, 0), tvl.get(k), sym.get(k, False))) for k, v in vol_on.items()},
+        "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k), tvl.get(k), sym.get(k, False), k in custom)) for k, v in vol_on.items()},
         "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
-        "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
+        "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k], k in custom)) for k, v in vol7.items()},
         "symmetric": {k: (r.vol_24h_rolling or 0.0, sym[k]) for k, r in stats.items()},
     }
     reasons: dict[int, list[str]] = {}

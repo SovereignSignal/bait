@@ -80,7 +80,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
                           "token0": {"id": k["currency0"], "symbol": sym0}, "token1": {"id": k["currency1"], "symbol": sym1},
                           "fee": k["fee"], "tick_spacing": k["tickSpacing"],
                           "created_at": _ts(a.get("pool_created_at"))})
-        tvl = float(a.get("reserve_in_usd") or 0)
+        tvl = _float(a.get("reserve_in_usd"))   # missing reserve: unknown TVL, never a known $0
         tx = a.get("transactions", {}).get("h24", {})
         counts = {f"{n}_24h": _int(tx.get(n)) for n in ("buys", "sells", "buyers", "sellers")}
         vol24 = float(a["volume_usd"]["h24"] or 0)
@@ -124,7 +124,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
              len(est), http.gt_calls)
 
 
-def _candle_rows(pid: str, cid: int, candles, tvl: float, day: date) -> list[dict]:
+def _candle_rows(pid: str, cid: int, candles, tvl: float | None, day: date) -> list[dict]:
     """Daily candles (UTC days) -> one row per day from the first candle (at most SERIES_DAYS back) through `day`, the
     running day: that day's candle volume, $0 on a day with no candle (no trades). Days before the first candle are never
     written. volume_usd_cum (legacy) is the running sum from the first row."""
@@ -164,7 +164,7 @@ def _before(conn, keys: list[tuple[str, int]], end: date) -> dict[tuple[str, int
     return out
 
 
-def _carry_forward(capped: list[tuple[str, int, float, float]], end: date, before: dict) -> list[dict]:
+def _carry_forward(capped: list[tuple[str, int, float | None, float]], end: date, before: dict) -> list[dict]:
     """Rows for pools past the OHLCV cap: GeckoTerminal's rolling 24h volume (it ends at run time, about 6 h into today) as
     `end`'s volume, estimated. Only `end` is written, so a pool that leaves the cap never zeroes its history, and a candle
     row already there wins. volume_usd_cum (legacy) continues from the last known value."""
