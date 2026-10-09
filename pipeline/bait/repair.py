@@ -202,3 +202,83 @@ def p8_rows_present(conn, today: date) -> bool:
     """A package 8 nightly ran within the last day: it writes estimated on every row it touches."""
     return conn.execute(sa.select(sa.func.count()).select_from(pool_snapshots).where(
         pool_snapshots.c.estimated.is_not(None), pool_snapshots.c.day >= today - _D)).scalar_one() > 0
+
+
+# ------------------------------------------------------------------------------------------------
+# rescore
+# ------------------------------------------------------------------------------------------------
+def rescore_days(conn, today: date, since: int | None = None, day: date | None = None) -> list[date]:
+    """Run days that already have rows (a re-score never creates a day the nightly has not written), oldest first."""
+    q = sa.select(project_daily.c.day).distinct()
+    q = q.where(project_daily.c.day == day) if day is not None else q.where(
+        project_daily.c.day >= today - timedelta(days=since), project_daily.c.day <= today)
+    return sorted(r[0] for r in conn.execute(q))
+
+
+def trending_top(conn, day: date, n: int = 10) -> list[str]:
+    """Trending as the feed ranks it (signals.select_targets): score > 0, not spam, not wash; score, then TVL."""
+    rows = conn.execute(sa.select(projects.c.slug, project_daily.c.score_trending, project_daily.c.tvl_usd)
+                        .join(project_daily, project_daily.c.project_id == projects.c.id)
+                        .where(project_daily.c.day == day, project_daily.c.is_spam.is_(False),
+                               project_daily.c.is_wash.is_(False), project_daily.c.score_trending > 0)).all()
+    return [r.slug for r in sorted(rows, key=lambda r: (-(r.score_trending or 0), -(r.tvl_usd or 0), r.slug))[:n]]
+
+
+def backup_day(conn, day: date) -> int:
+    """Copy the day's project_daily rows into project_daily_p9_backup once: the first copy is the pre-repair state."""
+    b = db.project_daily_p9_backup
+    if conn.execute(sa.select(sa.func.count()).select_from(b).where(b.c.day == day)).scalar_one():
+        return 0
+    conn.execute(sa.insert(b).from_select(_COLS, sa.select(*[project_daily.c[n] for n in _COLS])
+                                          .where(project_daily.c.day == day)))
+    # counted, not rowcount: psycopg reports -1 for INSERT ... SELECT
+    return conn.execute(sa.select(sa.func.count()).select_from(b).where(b.c.day == day)).scalar_one()
+
+
+def restore_day(conn, day: date) -> int | None:
+    """Put the backed-up rows of `day` back (projects merged away since are skipped). None when there is no backup."""
+    b = db.project_daily_p9_backup
+    if not conn.execute(sa.select(sa.func.count()).select_from(b).where(b.c.day == day)).scalar_one():
+        return None
+    conn.execute(sa.delete(project_daily).where(project_daily.c.day == day))
+    conn.execute(sa.insert(project_daily).from_select(_COLS, sa.select(*[b.c[n] for n in _COLS]).where(
+        b.c.day == day, b.c.project_id.in_(sa.select(projects.c.id)))))
+    return conn.execute(sa.select(sa.func.count()).select_from(project_daily).where(project_daily.c.day == day)).scalar_one()
+
+
+def pending_note(engine, today: date, since: int) -> str:
+    """Re-scoring before backfill-days has finished reads $0 for the days still unfilled: say so up front."""
+    with engine.connect() as conn:
+        n = len(backfill_targets(conn, today, max(min(since, MAX_SINCE), 0))[0])
+    return (f"backfill-days: {n} pools still need candles; their unfilled days count as $0 in this re-score" if n
+            else "backfill-days: complete for these days")
+
+
+def onchain_coverage(conn) -> dict[int, date]:
+    return {r.chain_id: r.first for r in conn.execute(
+        sa.select(pool_daily_onchain.c.chain_id, sa.func.min(pool_daily_onchain.c.day).label("first"))
+        .group_by(pool_daily_onchain.c.chain_id))}
+
+
+def rescore(engine, days: list[date], now: datetime, echo=print) -> dict:
+    """score.run per day, oldest first, each day in its own transaction after its backup. Prints one block per day."""
+    per: dict[str, dict] = {}
+    with engine.connect() as conn:
+        cov = onchain_coverage(conn)
+    for d in days:
+        with engine.begin() as conn:
+            before = trending_top(conn, d)
+            backed = backup_day(conn, d)
+            counts = score.run(conn, RunContext(day=d, now=now))
+            after = trending_top(conn, d)
+        came, went = [s for s in after if s not in before], [s for s in before if s not in after]
+        wash = " ".join(f"{k[5:]}={v}" for k, v in counts.items() if k.startswith("wash_") and v)
+        partial = sorted(SLUG_BY_CHAIN.get(c, str(c)) for c, first in cov.items() if first > d - 7 * _D)
+        echo(f"{d}  projects {counts['projects']}  new {counts['new']}  trending {counts['trending']}  "
+             f"wash {counts['wash']}{f' ({wash})' if wash else ''}  backed up {backed}")
+        echo(f"            top 10: {len(after) - len(came)} kept" + (f"; in {', '.join(came)}" if came else "")
+             + (f"; out {', '.join(went)}" if went else ""))
+        if partial:
+            echo(f"            on-chain history starts after this day's 7-day window opens on: {', '.join(partial)}")
+        per[d.isoformat()] = {**counts, "backed_up": backed, "top10_in": came, "top10_out": went}
+    return per

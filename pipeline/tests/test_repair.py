@@ -126,3 +126,36 @@ def test_backfill_plan_counts_calls_and_minutes_and_warns_before_a_package_8_nig
     with engine.begin() as c:
         _snap(c, "0xp0", DAY, vol_day=1.0, est=True, cum=101.0)
         assert "WARNING" not in "\n".join(repair.backfill_plan(c, DAY, 14, None, 10)[0])
+
+
+# --- rescore ------------------------------------------------------------------------------------
+def _old_row(c, pid, day, **cols):
+    vals = dict(project_id=pid, day=day, tvl_usd=1.0, vol_7d=0.0, vol_7d_prev=0.0, swaps_7d=0, pools_n=1, score_trending=0.0,
+                is_new=False, is_spam=True)
+    vals.update(cols)
+    c.execute(sa.insert(db.project_daily).values(**vals))
+
+
+def test_rescore_backs_up_once_reports_the_top_10_change_and_restore_puts_the_old_rows_back(engine):
+    end = DAY - D
+    with engine.begin() as c:
+        p = _project(c, "riser", "0xhr")
+        _pool(c, "0xpr", "0xhr")
+        for i in range(14):
+            _snap(c, "0xpr", end - i * D, tvl=50_000.0, cum=1.0, vol_day=20_000.0 if i < 7 else 2_000.0, est=False)
+        _snap(c, "0xpr", DAY, tvl=50_000.0, cum=1.0, vol_day=5.0, est=True)
+        _old_row(c, p, DAY)                                   # scored by the old code: spam, no window_end
+        assert repair.rescore_days(c, DAY, since=14) == [DAY]
+    lines = []
+    per = repair.rescore(engine, [DAY], NOW, echo=lines.append)
+    assert per[DAY.isoformat()]["top10_in"] == ["riser"] and per[DAY.isoformat()]["backed_up"] == 1
+    assert lines[0].startswith(f"{DAY}  projects 1  new 0  trending 1  wash 0") and "in riser" in lines[1]
+    with engine.connect() as c:
+        row = c.execute(sa.select(db.project_daily)).one()
+    assert row.window_end == end and row.vol_7d == 140_000.0 and not row.is_spam and row.score_trending > 0
+    assert repair.rescore(engine, [DAY], NOW, echo=lines.append)[DAY.isoformat()]["backed_up"] == 0   # first copy kept
+    with engine.begin() as c:
+        assert repair.restore_day(c, DAY) == 1
+        assert repair.restore_day(c, DAY - D) is None
+        row = c.execute(sa.select(db.project_daily)).one()
+    assert row.is_spam and row.window_end is None and row.score_trending == 0.0
