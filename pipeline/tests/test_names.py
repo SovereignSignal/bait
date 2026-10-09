@@ -266,3 +266,19 @@ def test_alias_slugs_are_taken_for_new_and_renamed_projects(conn, ctx):
     assert names.unique_slug(conn, "Acme", old) == "acme"                             # its own old slug is fine
     pid = _create_project(conn, ctx, "Acme", "acme", None)
     assert conn.execute(sa.select(db.projects.c.slug).where(db.projects.c.id == pid)).scalar_one() == "acme-2"
+
+
+def test_retire_keeps_receipts_and_fills_missing_enrichment_on_the_target(conn, ctx):
+    a, b = insert_project(conn, "A", NOW, slug="a"), insert_project(conn, "B", NOW, slug="b")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == a).values(
+        website="https://a.example", github="https://github.com/a/a", x_handle="a_hooks", enrichment={"team": "A"},
+        what_line="Does A things", category="orders"))
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == b).values(website="https://b.example", category=None))
+    for pid, url in ((a, "https://news.example/1"), (a, "https://news.example/2"), (b, "https://news.example/1")):
+        conn.execute(sa.insert(db.receipts).values(project_id=pid, url=url, title="t", source="news.example"))
+    names.retire_project(conn, a, into=b, reason="test", now=NOW)
+    t = conn.execute(sa.select(db.projects).where(db.projects.c.id == b)).one()
+    assert (t.website, t.github, t.x_handle, t.enrichment, t.what_line, t.category) == (
+        "https://b.example", "https://github.com/a/a", "a_hooks", {"team": "A"}, "Does A things", "orders")
+    urls = sorted(conn.execute(sa.select(db.receipts.c.url).where(db.receipts.c.project_id == b)).scalars())
+    assert urls == ["https://news.example/1", "https://news.example/2"]

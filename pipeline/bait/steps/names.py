@@ -178,11 +178,27 @@ def retire_project(conn, pid: int, into: int | None, reason: str, now) -> None:
         conn.execute(sa.update(hooks).values(project_id=into).where(hooks.c.project_id == pid))
         conn.execute(sa.update(project_aliases).values(project_id=into).where(project_aliases.c.project_id == pid))
         add_alias(conn, conn.execute(sa.select(projects.c.slug).where(projects.c.id == pid)).scalar_one(), into, reason, now)
+        _carry_over(conn, pid, into)
     else:
         conn.execute(sa.delete(project_aliases).where(project_aliases.c.project_id == pid))
     for t in (project_daily, signals, receipts):
         conn.execute(sa.delete(t).where(t.c.project_id == pid))
     conn.execute(sa.delete(projects).where(projects.c.id == pid))
+
+
+ENRICHMENT_COLS = ("website", "github", "x_handle", "enrichment", "what_line", "category")
+
+
+def _carry_over(conn, pid: int, into: int) -> None:
+    """Paid-for facts survive a merge: receipts move (the target keeps its own on a URL clash) and enrichment fills
+    the target's empty fields. Daily rows and signals are not carried; the score and signals steps rebuild them."""
+    rows = [{**dict(r._mapping), "project_id": into} for r in conn.execute(sa.select(receipts).where(receipts.c.project_id == pid))]
+    upsert(conn, receipts, rows, keys=["project_id", "url"], update=[])
+    src = conn.execute(sa.select(*(projects.c[c] for c in ENRICHMENT_COLS)).where(projects.c.id == pid)).one()
+    dst = conn.execute(sa.select(*(projects.c[c] for c in ENRICHMENT_COLS)).where(projects.c.id == into)).one()
+    fill = {c: getattr(src, c) for c in ENRICHMENT_COLS if getattr(dst, c) in (None, "", {}) and getattr(src, c) not in (None, "", {})}
+    if fill:
+        conn.execute(sa.update(projects).values(**fill).where(projects.c.id == into))
 
 
 def hook_rows(conn, pid: int):
