@@ -94,6 +94,7 @@ const WASH_TEXT: Record<string, string> = {
   vol_tvl: "7-day volume over 300x its liquidity from fewer than 50 wallets",
   no_liquidity: "$1M+ in 7 days through a pool with $1K or less of liquidity",
   symmetric: "its top wallets buy and sell in equal counts and carry most of the volume",
+  unverified: "$1M+ moved through a pool that looks idle, with no wallet data to check who moved it",
 };
 
 export function washLine(reason: string | null): string {

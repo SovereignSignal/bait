@@ -69,7 +69,7 @@ export function trendingOrder<T extends FeedItem>(all: T[]): T[] {
     .slice(0, TRENDING_TOP_N);
 }
 
-/** Rows for a tab + filters. `all` must already exclude spam; wash-like rows are listed in All and In Uniswap app only.
+/** Rows for a tab + filters. `all` must already exclude spam; wash-like rows are listed in All only.
  * Adds the 1-based trending rank. */
 export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & { rank?: number }> {
   const trending = trendingOrder(all);
@@ -77,7 +77,7 @@ export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & 
   let rows: T[];
   if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
-  else if (q.tab === "verified") rows = all.filter(inApp).sort((a, b) => b.vol7d - a.vol7d);
+  else if (q.tab === "verified") rows = all.filter((p) => inApp(p) && !p.isWash).sort((a, b) => b.vol7d - a.vol7d);
   else rows = [...all].sort((a, b) => b.vol7d - a.vol7d);
   return rows.filter((p) => matches(p, q)).map((p) => ({ ...p, rank: rankOf.get(p.slug) }));
 }

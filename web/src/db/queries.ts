@@ -577,13 +577,19 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
              -- closed UTC days: 7d = from7..end, 24h = end. No row reads as 0; NULL cumulative (unknown on-chain volume) stays NULL
              case when s.pool_id is not null and s.volume_usd_cum is null then null else coalesce(w.vol7d, 0) end as vol7d,
              w.tx7d,
-             case when s.volume_usd_cum is null then null else s.volume_usd_day end as vol24
+             -- as score: a day without a row is $0, a NULL cumulative (unknown on-chain volume) is unknown
+             case when s.pool_id is null then 0 when s.volume_usd_cum is null then null else coalesce(s.volume_usd_day, 0) end as vol24
       from ${t.pools} p
       join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
       left join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${end}
       left join lateral (
         select sum(x.volume_usd_day) as vol7d,
-               case when count(x.tx_count_day) = 7 then sum(x.tx_count_day) end as tx7d   -- a 7-day count only with all 7 days
+               -- as score: a 7-day count only when every day is known; days before the pool existed count as 0 and a
+               -- pool with no volume in the window adds 0
+               case when coalesce(sum(x.volume_usd_day), 0) = 0 then coalesce(sum(x.tx_count_day), 0)
+                    when count(x.tx_count_day)
+                         + greatest(0, least(7, coalesce((p.created_at at time zone 'UTC')::date - ${from7}::date, 0))) >= 7
+                    then sum(x.tx_count_day) end as tx7d
         from ${t.poolSnapshots} x
         where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${from7} and ${end}
       ) w on true
