@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+import sqlalchemy as sa
 
 from .. import db, logsetup
 from ..config import env
@@ -57,7 +58,12 @@ class Runner:
                 log.info("stop requested: leaving the loop before chain=%s", ch.slug)
                 break
             # Railway starts the new container before stopping the old one: never two processes on one chain.
-            lock = db.try_advisory_lock(self.engine, f"bait-indexer:{ch.chain_id}")
+            try:
+                lock = db.try_advisory_lock(self.engine, f"bait-indexer:{ch.chain_id}")
+            except sa.exc.OperationalError as e:  # transient connect error: skip the chain this loop, keep the process
+                log.warning("chain=%s could not take the chain lock: %s", ch.slug, e)
+                out[ch.slug] = ChainStats(mode=self.mode, error="lock")
+                continue
             if lock is None:
                 log.info("chain=%s is being synced by another indexer process; skipped this loop", ch.slug)
                 out[ch.slug] = ChainStats(mode=self.mode, error="locked")
