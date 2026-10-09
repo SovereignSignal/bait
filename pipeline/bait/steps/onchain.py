@@ -307,8 +307,8 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
         if pid in held_back:
             held.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": None, "traders_24h": w,
                          "vol_source": "hook" if hook and custom_accounting(hook) else "unpriced"})
-            if extras_stats is not None:
-                extras_stats[(pid, cid)] = ((extras_stats.get((pid, cid)) or (0.0, 0))[0], w)
+            if extras_stats is not None and (pid, cid) in extras_stats:  # keyless volume kept; no entry = unknown, not $0
+                extras_stats[(pid, cid)] = (extras_stats[(pid, cid)][0], w)
         else:
             stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": w, "vol_source": "onchain"})
             if extras_stats is not None:
