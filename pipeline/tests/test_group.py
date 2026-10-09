@@ -42,7 +42,7 @@ class FakeBlockscout:
     def fetch_code(self, chain_id, address):
         self.calls.append(address)
         h = self.table.get(address)
-        return CodeInfo(code_hash=h) if h else None
+        return CodeInfo(code_hash=h, is_proxy=False) if h else None
 
 
 def test_group_by_code_hash_joins_unnamed_to_existing(conn, ctx):
@@ -93,6 +93,7 @@ def test_unlisted_bytecode_family_becomes_one_project(conn, ctx):
     for i in range(3):
         insert_hook(conn, f"0xfa0{i}", 4663, name=None, code_hash="same")
     insert_hook(conn, "0x10e0", 4663, name=None, code_hash="other")
+    conn.execute(sa.update(db.hooks).values(is_proxy=False))          # bytecode fetched: not a proxy
     group.run(conn, ctx)
     rows = conn.execute(sa.select(db.hooks.c.address, db.hooks.c.project_id)).all()
     fam = {r.project_id for r in rows if r.address.startswith("0xfa0")}
@@ -195,10 +196,11 @@ def test_legacy_sha1_hash_is_rehashed_and_the_clone_joins_the_registered_project
     _unlisted_project(conn, A(4), 8453, code_hash="f" * 40)                            # keyless sha1: never matched
     other = _unlisted_project(conn, A(5), 1, code_hash="e" * 40)                      # RPC did not answer: kept
     asked = []
-    monkeypatch.setattr(group, "_rpc_code_hashes", lambda ctx, rows, out: asked.extend(rows) or {(8453, A(4)): canon})
+    facts = {(8453, A(3)): (canon, False), (8453, A(4)): (canon, False)}
+    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows: asked.extend(rows) or facts)
     out = group.run(conn, ctx)
     pid = {r.address: (r.project_id, r.code_hash) for r in conn.execute(sa.select(db.hooks))}
-    assert out["hashes_rehashed"] == 1 and len(asked) == 2
+    assert out["code_refreshed"] == 2 and len(asked) == 3
     assert pid[A(4)] == (saturn, canon) and pid[A(5)] == (other, "e" * 40)
     assert tuple(_alias(conn, "unlisted-hook-0x0000-0004")) == (saturn, "regroup:code_hash")
 
@@ -249,3 +251,56 @@ def test_template_named_hooks_group_by_deployer_never_by_name(conn, ctx):
     assert out["by_deployer"] == 1 and out["by_name"] == 0
     assert pid[A(23)] == acme and pid[A(25)] != other and pid[A(24)] != pid[A(25)]
     assert "FeeHook" not in {r.name for r in conn.execute(sa.select(db.projects.c.name))}
+
+
+PROXY = "0x" + "9" * 64       # one ERC1967Proxy runtime, deployed by unrelated teams
+
+
+class _Names:
+    def __init__(self, table):
+        self.table = table
+
+    def lookup(self, chain_id, address):
+        n = self.table.get(address)
+        return (n, "sourcify") if n else None
+
+
+def _all_proxies(monkeypatch):
+    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows: {(r.chain_id, r.address): (PROXY, True) for r in rows})
+
+
+def test_unverified_proxies_sharing_bytecode_never_become_a_family(conn, ctx, monkeypatch):
+    _all_proxies(monkeypatch)
+    for n in (41, 42, 43):
+        insert_hook(conn, A(n), 8453, code_hash=PROXY)               # from the on-chain step: proxy status unknown
+    ctx.clients["names"] = _Names({A(41): "OrcaHook", A(42): "KestrelVault", A(43): "OrcaHook"})
+    out = group.run(conn, ctx)
+    rows = conn.execute(sa.select(db.hooks.c.address, db.hooks.c.is_proxy, db.projects.c.name).join(db.projects)).all()
+    assert out["by_code"] == 0 and all(r.is_proxy is True for r in rows)
+    assert len({r.name for r in rows}) == 3 and "KestrelVault" in {r.name for r in rows}
+    assert conn.execute(sa.select(sa.func.count(sa.distinct(db.hooks.c.project_id)))).scalar_one() == 3
+
+
+def test_first_night_rehash_never_pulls_proxies_into_a_curated_project(conn, ctx, monkeypatch):
+    _all_proxies(monkeypatch)
+    arbi = insert_project(conn, "Arbi", NOW, slug="arbi")
+    insert_hook(conn, A(51), 42161, project_id=arbi, name="Arbi", code_hash=PROXY)    # Blockscout hash, status unknown
+    lone = [_unlisted_project(conn, A(n), c, code_hash=ch * 40) for n, c, ch in ((52, 1, "a"), (53, 8453, "b"), (54, 8453, "d"))]
+    out = group.run(conn, ctx)
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert out["code_refreshed"] == 4 and out["moved"] == 0 and out["retired"] == 0
+    assert [pid[A(n)] for n in (52, 53, 54)] == lone and pid[A(51)] == arbi
+
+
+def test_proxy_bytecode_family_is_split_and_generic_contract_names_are_looked_up_again(conn, ctx, monkeypatch):
+    _all_proxies(monkeypatch)
+    fam = insert_project(conn, "Unlisted hook family 0x0000…", NOW, slug="unlisted-hook-family-0x0000")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == fam).values(norm_name=None))
+    for n in (61, 62):
+        insert_hook(conn, A(n), 8453, project_id=fam, code_hash=PROXY)
+    conn.execute(sa.update(db.hooks).values(contract_name="ERC1967Proxy", name_checked_at=NOW))
+    out = group.run(conn, ctx)
+    rows = conn.execute(sa.select(db.hooks)).all()
+    slugs = set(conn.execute(sa.select(db.projects.c.slug)).scalars())
+    assert out["split"] == 1 and len({r.project_id for r in rows}) == 2 and "unlisted-hook-family-0x0000" not in slugs
+    assert all(r.contract_name is None and r.name_checked_at is None and r.is_proxy is True for r in rows)

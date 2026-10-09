@@ -97,15 +97,27 @@ def useful_name(name: str | None, max_len: int | None = 60) -> str | None:
     return n
 
 
-def is_proxy_name(name: str | None) -> bool:
-    return "proxy" in (name or "").lower()
+EIP1967_IMPL_SLOT = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+EIP1167_PREFIX = "363d3d373d3d3d363d73"
+
+
+def is_proxy_code(code_hex: str | None) -> bool:
+    """A proxy by its runtime bytecode: reads the EIP-1967 implementation slot, or is an EIP-1167 minimal clone."""
+    s = (code_hex or "").lower()
+    return EIP1967_IMPL_SLOT in s or EIP1167_PREFIX in s
+
+
+def code_evidence(r) -> str | None:
+    """The code_hash when it can join hooks: known not to be proxy bytecode (hooks.is_proxy is False). Proxy bytecode is
+    shared by unrelated deployments; unknown status (bytecode not fetched yet) is not evidence either."""
+    return r.code_hash if r.code_hash and getattr(r, "is_proxy", None) is False else None
 
 
 def merge_evidence(a, b) -> str | None:
     """Why two sets of hooks are one project, or None. A shared name is only a candidate; evidence is shared non-proxy
     bytecode, a shared deployer that is not a CREATE2 factory, or the same non-generic hooklist name."""
     def hashes(rows):
-        return {r.code_hash for r in rows if r.code_hash and not (is_proxy_name(r.name) or is_proxy_name(r.contract_name))}
+        return {c for r in rows if (c := code_evidence(r))}
 
     def deployers(rows):
         return {r.deployer for r in rows if r.deployer and r.deployer not in SHARED_DEPLOYERS}

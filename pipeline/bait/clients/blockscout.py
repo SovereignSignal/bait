@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from ..config import CHAIN_BY_ID, env
-from ..rules import code_hash as canonical_code_hash
+from ..rules import code_hash as canonical_code_hash, is_proxy_code
 from . import http
 
 
@@ -18,6 +18,7 @@ class CodeInfo:
     compiler: str | None = None
     source_snippet: str | None = None
     raw: dict = field(default_factory=dict)
+    is_proxy: bool | None = None       # from the bytecode, or Blockscout's proxy_type / implementations
 
 
 class Blockscout:
@@ -57,6 +58,7 @@ class Blockscout:
             compiler=d.get("compiler_version"),
             source_snippet=src[:snippet_chars] if src else None,
             raw={"language": d.get("language"), "is_proxy": bool(d.get("proxy_type"))},
+            is_proxy=is_proxy_code(code) or bool(d.get("proxy_type")) or bool(d.get("implementations")),
         )
 
     def _from_eth_get_code(self, base: str, address: str) -> CodeInfo | None:
@@ -68,5 +70,5 @@ class Blockscout:
         code = d.get("result") or ""
         if not isinstance(code, str) or not code.startswith("0x") or code == "0x":
             return None
-        return CodeInfo(code_hash=canonical_code_hash(code))
+        return CodeInfo(code_hash=canonical_code_hash(code), is_proxy=is_proxy_code(code))
 

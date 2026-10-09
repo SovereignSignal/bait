@@ -41,7 +41,7 @@ def test_rename_merge_clash_generic_and_miss(conn, ctx):
     p4 = _unlisted(conn, A(4), 1, vol=600)         # LaunchHook: clashes with the curated project
     p5 = _unlisted(conn, A(5), 1, vol=500)         # generic UniswapV4Hook: stays unlisted
     p6 = _unlisted(conn, A(6), 1, vol=400)         # unverified: miss
-    conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(1), A(2)])).values(code_hash="0x" + "c" * 64))
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(1), A(2)])).values(code_hash="0x" + "c" * 64, is_proxy=False))
     fake = FakeNames({A(1): "FoundationHookV2", A(2): "FoundationHookV2", A(3): "FoundationHookV2",
                       A(4): "LaunchHook", A(5): "UniswapV4Hook"})
     ctx.clients["names"] = fake
@@ -121,12 +121,12 @@ class _Http:
 def test_lookup_order_and_sources():
     h = _Http({"sourcify.dev": _Resp(404, {}), "base.blockscout.com": _Resp(403, "challenge"),
                "api.blockscout.com/8453": _Resp(200, {"name": "ProHook", "is_verified": True})})
-    assert ContractNames("k", http_client=h).lookup(8453, A(1)) == ("ProHook", "blockscout_pro")
+    assert ContractNames("k", http_client=h).lookup(8453, A(1))[:2] == ("ProHook", "blockscout_pro")
     h = _Http({"sourcify.dev": _Resp(200, {"compilation": {"name": "SrcHook"}})})
-    assert ContractNames(None, http_client=h).lookup(1, A(1)) == ("SrcHook", "sourcify")
+    assert ContractNames(None, http_client=h).lookup(1, A(1))[:2] == ("SrcHook", "sourcify")
     assert len(h.urls) == 1
     h = _Http({"routescan.io": _Resp(200, {"result": [{"ContractName": "SteadyHook"}]})})
-    assert ContractNames(None, http_client=h).lookup(43114, A(1)) == ("SteadyHook", "routescan")
+    assert ContractNames(None, http_client=h).lookup(43114, A(1))[:2] == ("SteadyHook", "routescan")
     h = _Http({})
     assert ContractNames(None, http_client=h).lookup(56, A(1)) is None                 # nothing verified anywhere
     assert not any("api.blockscout.com" in u for u in h.urls)                          # no key: PRO never called
@@ -182,11 +182,12 @@ def test_proxy_resolves_to_its_implementation_name():
     src = {"compilation": {"name": "ERC1967Proxy"},
            "proxyResolution": {"isProxy": True, "implementations": [{"address": A(2), "name": "OrderBookHook"}]}}
     h = _Http({"sourcify.dev": _Resp(200, src)})
-    assert ContractNames(None, http_client=h).lookup(4663, A(1)) == ("OrderBookHook", "sourcify")
+    found = ContractNames(None, http_client=h).lookup(4663, A(1))
+    assert tuple(found) == ("OrderBookHook", "sourcify", True)                       # isProxy carried through
     assert h.params[0] == {"fields": "compilation.name,proxyResolution"}
     bs = {"name": "ERC1967Proxy", "is_verified": True, "implementations": [{"address_hash": A(2), "name": "OrderBookHook"}]}
     h = _Http({"robinhoodchain.blockscout.com": _Resp(200, bs)})
-    assert ContractNames(None, http_client=h).lookup(4663, A(1)) == ("OrderBookHook", "blockscout")
+    assert tuple(ContractNames(None, http_client=h).lookup(4663, A(1))) == ("OrderBookHook", "blockscout", True)
 
 
 def test_transient_failure_raises_and_every_source_outcome_is_counted():
@@ -221,3 +222,25 @@ def test_transient_lookups_are_asked_again_and_generic_hooklist_names_are_looked
     assert conn.execute(sa.select(db.projects.c.name).where(db.projects.c.id == p2)).scalar_one() == "OrderBookHook"
     names.run(conn, ctx, {})
     assert flaky.calls.count((4663, A(30))) == 2                                       # not parked for 14 days
+
+
+def test_same_chain_proxies_sharing_bytecode_do_not_merge_on_code_hash(conn, ctx):
+    p1 = _unlisted(conn, A(40), 8453, vol=9)
+    p2 = _unlisted(conn, A(41), 8453, vol=8)
+    conn.execute(sa.update(db.hooks).values(code_hash="0x" + "9" * 64, is_proxy=True))
+    ctx.clients["names"] = FakeNames({A(40): "OrcaHook", A(41): "OrcaHook"})
+    out = {}
+    names.run(conn, ctx, out)
+    assert out["projects_merged"] == 0 and out["names_split"] == 1
+    assert {r.id for r in conn.execute(sa.select(db.projects.c.id))} == {p1, p2}
+
+
+def test_sourcify_proxy_flag_is_stored(conn, ctx):
+    _unlisted(conn, A(45), 4663)
+
+    class Proxying(FakeNames):
+        def lookup(self, chain_id, address):
+            return ("OrcaHook", "sourcify", True)
+    ctx.clients["names"] = Proxying({})
+    names.run(conn, ctx, {})
+    assert conn.execute(sa.select(db.hooks.c.is_proxy).where(db.hooks.c.address == A(45))).scalar_one() is True

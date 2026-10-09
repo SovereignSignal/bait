@@ -3,26 +3,26 @@ is adopted only with evidence), rule 2 code_hash or deployer, rule 3 Claude for 
 regrouped first; moved and renamed projects leave aliases. is_factory when a project has > 20 hooks."""
 from __future__ import annotations
 
-from types import SimpleNamespace
+import os
 
 import sqlalchemy as sa
 
 from ..db import backfill_address_flags, hooks, projects, utcnow
-from ..rules import SHARED_DEPLOYERS, is_proxy_name, merge_evidence, normalize_name, slugify, useful_name
+from ..rules import SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, slugify, useful_name
 from . import RunContext, log
 from .names import add_alias, backfill_unlisted_aliases, hook_rows, retire_project, unique_slug
-from .onchain import _code_hashes as _rpc_code_hashes     # free public-RPC bytecode, keyless chains, KEYLESS != 0
 
 FACTORY_MIN_HOOKS = 21
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"by_name": 0, "by_code": 0, "by_deployer": 0, "by_claude": 0, "created": 0, "unassigned": 0,
-           "code_fetched": 0, "factories": 0, "split": 0, "promoted": 0, "moved": 0, "retired": 0, "adopted": 0}
+           "code_fetched": 0, "factories": 0, "split": 0, "promoted": 0, "moved": 0, "retired": 0, "adopted": 0,
+           "code_refreshed": 0, "code_missing": 0}
     out["flags_backfilled"] = backfill_address_flags(conn)
-    out["hashes_rehashed"] = _backfill_code_hashes(conn, ctx)
+    _refresh_code_facts(conn, ctx, out)
     out["aliases_backfilled"] = backfill_unlisted_aliases(conn, ctx.now)
-    out["split"] = _split_generic(conn, ctx)
+    out["split"] = _split_generic(conn, ctx) + _split_proxy_families(conn, ctx)
     _regroup(conn, ctx, out)
     unassigned = _unassigned(conn)
 
@@ -51,7 +51,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         hash_to_pid, dep_to_pid = _join_targets(conn)
         still = []
         for h in unassigned:
-            pid = hash_to_pid.get(h.code_hash) if h.code_hash and not _proxy(h) else None
+            pid = hash_to_pid.get(c) if (c := _code(h)) else None
             if pid:
                 _assign(conn, h, pid)
                 out["by_code"] += 1
@@ -63,9 +63,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         # Unassigned hooks that share non-proxy bytecode with each other (one launchpad, many clones) become one project.
         fam: dict[str, list] = {}
         for h in still:
-            if h.code_hash and not _proxy(h):
-                fam.setdefault(h.code_hash, []).append(h)
-        still = [h for h in still if _proxy(h) or len(fam.get(h.code_hash, ())) < 2]
+            if c := _code(h):
+                fam.setdefault(c, []).append(h)
+        still = [h for h in still if not _code(h) or len(fam[_code(h)]) < 2]
         for members in fam.values():
             if len(members) < 2:
                 continue
@@ -165,7 +165,7 @@ def _create_project(conn, ctx, name: str, norm: str | None, description: str | N
     return r.inserted_primary_key[0]
 
 
-LEGACY_HASH_BATCH = 2000
+CODE_FACTS_BATCH = 2000
 
 
 def _gname(h) -> str | None:
@@ -173,8 +173,9 @@ def _gname(h) -> str | None:
     return useful_name(h.name, max_len=None)
 
 
-def _proxy(h) -> bool:
-    return is_proxy_name(h.name) or is_proxy_name(h.contract_name)
+def _code(h) -> str | None:
+    """The hook's code_hash if it can join hooks: known non-proxy bytecode only (rules.code_evidence)."""
+    return code_evidence(h)
 
 
 def _provisional(name: str, norm: str | None) -> bool:
@@ -183,20 +184,77 @@ def _provisional(name: str, norm: str | None) -> bool:
     return not n or n.startswith(("contract:", "code:")) or name.startswith("Unlisted hook")
 
 
-def _backfill_code_hashes(conn, ctx) -> int:
-    """Bounded migration (a no-op once no 40-char code_hash is left; delete then): keyless stored sha1 of the hex string.
-    Re-hash legacy rows from public-RPC bytecode and mark them for regroup. Rows the RPC did not answer keep their value
-    and are retried next run; a 40-char value can never equal a canonical 66-char one, so it cannot false-match."""
-    legacy = conn.execute(sa.select(hooks.c.address, hooks.c.chain_id).where(sa.func.length(hooks.c.code_hash) == 40)
-                          .order_by(hooks.c.chain_id, hooks.c.address).limit(LEGACY_HASH_BATCH)).all()
-    if not legacy:
-        return 0
-    got = _rpc_code_hashes(ctx, [SimpleNamespace(chain_id=r.chain_id, hook_address=r.address) for r in legacy],
-                           {"errors": 0, "code_hashes": 0})
-    for (cid, addr), h in got.items():
-        conn.execute(sa.update(hooks).values(code_hash=h, regroup=True).where(hooks.c.address == addr, hooks.c.chain_id == cid))
-    log.info("group: re-hashed %d of %d legacy code_hash rows", len(got), len(legacy))
-    return len(got)
+def _rpc_code_facts(ctx, rows) -> dict:
+    """{(chain_id, address): (code_hash, is_proxy) | None} from free public-RPC eth_getCode for keyless chains. None means
+    the chain answered with no code; a missing key means no answer. {} when KEYLESS=0 (tests) or on failure."""
+    if os.environ.get("KEYLESS", "1") == "0":
+        return {}
+    from .. import keyless as K
+    from .snapshot import keyless_http
+    net_by_chain = {cid: net for net, (cid, *_rest) in K.CHAINS.items()}
+    by_net: dict[str, set[str]] = {}
+    for r in rows:
+        if net := net_by_chain.get(r.chain_id):
+            by_net.setdefault(net, set()).add(r.address)
+    if not by_net:
+        return {}
+    try:
+        got = K.code_facts(keyless_http(ctx), by_net)
+    except Exception as e:
+        log.warning("group: code facts lookup failed: %s", e)
+        return {}
+    return {(K.CHAINS[net][0], addr): v for (net, addr), v in got.items()}
+
+
+def _refresh_code_facts(conn, ctx, out: dict) -> None:
+    """Proxy status is a bytecode fact. Rows with a legacy sha1 code_hash (keyless, 40 chars) or a hash whose proxy status
+    is unknown (written before is_proxy existed, or by the on-chain/snapshot steps) get both from eth_getCode: canonical
+    hash and is_proxy. New unassigned hooks first. A hash that changed, or one now known not to be a proxy, marks the
+    hook for regroup. One-off on the same transition: a generic stored contract name ("ERC1967Proxy") is cleared so the
+    lookup, which now resolves implementations, runs again. Unanswered rows keep their values and retry next run."""
+    need = sa.or_(sa.func.length(hooks.c.code_hash) == 40, sa.and_(hooks.c.code_hash.is_not(None), hooks.c.is_proxy.is_(None)))
+    cols = (hooks.c.address, hooks.c.chain_id, hooks.c.project_id, hooks.c.code_hash, hooks.c.contract_name)
+    todo = conn.execute(sa.select(*cols).where(need).order_by(hooks.c.project_id.is_not(None), hooks.c.chain_id,
+                                                              hooks.c.address).limit(CODE_FACTS_BATCH)).all()
+    if not todo:
+        return
+    got = _rpc_code_facts(ctx, todo)
+    for r in todo:
+        key = (r.chain_id, r.address)
+        if key not in got or got[key] is None:
+            continue
+        h, proxy = got[key]
+        vals = {"code_hash": h, "is_proxy": proxy}
+        if r.project_id is not None and (h != r.code_hash or not proxy):
+            vals["regroup"] = True
+        if r.contract_name is not None and useful_name(r.contract_name) is None:
+            vals.update(contract_name=None, name_checked_at=None)
+        conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == r.address, hooks.c.chain_id == r.chain_id))
+        out["code_refreshed"] += 1
+    log.info("group: code facts for %d of %d hooks", out["code_refreshed"], len(todo))
+
+
+def _split_proxy_families(conn, ctx) -> int:
+    """Auto-named projects (bytecode families, verified-name merges) that joined proxies by shared bytecode before proxy
+    status was known. If a proxy hook has no evidence (non-proxy code, a real deployer) tying it to the rest of its
+    project, the whole project goes back through the rules. No alias: its hooks may land in several projects."""
+    rows = conn.execute(
+        sa.select(hooks.c.project_id, hooks.c.code_hash, hooks.c.is_proxy, hooks.c.deployer, hooks.c.name,
+                  hooks.c.contract_name, projects.c.name.label("pname"), projects.c.norm_name.label("pnorm"))
+        .join(projects, projects.c.id == hooks.c.project_id)
+        .where(hooks.c.project_id.in_(sa.select(hooks.c.project_id).where(hooks.c.is_proxy.is_(True))))).all()
+    by: dict[int, list] = {}
+    for r in rows:
+        if _provisional(r.pname, r.pnorm):
+            by.setdefault(r.project_id, []).append(r)
+    bad = [pid for pid, hs in sorted(by.items())
+           if len(hs) > 1 and any(h.is_proxy and not merge_evidence([h], [o for o in hs if o is not h]) for h in hs)]
+    for pid in bad:
+        conn.execute(sa.update(hooks).values(project_id=None).where(hooks.c.project_id == pid))
+        retire_project(conn, pid, into=None, reason="split:proxy", now=ctx.now)
+    if bad:
+        log.info("group: split %d auto-named projects that joined proxies by bytecode", len(bad))
+    return len(bad)
 
 
 def _split_generic(conn, ctx) -> int:
@@ -218,11 +276,11 @@ def _join_targets(conn) -> tuple[dict, dict]:
     deployments and CREATE2 factories deploy for everyone, so neither is evidence."""
     by_hash: dict[str, int] = {}
     by_dep: dict[tuple[int, str], int] = {}
-    for r in conn.execute(sa.select(hooks.c.code_hash, hooks.c.deployer, hooks.c.chain_id, hooks.c.name,
-                                    hooks.c.contract_name, hooks.c.project_id)
+    for r in conn.execute(sa.select(hooks.c.code_hash, hooks.c.is_proxy, hooks.c.deployer, hooks.c.chain_id,
+                                    hooks.c.project_id)
                           .where(hooks.c.project_id.is_not(None)).order_by(hooks.c.project_id)):
-        if r.code_hash and not _proxy(r):
-            by_hash.setdefault(r.code_hash, r.project_id)
+        if c := _code(r):
+            by_hash.setdefault(c, r.project_id)
         if r.deployer and r.deployer not in SHARED_DEPLOYERS:
             by_dep.setdefault((r.chain_id, r.deployer), r.project_id)
     return by_hash, by_dep
@@ -257,9 +315,9 @@ def _regroup_by_code(conn, ctx, code_hash: str, out: dict) -> None:
     """Rule 2 across time: same non-proxy bytecode, one project. Target: a curated holder, else a verified-name one,
     else the oldest. Only auto-named projects give hooks up."""
     rows = [r for r in conn.execute(
-        sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.name, hooks.c.contract_name, hooks.c.project_id,
+        sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.code_hash, hooks.c.is_proxy, hooks.c.project_id,
                   projects.c.name.label("pname"), projects.c.norm_name.label("pnorm"))
-        .join(projects, projects.c.id == hooks.c.project_id).where(hooks.c.code_hash == code_hash)) if not _proxy(r)]
+        .join(projects, projects.c.id == hooks.c.project_id).where(hooks.c.code_hash == code_hash)) if _code(r)]
     if len({r.project_id for r in rows}) < 2:
         return
     target = min(rows, key=lambda r: (_provisional(r.pname, r.pnorm), r.pname.startswith("Unlisted hook"), r.project_id)).project_id
@@ -289,8 +347,8 @@ def _regroup(conn, ctx, out: dict) -> None:
                 _promote(conn, ctx, cur, name, norm)
                 by_norm[norm] = cur.id
                 out["promoted"] += 1
-        elif h.code_hash and not _proxy(h):
-            _regroup_by_code(conn, ctx, h.code_hash, out)
+        elif c := _code(h):
+            _regroup_by_code(conn, ctx, c, out)
     if marked:
         conn.execute(sa.update(hooks).values(regroup=False).where(hooks.c.regroup.is_(True)))
 
@@ -309,7 +367,7 @@ def _fetch_code_hashes(conn, ctx, unassigned) -> int:
         info = bs.fetch_code(h.chain_id, h.address)
         n += 1
         if info and info.code_hash:
-            vals = {"code_hash": info.code_hash, "regroup": h.project_id is not None}
+            vals = {"code_hash": info.code_hash, "is_proxy": info.is_proxy, "regroup": h.project_id is not None}
             if info.verified:
                 vals["verified_source"] = True
             conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == h.address, hooks.c.chain_id == h.chain_id))
