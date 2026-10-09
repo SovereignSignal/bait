@@ -52,10 +52,11 @@ hooks(address, chain_id, name, description, flags jsonb, properties jsonb,
       verified_source bool, audit_url, deployer, code_hash, project_id, first_seen_at,
       primary key (address, chain_id))
 pools(pool_id, chain_id, hook_address, token0, token1, fee, tick_spacing, created_at)
-pool_snapshots(pool_id, chain_id, day, tvl_usd, volume_usd_cum, tx_count_cum,
-               primary key (pool_id, chain_id, day))
-project_daily(project_id, day, tvl_usd, vol_7d, vol_7d_prev, swaps_7d, pools_n,
-              score_trending, is_new, primary key (project_id, day))
+pool_snapshots(pool_id, chain_id, day, tvl_usd, volume_usd_day, tx_count_day, estimated,
+               volume_usd_cum, tx_count_cum, primary key (pool_id, chain_id, day))
+project_daily(project_id, day, window_end, tvl_usd, vol_24h, vol_7d, vol_7d_prev, swaps_24h, swaps_7d,
+              wallets_24h, wallets_exact, pools_n, score_trending, is_new, is_spam, is_wash, wash_reason,
+              primary key (project_id, day))
 signals(project_id, kind, value jsonb, as_of)      -- nansen, github, exa
 receipts(project_id, url, title, source, published_at)
 ```
@@ -77,11 +78,26 @@ compliance, oracle, mev-lvr, lending, gaming-nft, other.
 
 ## Scoring
 
-- New: project first_seen <= 7d AND (max pool TVL > $1k OR swaps_7d >= 10)
+**Windows (package 8).** The nightly run on UTC day D reports days that are over:
+
+| label | window | stored as |
+|---|---|---|
+| 24h | the UTC day D-1 | `project_daily.vol_24h`, `swaps_24h`, `wallets_24h` |
+| 7d | D-7 .. D-1 | `project_daily.vol_7d`, `swaps_7d` |
+| prev 7d | D-14 .. D-8 | `project_daily.vol_7d_prev` |
+
+`project_daily.window_end = D - 1`. `pool_snapshots` holds per-day values (`volume_usd_day`, `tx_count_day`) written
+to the day they belong to; the row for D itself is the running day and is never read. GeckoTerminal's `volume_usd.h24`
+is a rolling window ending at run time: it is `pool_stats.vol_24h_rolling` (the pace line) and, only for pools past the
+OHLCV cap, D-1's volume marked `estimated`. Swap counts are NULL unless every day is known; wallets are distinct across
+a project's pools on ready chains, otherwise an upper bound (`wallets_exact = false`, shown as "≤").
+
+- New: project first_seen <= 7d AND (max pool TVL > $1k OR swaps_7d >= 10, counted over the known days, a lower bound)
 - Trending: vol_7d >= $10k; score = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)
   tie-break TVL delta; top 20
 - Alive: GitHub commit <= 30d OR Exa hit <= 30d
-- Spam filter: no pools, or all pools under $100 TVL and < 10 swaps lifetime -> hidden from All
+- Spam filter: no pools, or all pools under $100 TVL and < 10 swaps lifetime -> hidden everywhere (404). Wash-like
+  volume is not spam: see "Wash rules (package 8)".
 
 ## Pipeline (Railway cron service, Python, nightly ~06:00 UTC)
 
@@ -177,8 +193,9 @@ Rules
   Covers Robinhood chain and Ink, which have no public v4 subgraph, so it is also the planned fallback for those two.
   Limits: GeckoTerminal free tier throttles to roughly 10 calls/min; pools never touched by PositionManager cannot be
   resolved and are counted as unresolved; 7-day series only for the top hooked pools (OHLCV cap, logged).
-- **Wash rule:** 24h volume >= $250K from <= 25 unique wallets marks a project wash-like. Excluded from Trending,
-  shown in All with a red badge. First real run found a Base pool doing $160M/day from 5 wallets.
+- **Wash rules:** see "Wash rules (package 8)". Wash-like projects are excluded from Trending, New and Leaders, shown
+  in All and on their page with a red badge and the reason. First real run found a Base pool doing $160M/day from 5
+  wallets.
 - **Demo:** `demo/build.py` bakes a snapshot into `demo/template.html` (same tokens and card anatomy as the web app)
   for review as a single page. The Next.js app on Railway remains the product.
 
@@ -261,6 +278,11 @@ shortlist instead of up to 400 names.
   DecayMulticurveInitializerHook 0xbb7784a4... under Bankr). If Dune labels are ingested, keep both, never overwrite.
   Bait already names hooks Dune leaves unlabeled (StablePairHook, FablesRamp/ETH, HookrModularHookV6, LaunchHook).
   Labs' own hooks and "Unknown Deployer" buckets need their own category.
+- Keyless candle rows older than 15 days were overwritten with the old zero seed every night until package 8, and rows
+  before 0012 carry no per-day values. Re-scoring 14 past days (package 9) needs a one-off GeckoTerminal OHLCV pull with
+  limit 30 for the keyless pools first.
+- Remove `volume_usd_cum` / `tx_count_cum` once package 9 has re-scored: windows read only the per-day columns (the
+  cumulative NULL is still p5's "volume unknown from here on" marker and `tx_count_cum` is is_spam's lifetime count).
 - To check: optimism 0x69afa...7fff ($642M in 7 days, all of its history, 3 pools: wash check); robinhood
   0xe5e70...e044 (10,082 pools, $231M in 7 days, launchpad pattern, unlabeled everywhere).
 
@@ -275,12 +297,24 @@ into, a clash gets the chain appended; proxies and template names (UniswapV4Hook
 Dry run on 10/8 data: 400 checked, 202 named, 117 projects renamed, 28 merged; 10 of the top 50 stay unnamed (all
 unverified). The web labels those by their busiest pair: "WETH/USDC hook · 0x7bc2…2aec".
 
-## Wash rules, status 2026-10-09
+## Wash rules (package 8, 2026-10-09)
 
-- 24h (GeckoTerminal pool_stats): pool >= $250K/24h through <= 25 traders. Unchanged.
-- 7-day (indexer, new): pool >= $1M over 7 days through <= 10 distinct wallets (`rules.is_wash_7d`). A project is
-  wash when wash pools carry >= 50% of its 7-day on-chain volume; it is hidden from New, Trending and Leaders, not
-  deleted. On 10/8 data it flags exactly one project: Optimism 0x69af...7fff ($436M from 1 wallet in 8 swaps).
+Wash is its own flag (`project_daily.is_wash`, `wash_reason`), separate from spam: the project stays in All and keeps its
+page with a red "Wash-like volume" badge; it never reaches Trending, New, movers, Leaders, the digest or a Claude blurb.
+A project gets a reason when the pools that rule flags carry >= 50% of its volume in that rule's window.
+
+- Wallet counts are a lower bound: the distinct count when known, else max(buyers, sellers), never buyers + sellers.
+- `24h`: pool >= $250K in 24 h through <= 25 wallets, and corroborated.
+- `7d` (indexer, ready chains only): pool >= $1M over 7 days through <= 10 distinct wallets, and corroborated.
+- Corroborated: 7-day volume > 50x a known TVL, or no liquidity (>= $1M in 7 days with a known TVL <= $1,000), or
+  symmetric traders. Few wallets alone also describes private / RFQ hooks (Arrakis private hook) with real liquidity.
+- `vol_tvl`: 7-day volume > 300x a known TVL, >= $10K, fewer than 50 wallets (Base launchpads churn 345x through ~30K).
+- `no_liquidity`: >= $1M in 7 days, a known TVL <= $1,000, fewer than 50 wallets. Unknown TVL never counts.
+- `symmetric`: the pool's top 10 wallets that day each have equal buys and sells and carry > 50% of its rolling 24h
+  volume (>= $10K). Data from the activity step, which covers the top 30 non-wash pools only.
+- Live cases: OUROBOROS/CRCL on Robinhood (866x, 13 buyers + 13 sellers, symmetric bots) -> 24h, vol_tvl, symmetric;
+  Optimism 0x69af...7fff ($436M from 1 wallet in 8 swaps at $0 TVL) -> 7d, no_liquidity; the Base 0x0f48 launchpad
+  family and private RFQ hooks -> none.
 - Dormant all-time rule (> $1B all-time, <= 4 pools, $0 in 7 days): not built. Bait ranks on 7-day volume only and
   shows no all-time totals; build it together with the monthly aggregate, before any all-time view ships.
 - Robinhood 0xe5e70...e044 is V2MemeHook (named). It shows $0 because the indexer has not caught up on Robinhood
