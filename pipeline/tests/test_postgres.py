@@ -263,3 +263,34 @@ def test_score_counts_a_wallet_once_across_a_projects_pools_on_postgres(pg_engin
     with pg_engine.connect() as c:
         r = c.execute(sa.select(db.project_daily)).one()
     assert (r.wallets_24h, r.wallets_exact, r.window_end) == (2, True, end)
+
+
+def test_prune_pools_runs_in_batches_under_the_chain_lock(pg_engine):
+    from bait.indexer import prune
+    pad = "0x" + "a" * 36 + "0080"
+    with pg_engine.begin() as c:
+        for i in range(1, 11):
+            c.execute(sa.insert(db.v4_pools).values(chain_id=8453, pool_id=f"0x{i:064x}", hook_address=pad, currency0="0x0",
+                                                    currency1="0x1", block_number=100 + i))
+        c.execute(sa.insert(db.pool_daily_onchain).values(chain_id=8453, pool_id=f"0x{2:064x}", day=DAY, swaps=1))
+    held = db.try_advisory_lock(pg_engine, "bait-indexer:8453")          # the indexer is mid-sync on Base
+    try:
+        out = prune.prune_pools(pg_engine, keep=3, apply=True, chain_ids=[8453], batch=2, lock_wait=0)
+    finally:
+        held.close()
+    assert out["locked"] == [8453] and out["rows"] == 0
+    probes = []
+
+    def indexer_blocked():                            # called between batches: can the indexer take the chain?
+        other = db.try_advisory_lock(pg_engine, "bait-indexer:8453")
+        probes.append(other is None)
+        if other is not None:
+            other.close()
+        return False
+    out = prune.prune_pools(pg_engine, keep=3, apply=True, chain_ids=[8453], batch=2, should_stop=indexer_blocked)
+    assert (out["rows"], out["batches"], out["locked"]) == (6, 3, []) and probes and all(probes)
+    assert out["db_before"] > 0 and out["db_after"] > 0
+    with pg_engine.connect() as c:
+        left = {r[0] for r in c.execute(sa.select(db.v4_pools.c.pool_id))}
+        assert left == {f"0x{i:064x}" for i in (2, 8, 9, 10)}
+        assert c.execute(sa.select(db.hook_pool_counts.c.pools_total)).scalar_one() == 10
