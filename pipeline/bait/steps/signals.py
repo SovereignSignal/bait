@@ -67,9 +67,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
 
 def select_targets(conn, ctx: RunContext) -> list[tuple]:
-    """Trending top 20 by score (tie-break TVL), then New, capped at ctx.signals_limit; spam excluded."""
+    """Trending top 20 by score (tie-break TVL), then New, capped at ctx.signals_limit; spam and wash-like volume excluded."""
     q = (sa.select(projects, project_daily).join(project_daily, project_daily.c.project_id == projects.c.id)
-         .where(project_daily.c.day == ctx.day, project_daily.c.is_spam.is_(False)))
+         .where(project_daily.c.day == ctx.day, project_daily.c.is_spam.is_(False), project_daily.c.is_wash.is_(False)))
     rows = conn.execute(q).all()
     trending = sorted([r for r in rows if (r.score_trending or 0) > 0], key=lambda r: (-(r.score_trending or 0), -(r.tvl_usd or 0)))[:20]
     new = sorted([r for r in rows if r.is_new], key=lambda r: -(r.tvl_usd or 0))
@@ -128,8 +128,14 @@ def _blurb_ctx(conn, p, daily) -> dict:
                        .where(receipts.c.project_id == p.id).order_by(receipts.c.published_at.desc()).limit(5)).all()
     return {
         "name": p.name, "category": p.category, "what_line": p.what_line,
-        "metrics": {"tvl_usd": daily.tvl_usd, "vol_7d": daily.vol_7d, "vol_7d_prev": daily.vol_7d_prev,
-                    "swaps_7d": daily.swaps_7d, "pools_n": daily.pools_n, "is_new": daily.is_new},
+        "metrics": {
+            "windows": f"closed UTC days ending {daily.window_end}: 24h = that day; 7d = it and the 6 days before; "
+                       "prev_7d = the 7 days before those. A null count is unknown: do not quote it.",
+            "tvl_usd": daily.tvl_usd, "vol_24h": daily.vol_24h, "vol_7d": daily.vol_7d, "vol_7d_prev": daily.vol_7d_prev,
+            "swaps_24h": daily.swaps_24h, "swaps_7d": daily.swaps_7d, "wallets_24h": daily.wallets_24h,
+            "wallets_24h_kind": None if daily.wallets_24h is None else (
+                "distinct" if daily.wallets_exact else "upper bound (buyers + sellers per pool)"),
+            "pools_n": daily.pools_n, "is_new": daily.is_new},
         "signals": sig, "receipts": [dict(r._mapping) for r in rec],
         "enrichment": _parallel_facts(p.enrichment),
     }

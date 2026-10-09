@@ -122,3 +122,44 @@ def test_signals_unnamed_first_target_does_not_crash_or_leak_hits(conn, ctx):
     kinds = {(r.project_id, r.kind) for r in conn.execute(sa.select(db.signals.c.project_id, db.signals.c.kind))}
     assert (unnamed, "exa") not in kinds                   # no leaked receipt signal on the unnamed project
     assert (named, "exa") in kinds
+
+
+def test_blurb_context_names_its_windows_and_never_a_made_up_swap_count(conn, ctx):
+    hot = insert_project(conn, "Hot", NOW - timedelta(days=40))
+    insert_hook(conn, f"0x{hot}", 1, project_id=hot)
+    conn.execute(sa.insert(db.project_daily).values(
+        project_id=hot, day=DAY, window_end=DAY - timedelta(days=1), tvl_usd=1e6, vol_24h=10_000.0, vol_7d=70_000.0,
+        vol_7d_prev=35_000.0, swaps_24h=500, swaps_7d=None, wallets_24h=1_142, wallets_exact=False, pools_n=6,
+        score_trending=30.0, is_new=False, is_spam=False))
+    washy = insert_project(conn, "Washy", NOW - timedelta(days=40), slug="washy")
+    insert_hook(conn, f"0x{washy}", 1, project_id=washy)
+    conn.execute(sa.insert(db.project_daily).values(project_id=washy, day=DAY, tvl_usd=1.0, vol_7d=9e8, vol_7d_prev=1e6, pools_n=1,
+                                                    score_trending=40.0, is_wash=True, wash_reason="24h"))
+    seen = []
+
+    class Capture(FakeClaude):
+        def why_blurb(self, c):
+            seen.append(c)
+            return super().why_blurb(c)
+    ctx.clients.update(claude=Capture())
+    assert [p.slug for p, _ in signals.select_targets(conn, ctx)] == ["hot"]       # wash-like volume gets no blurb
+    signals.run(conn, ctx)
+    m = seen[0]["metrics"]
+    assert m["windows"].startswith("closed UTC days ending 2026-10-05")
+    assert (m["vol_24h"], m["swaps_24h"], m["swaps_7d"]) == (10_000.0, 500, None)
+    assert (m["wallets_24h"], m["wallets_24h_kind"]) == (1_142, "upper bound (buyers + sellers per pool)")
+
+
+def test_digest_leaves_wash_out_of_the_week_and_names_the_window(conn, ctx):
+    a = insert_project(conn, "Real", NOW - timedelta(days=40), slug="real")
+    b = insert_project(conn, "Washy", NOW - timedelta(days=40), slug="washy")
+    conn.execute(sa.insert(db.project_daily).values(project_id=a, day=DAY, tvl_usd=100.0, vol_7d=50_000.0, vol_7d_prev=20_000.0,
+                                                    pools_n=1, score_trending=12.0))
+    conn.execute(sa.insert(db.project_daily).values(project_id=b, day=DAY, tvl_usd=1.0, vol_7d=9e8, vol_7d_prev=1e6, pools_n=1,
+                                                    score_trending=0.0, is_wash=True, wash_reason="7d"))
+    ctx.force_digest = True
+    digest.run(conn, ctx)
+    body = conn.execute(sa.select(db.digests.c.body)).scalar_one()
+    assert body["window_end"] == "2026-10-05"
+    assert body["totals"] == {"projects": 1, "tvl_usd": 100.0, "vol_7d": 50_000.0}
+    assert [c["slug"] for c in body["trending"]] == ["real"]
