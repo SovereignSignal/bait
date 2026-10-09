@@ -13,13 +13,7 @@ export function unlistedLabel(name: string, sym0: string | null, sym1: string | 
   return `${sym0}/${sym1} hook · ${m[1]}`;
 }
 
-/**
- * Old "unlisted-hook-0x7bc2-2aec" / "unlisted-hook-family-0x4103" slugs, from before the hook was named.
- * Returns a SQL LIKE pattern for the hook address so the page can redirect to the project's current slug.
- */
-export function oldUnlistedSlugPattern(slug: string): string | null {
-  const one = /^unlisted-hook-(0x[0-9a-f]{4})-([0-9a-f]{4})(?:-\d+)?$/.exec(slug);
-  if (one) return `${one[1]}%${one[2]}`;
-  const fam = /^unlisted-hook-family-(0x[0-9a-f]{4})(?:-\d+)?$/.exec(slug);
-  return fam ? `${fam[1]}%` : null;
+/** Slugs are lowercase words joined by single dashes; anything else cannot be an old slug, so skip the alias query. */
+export function isSlugShaped(slug: string): boolean {
+  return slug.length <= 120 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug);
 }
