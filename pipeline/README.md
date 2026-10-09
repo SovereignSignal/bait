@@ -118,7 +118,8 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
    txCount. While a chain's on-chain history is shorter than the window, pools that keyless already snapshots keep their
    keyless series and only `pool_stats` is overridden. Custom-accounting hooks (address bit 3) and pool-days with more
    than half their swaps unpriced keep keyless volume; `pool_stats.vol_source` is `onchain`, `hook` or `unpriced`
-   (NULL = keyless).
+   (NULL = keyless). The rule is per day: from the first such day on the series carries NULL volume (swap counts kept),
+   or the keyless series is kept when that day is on or before the reported day; `pool_stats` agrees with the series.
 
 ### Grouping rules (step 4)
 1. Same normalized name -> same project (`BunniHook`, `bunni hooks` -> `bunni`).

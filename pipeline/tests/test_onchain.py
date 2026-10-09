@@ -198,3 +198,14 @@ def test_deferred_hook_whose_first_pool_came_from_snapshot_still_gets_its_other_
     conn.execute(sa.insert(db.pools).values(pool_id="0x" + "6" * 64, chain_id=143, hook_address=HOOK3))
     onchain.run(conn, ctx)
     assert (PE, 143) in _pool_keys(conn)
+
+
+def test_an_earlier_mostly_unpriced_day_makes_volume_unknown_from_that_day_in_series_and_stats(conn, ctx):
+    _setup(conn)
+    bad = REF - timedelta(days=3)
+    _daily(conn, 8453, PC, bad, 4, 1, 0.0, unpriced=4)              # REF itself is priced (4 swaps, $50)
+    onchain.run(conn, ctx)
+    s = _snaps(conn, PC)
+    assert s[bad - timedelta(days=1)][0] == 0.0 and s[bad][0] is None and s[DAY][:2] == (None, 8)
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PC)).one()
+    assert (st.vol_24h, st.traders_24h, st.vol_source) == (None, 2, "unpriced")   # agrees with the series at REF
