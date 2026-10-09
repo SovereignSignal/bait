@@ -50,7 +50,7 @@ export default function AboutPage() {
               Top 20.
             </li>
             <li>
-              <b>Verified</b>: a published audit link, or the hook routes in the Uniswap app by the rule below.
+              <b>In Uniswap app</b>: at least one pool our rule below says the app will route to. Audit status is a separate badge.
             </li>
             <li>
               <b>Alive</b>: a GitHub commit or a web mention in the last 30 days.
@@ -70,9 +70,9 @@ export default function AboutPage() {
           <p>
             The Uniswap app only routes through hooked pools whose hook is allowlisted. Per Uniswap&apos;s published rule, a hook is allowed automatically unless its address
             starts with <code>0x91</code>, or it uses <code>beforeSwapReturnsDelta</code>, <code>afterSwapReturnsDelta</code> or a dynamic fee. Bait computes this from the
-            published flags and also treats <code>afterAddLiquidityReturnsDelta</code> and <code>afterRemoveLiquidityReturnsDelta</code> as blocking, which is stricter than the
+            permission bits in the hook address (the chain enforces them) and also treats <code>afterAddLiquidityReturnsDelta</code> and <code>afterRemoveLiquidityReturnsDelta</code> as blocking, which is stricter than the
             published rule. Hooks that Uniswap Labs reviewed and allowlisted by hand will still show as not routable here, because no public list of manual approvals exists.
-            The badge is a rule, not a guarantee. The pink &quot;Swap on Uniswap&quot; button only appears when the rule says a pool should route.
+            The In Uniswap app tab lists projects with at least one pool our rule says the app will route to: no returnsDelta permission bits, not a 0x91 address, static fee. Hooks without a known pool show Routing unknown. Not in hooklist means we found the hook from its pools, not from Uniswap&apos;s registry; its name and permissions come from the chain. The badge is a rule, not a guarantee. The pink &quot;Swap on Uniswap&quot; button only appears when the rule says a pool should route.
           </p>
         </section>
 

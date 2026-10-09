@@ -53,8 +53,10 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
               <WatchStar slug={p.slug} name={p.name} />
             </div>
             <div className={s.badges}>
-              <span className="b b-v">✓ Hooklist</span>
-              {p.signals.routable === "eligible" ? <span className="b b-g">Routes in Uniswap app</span> : <span className="b b-n">Not routable in app</span>}
+              {p.hooklisted ? <span className="b b-v">✓ Hooklist</span> : <span className="b b-n">Not in hooklist</span>}
+              {p.signals.routable === "eligible" && <span className="b b-g">Routes in Uniswap app</span>}
+              {p.signals.routable === "ineligible" && <span className="b b-n">Not routable in app</span>}
+              {p.signals.routable === "unknown" && <span className="b b-n">Routing unknown</span>}
               {p.signals.auditCount > 0 ? <span className="b b-g">Audit linked</span> : <span className="b b-n">No audit linked</span>}
               {p.upgradeable && <span className="b b-a">Upgradeable</span>}
               {p.isNew && <span className="b b-p">New · {ago(p.firstSeenAt, now)}</span>}
@@ -266,7 +268,11 @@ function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
     });
   }
   if (p.upgradeable) out.push({ cls: "b-a", label: "Upgradeable", text: "The hook owner can change its code; read it before you trade." });
-  out.push({ cls: "b-v", label: "Registry", text: `Listed in the Uniswap hooklist${p.signals.auditCount > 0 ? " with an audit link" : ""}` });
+  out.push(
+    p.hooklisted
+      ? { cls: "b-v", label: "Registry", text: `Listed in the Uniswap hooklist${p.signals.auditCount > 0 ? " with an audit link" : ""}` }
+      : { cls: "b-n", label: "Discovered on-chain", text: "Not in the Uniswap hooklist; found from its pools. Name and flags come from the chain." },
+  );
   return out;
 }
 

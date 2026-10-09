@@ -23,7 +23,7 @@ export type Tab = "trending" | "new" | "verified" | "all";
 export const TABS: Array<[Tab, string]> = [
   ["trending", "Trending"],
   ["new", "New"],
-  ["verified", "Verified"],
+  ["verified", "In Uniswap app"],
   ["all", "All"],
 ];
 
