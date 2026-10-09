@@ -107,3 +107,10 @@ def test_candles_fill_days_without_trades_with_zero_and_never_touch_earlier_days
     s = {d: (r.volume_usd_day, r.estimated) for d, r in _rows(conn, pid).items()}
     assert s == {end - timedelta(days=5): (9.0, False), end - timedelta(days=2): (300.0, False),
                  end - timedelta(days=1): (0.0, False), end: (200.0, False), ctx.day: (50.0, False)}
+
+
+def test_a_missing_reserve_is_unknown_tvl_not_zero(conn, ctx, monkeypatch):
+    end, pid = ctx.day - timedelta(days=1), "0x" + "a" * 64
+    p = _pool(pid, "0x" + "b" * 40, 7_000, 400, "2026-01-01T00:00:00Z", [(_t(end), 7_000.0)], reserve=None)
+    _run_keyless(conn, ctx, monkeypatch, [p])
+    assert _rows(conn, pid)[end].tvl_usd is None

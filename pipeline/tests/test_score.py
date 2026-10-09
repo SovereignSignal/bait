@@ -298,8 +298,8 @@ def test_no_liquidity_flags_the_optimism_0x69af_shape(conn, ctx):
     """Optimism 0x69af...7fff: $436M in 7 days through 8 swaps from one wallet, its TVL known to be $0. The volume/TVL
     ratio is undefined at $0, so without "no liquidity" the 7-day rule built for this case missed it."""
     p = insert_project(conn, "Desk69", first_seen=NOW - timedelta(days=60), slug="desk69")
-    insert_hook(conn, "0x69af", 10, project_id=p, name="Desk69")
-    insert_pool(conn, "0x69afp", 10, "0x69af", created=NOW - timedelta(days=60))
+    insert_hook(conn, "0x69a0", 10, project_id=p, name="Desk69")    # low bits clear: not a custom-accounting hook
+    insert_pool(conn, "0x69afp", 10, "0x69a0", created=NOW - timedelta(days=60))
     days = [END - timedelta(days=i) for i in range(4)]                        # 8 swaps: two a day on four days
     series(conn, "0x69afp", 10, {d: 109_000_000.0 for d in days}, tvl=0.0, tx={d: 2 for d in days})
     for d in days:
@@ -382,3 +382,22 @@ def test_a_spam_shaped_project_that_moved_a_million_with_nothing_to_check_is_unv
     d = daily(conn, p)
     assert d.is_wash and d.wash_reason == "unverified" and not d.is_spam and d.score_trending == 0.0
     assert out["wash_unverified"] == 1
+
+
+def test_no_liquidity_never_corroborates_a_custom_accounting_hook(conn, ctx):
+    """An RFQ / custom-accounting hook (beforeSwapReturnsDelta, address bit 3) keeps its liquidity in the hook, so a $0
+    pool TVL says nothing: four wallets moving $1M a week through it are not wash."""
+    rfq = insert_project(conn, "Rfq", first_seen=NOW - timedelta(days=60), slug="rfq")
+    hook = "0x" + "f" * 36 + "0088"
+    insert_hook(conn, hook, 10, project_id=rfq, name="Rfq")
+    insert_pool(conn, "0xrfqp", 10, hook, created=NOW - timedelta(days=60))
+    series(conn, "0xrfqp", 10, {END - timedelta(days=i): 143_000.0 for i in range(7)}, tvl=0.0,
+           tx={END - timedelta(days=i): 20 for i in range(7)})
+    for i in range(7):
+        d = END - timedelta(days=i)
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id="0xrfqp", day=d, swaps=20, wallets=4, volume_usd=143_000.0))
+        for w in range(4):
+            conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id="0xrfqp", day=d, address=f"0xw{w}", swaps=5))
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    assert not daily(conn, rfq).is_wash

@@ -267,11 +267,13 @@ def no_liquidity(vol_7d: float | None, tvl: float | None) -> bool:
     return vol_7d is not None and tvl is not None and vol_7d >= WASH_MIN_VOL_7D and tvl <= NO_LIQUIDITY_MAX_TVL
 
 
-def corroborated(vol_7d: float | None, tvl: float | None, symmetric: bool) -> bool:
+def corroborated(vol_7d: float | None, tvl: float | None, symmetric: bool, custom: bool = False) -> bool:
     """Few wallets alone also describes private / RFQ hooks (Arrakis private hook) that move real volume against real
-    liquidity. A wash flag needs one more sign: 7-day volume > 50x a known TVL, no liquidity at all, or symmetric traders."""
+    liquidity. A wash flag needs one more sign: 7-day volume > 50x a known TVL, no liquidity at all, or symmetric traders.
+    custom: a custom-accounting hook (custom_accounting(address)) keeps its liquidity in the hook, so a $0 pool TVL is not
+    "no liquidity" for it."""
     r = vol_tvl(vol_7d, tvl)
-    return (r is not None and r > WASH_MIN_VOL_TVL) or no_liquidity(vol_7d, tvl) or symmetric
+    return (r is not None and r > WASH_MIN_VOL_TVL) or (not custom and no_liquidity(vol_7d, tvl)) or symmetric
 
 
 # 7 days (indexer: pool_daily_onchain + pool_wallet_day, ready chains only). 10/8: Optimism 0x69af...7fff moved $436M
@@ -280,8 +282,10 @@ WASH_MIN_VOL_7D = 1_000_000
 WASH_MAX_WALLETS_7D = 10
 
 
-def is_wash_7d(vol_7d: float, wallets_7d: int, tvl: float | None, symmetric: bool) -> bool:
-    return vol_7d >= WASH_MIN_VOL_7D and wallets_7d <= WASH_MAX_WALLETS_7D and corroborated(vol_7d, tvl, symmetric)
+def is_wash_7d(vol_7d: float, wallets_7d: int | None, tvl: float | None, symmetric: bool, custom: bool = False) -> bool:
+    """wallets_7d None (unknown, e.g. pruned pool_wallet_day rows) never matches: no vacuous "<= 10 wallets"."""
+    return (wallets_7d is not None and vol_7d >= WASH_MIN_VOL_7D and wallets_7d <= WASH_MAX_WALLETS_7D
+            and corroborated(vol_7d, tvl, symmetric, custom))
 
 
 # Volume far above liquidity from few wallets. Launchpads churn many times their liquidity too (Base 0x0f48 family:
@@ -296,9 +300,10 @@ def is_wash_vol_tvl(vol_7d: float, tvl: float | None, wallets: int | None) -> bo
             and wallets is not None and wallets < WASH_VOL_TVL_WALLETS)
 
 
-def is_wash_no_liquidity(vol_7d: float, tvl: float | None, wallets: int | None) -> bool:
-    """The volume/TVL rule where the ratio is undefined: >= $1M in 7 days, a known TVL <= $1,000, fewer than 50 wallets."""
-    return no_liquidity(vol_7d, tvl) and wallets is not None and wallets < WASH_VOL_TVL_WALLETS
+def is_wash_no_liquidity(vol_7d: float, tvl: float | None, wallets: int | None, custom: bool = False) -> bool:
+    """The volume/TVL rule where the ratio is undefined: >= $1M in 7 days, a known TVL <= $1,000, fewer than 50 wallets.
+    Never for a custom-accounting hook (its liquidity lives in the hook)."""
+    return not custom and no_liquidity(vol_7d, tvl) and wallets is not None and wallets < WASH_VOL_TVL_WALLETS
 
 
 # Bots trading with themselves: the pool's top wallets that day (activity step, pool_top_wallets) each buy and sell the
