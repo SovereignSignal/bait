@@ -7,25 +7,13 @@ Returns None when no source has verified code. Unverified contracts have no name
 """
 from __future__ import annotations
 
-import re
-
 import httpx
 
 from ..config import CHAIN_BY_ID, env
+from ..rules import GENERIC, useful_name  # noqa: F401  re-exported; the list lives in rules
 from . import http
 
 ROUTESCAN_CHAINS = {43114}
-# Names that say nothing about the project: proxies and template defaults.
-GENERIC = re.compile(
-    r"(?i)^(hook|basehook|v4hook|uniswapv4hook|uniswaphook|anyhook|customhook|myhook|testhook|counter|counterhook|"
-    r"swapfeehook|feehook|platformhook|.*proxy.*|implementation|main|contract)$")
-
-
-def useful_name(name: str | None) -> str | None:
-    n = (name or "").strip()
-    if not n or len(n) > 60 or GENERIC.match(n):
-        return None
-    return n
 
 
 class ContractNames:

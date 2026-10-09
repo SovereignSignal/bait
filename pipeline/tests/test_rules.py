@@ -110,3 +110,28 @@ def test_code_hash_is_0x_sha256_of_the_bytes():
     assert len(want) == 66
     for empty in (None, "", "0x", "0xzz"):
         assert code_hash(empty) is None
+
+
+def test_useful_name_and_proxy_names():
+    from bait.rules import is_proxy_name, useful_name
+    assert useful_name("FoundationHookV2") == "FoundationHookV2"
+    assert useful_name("x" * 61) is None and useful_name("Long " + "x" * 70, max_len=None) == "Long " + "x" * 70
+    for g in ("ERC1967Proxy", "FeeHook", "Counter", " BaseHook ", "", None):
+        assert useful_name(g, max_len=None) is None
+    assert is_proxy_name("TransparentUpgradeableProxy") and not is_proxy_name("OrderHook") and not is_proxy_name(None)
+
+
+def test_merge_evidence_needs_code_deployer_or_hooklist_name():
+    from types import SimpleNamespace
+    from bait.rules import merge_evidence
+
+    def h(code=None, dep=None, name=None, cname=None):
+        return SimpleNamespace(code_hash=code, deployer=dep, name=name, contract_name=cname)
+    assert merge_evidence([h(cname="OrderHook")], [h(cname="OrderHook")]) is None        # a name alone is not evidence
+    assert merge_evidence([h(code="0xa")], [h(code="0xa")]) == "code_hash"
+    assert merge_evidence([h(code="0xp", cname="ERC1967Proxy")], [h(code="0xp")]) is None  # proxy bytecode is shared
+    assert merge_evidence([h(dep="0xd")], [h(dep="0xd")]) == "deployer"
+    create2 = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
+    assert merge_evidence([h(dep=create2)], [h(dep=create2)]) is None                     # CREATE2 factory deploys for everyone
+    assert merge_evidence([h(name="Bunni Hooks")], [h(name="BunniHook")]) == "hooklist_name"
+    assert merge_evidence([h(name="FeeHook")], [h(name="FeeHook")]) is None                # template name

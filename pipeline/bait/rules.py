@@ -76,6 +76,52 @@ def normalize_name(name: str | None) -> str:
     return s
 
 
+# Names that say nothing about the project: proxies and template defaults. Applies to hooklist and verified-source names.
+GENERIC = re.compile(
+    r"(?i)^(hook|basehook|v4hook|uniswapv4hook|uniswaphook|anyhook|customhook|myhook|testhook|counter|counterhook|"
+    r"swapfeehook|feehook|platformhook|.*proxy.*|implementation|main|contract)$")
+
+# Deterministic CREATE2 deployers (Arachnid, ImmutableCreate2Factory, CreateX) deploy for everyone: not team evidence.
+SHARED_DEPLOYERS = frozenset({
+    "0x4e59b44847b379578588920ca78fbf26c0b4956c",
+    "0x0000000000ffe8b47b3e2130213b802212439497",
+    "0xba5ed099633d3b313e4d5f7bdc1305d3c28ba5ed",
+})
+
+
+def useful_name(name: str | None, max_len: int | None = 60) -> str | None:
+    """The name stripped, or None when it is empty, generic, or (verified-source names) longer than max_len."""
+    n = (name or "").strip()
+    if not n or (max_len and len(n) > max_len) or GENERIC.match(n):
+        return None
+    return n
+
+
+def is_proxy_name(name: str | None) -> bool:
+    return "proxy" in (name or "").lower()
+
+
+def merge_evidence(a, b) -> str | None:
+    """Why two sets of hooks are one project, or None. A shared name is only a candidate; evidence is shared non-proxy
+    bytecode, a shared deployer that is not a CREATE2 factory, or the same non-generic hooklist name."""
+    def hashes(rows):
+        return {r.code_hash for r in rows if r.code_hash and not (is_proxy_name(r.name) or is_proxy_name(r.contract_name))}
+
+    def deployers(rows):
+        return {r.deployer for r in rows if r.deployer and r.deployer not in SHARED_DEPLOYERS}
+
+    def listed(rows):
+        return {normalize_name(useful_name(r.name, max_len=None)) for r in rows} - {""}
+
+    if hashes(a) & hashes(b):
+        return "code_hash"
+    if deployers(a) & deployers(b):
+        return "deployer"
+    if listed(a) & listed(b):
+        return "hooklist_name"
+    return None
+
+
 def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return s or "project"
