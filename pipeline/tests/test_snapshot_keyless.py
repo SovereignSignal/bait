@@ -6,9 +6,9 @@ from bait import db, keyless as K
 from bait.steps import score, snapshot
 
 
-def _pool(addr, hook, vol24, buyers, created, daily):
+def _pool(addr, hook, vol24, buyers, created, daily, reserve="2000000"):
     return {"net": "base", "attrs": {"address": addr, "name": "ETH / USDC 0.3%", "pool_created_at": created,
-                                     "reserve_in_usd": "2000000", "volume_usd": {"h24": str(vol24)},
+                                     "reserve_in_usd": reserve, "volume_usd": {"h24": str(vol24)},
                                      "transactions": {"h24": {"buys": 300, "sells": 200, "buyers": buyers, "sellers": 0}}},
             "key": {"currency0": "0x" + "0" * 40, "currency1": "0x" + "1" * 40, "fee": 3000, "tickSpacing": 60, "hooks": hook},
             "daily": daily}
@@ -36,7 +36,7 @@ def test_keyless_rows_feed_scoring_and_wash_is_excluded(conn, ctx, monkeypatch):
     # candles day-14 .. day: $10K a day for the closed week day-7 .. day-1 (and the running day), $5K the week before
     daily = [(_t(day - timedelta(days=i)), 10_000.0 if i <= 7 else 5_000.0) for i in range(14, -1, -1)]
     real = _pool("0x" + "a" * 64, "0x" + "b" * 40, 10_000, 400, "2026-01-01T00:00:00Z", daily)
-    wash = _pool("0x" + "c" * 64, "0x" + "d" * 40, 5_000_000, 5, "2026-01-01T00:00:00Z", daily)
+    wash = _pool("0x" + "c" * 64, "0x" + "d" * 40, 5_000_000, 5, "2026-01-01T00:00:00Z", daily, reserve="1000")   # 70x its TVL
     out = _run_keyless(conn, ctx, monkeypatch, [real, wash])
     assert out["keyless_pools"] == 2 and out["errors"] == 0 and out["estimated_pools"] == 0
     hooks = {r.address: r for r in conn.execute(sa.select(db.hooks))}
