@@ -3,7 +3,8 @@
 Env: DATABASE_URL, HYPERSYNC_API_TOKEN (without it: RPC fallback, Initialize only, new blocks only, 10 chains),
 INDEXER_INTERVAL, INDEXER_CHAINS (comma slugs or ids), INDEXER_MAX_PAGES, INDEXER_TOPIC_FILTER_MAX,
 INDEXER_TOPIC_CHUNK, INDEXER_RPC_MAX_WINDOWS, INDEXER_POOLS_PER_HOOK (v4_pools rows per hook; past it pools are counted),
-INDEXER_POOL_LOOKUPS (HyperSync calls per chain per loop to find pools past the cap that swap).
+INDEXER_POOL_LOOKUPS (HyperSync calls per chain per loop to find pools past the cap that swap),
+INDEXER_LATE_INSERT_MIN_USD (smallest priced swap that makes such a pool a row), INDEXER_SAMPLED_POOLS_PER_HOOK (second cap).
 """
 from __future__ import annotations
 
@@ -124,7 +125,7 @@ def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats], schema_locked:
             continue
         lag = f"{s.init_lag}" if s.swap_lag is None else f"{s.init_lag}/{s.swap_lag}"
         extra = f",swaps={s.swaps}" + (f",unpriced={s.unpriced}" if s.unpriced else "") if s.swaps else ""
-        cap = "".join(f",{k}={v}" for k, v in (("capped", s.capped), ("late", s.late), ("lookups", s.lookups)) if v)
+        cap = "".join(f",{k}={v}" for k, v in (("capped", s.capped), ("late", s.late), ("folded", s.folded), ("lookups", s.lookups)) if v)
         parts.append(f"{slug}:lag={lag},new={s.new_pools}{cap}{extra}")
     total_new = sum(s.new_pools for s in stats.values())
     locked = f"schema_locked={schema_locked} " if schema_locked else ""

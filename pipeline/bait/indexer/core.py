@@ -10,7 +10,7 @@ from datetime import date, datetime, time as dtime, timedelta, timezone
 import httpx
 import sqlalchemy as sa
 
-from ..db import as_utc
+from ..db import as_utc, hook_pool_id
 from .chains import CHAINS, IndexedChain
 from .decode import INITIALIZE_TOPIC, decode_initialize, decode_swap, is_hooked, num, utc
 from .hypersync import HyperSync, initialize_by_id_query, initialize_query, page, swap_query
@@ -30,6 +30,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
 @dataclass
 class Settings:
     max_pages: int = 40              # HyperSync pages per chain per loop, so one backfilling chain cannot starve the rest
@@ -38,6 +45,8 @@ class Settings:
     rpc_max_windows: int = 30        # RPC mode: eth_getLogs windows per chain per loop before jumping to the head
     pools_per_hook: int = 2000       # v4_pools rows per (chain, hook); past it pools are counted, not stored (0 = no cap)
     pool_lookups: int = 10           # HyperSync calls per chain per loop to find pools past the cap that swap
+    late_min_usd: float = 10.0       # a pool past the cap becomes a row only on a priced swap of at least this (no dust)
+    sampled_per_hook: int = 1000     # second cap: such late rows per (chain, hook); the rest's swaps stay on the hook
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -45,7 +54,9 @@ class Settings:
                    topic_chunk=max(1, _env_int("INDEXER_TOPIC_CHUNK", 500)), rpc_max_windows=_env_int("INDEXER_RPC_MAX_WINDOWS", 30),
                    pools_per_hook=_env_int("INDEXER_POOLS_PER_HOOK", 2000),
                    # at least 1: a chunk in progress always finishes, so a held swap page moves every loop
-                   pool_lookups=max(1, _env_int("INDEXER_POOL_LOOKUPS", 10)))
+                   pool_lookups=max(1, _env_int("INDEXER_POOL_LOOKUPS", 10)),
+                   late_min_usd=_env_float("INDEXER_LATE_INSERT_MIN_USD", 10.0),
+                   sampled_per_hook=_env_int("INDEXER_SAMPLED_POOLS_PER_HOOK", 1000))
 
 
 @dataclass
@@ -57,6 +68,7 @@ class ChainStats:
     capped: int = 0                  # Initialize logs past the per-hook cap: counted in hook_pool_counts, not stored
     late: int = 0                    # pools past the cap inserted on their first swap (sampled)
     lookups: int = 0                 # HyperSync calls spent finding them
+    folded: int = 0                  # swaps of pools past both caps (or dust), kept on the hook's aggregate pool
     swaps: int = 0
     unpriced: int = 0
     pages: int = 0
@@ -71,16 +83,32 @@ class SwapAgg:
     swaps: int = 0
     unpriced: int = 0
     seen_ts: int = 0                               # newest block timestamp in the scanned pages
+    best: dict = field(default_factory=dict)       # pool_id -> largest priced swap (USD) in the scanned pages
 
     def add(self, pool_id: str, day: date, wallet: str, usd: float | None) -> None:
         d = self.daily.setdefault((pool_id, day), [0, 0.0, 0])
         d[0] += 1
         d[1] += usd or 0.0
         d[2] += usd is None
+        if usd is not None:
+            self.best[pool_id] = max(self.best.get(pool_id, 0.0), usd)
         k = (pool_id, day, wallet)
         self.wallets[k] = self.wallets.get(k, 0) + 1
         self.swaps += 1
         self.unpriced += usd is None
+
+    def fold(self, pool_id: str, into: str) -> tuple[int, float]:
+        """Move a pool's swaps and wallets onto another pool id (a hook's aggregate pool) -> (swaps, usd) moved."""
+        n, v = 0, 0.0
+        for (p, d) in [k for k in self.daily if k[0] == pool_id]:
+            s_, u, x = self.daily.pop((p, d))
+            t = self.daily.setdefault((into, d), [0, 0.0, 0])
+            t[0], t[1], t[2] = t[0] + s_, t[1] + u, t[2] + x
+            n, v = n + s_, v + u
+        for (p, d, w) in [k for k in self.wallets if k[0] == pool_id]:
+            k = (into, d, w)
+            self.wallets[k] = self.wallets.get(k, 0) + self.wallets.pop((p, d, w))
+        return n, v
 
 
 class LookupBudget(RuntimeError):
@@ -322,7 +350,8 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
                     break
                 known.update({p: (r["currency0"], r["currency1"]) for p, r in late.items()})
             aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
-            swap_time = _commit_swaps(engine, chain, agg, swap_from, nb, head, st, list(late.values())) or swap_time
+            rows, adds = _admit_late(engine, chain, late, agg, settings, st) if late else ([], {})
+            swap_time = _commit_swaps(engine, chain, agg, swap_from, nb, head, st, rows, adds) or swap_time
             swap_from = nb
 
     if swap_from >= end and (swap_time is None or now - swap_time > ANCHOR_MAX_AGE):
@@ -340,15 +369,45 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     return st
 
 
+def _admit_late(engine: sa.Engine, chain: IndexedChain, late: dict[str, dict], agg: SwapAgg, settings: Settings,
+                st: ChainStats) -> tuple[list[dict], dict[str, list]]:
+    """Which pools past the cap that swapped in this page become rows: a priced swap of at least late_min_usd (dust and
+    unpriced swaps cannot buy a row), at most sampled_per_hook per hook, biggest swap first. The others' swaps and wallets
+    are folded into the hook's aggregate pool, so its usage is never lost. A hook with no counter (a pool missing for
+    another reason, e.g. a gap in Initialize history) gets a plain row. -> (rows to insert, {hook: [sampled, swaps, usd]})"""
+    with engine.connect() as conn:
+        counters = store.hook_counters(conn, chain.chain_id, {r["hook_address"] for r in late.values()})
+    free = {h: settings.sampled_per_hook - (c.sampled_total or 0) for h, c in counters.items()}
+    rows, adds = [], {}
+    for p, r in sorted(late.items(), key=lambda kv: (-agg.best.get(kv[0], -1.0), kv[0])):
+        h = r["hook_address"]
+        if h not in counters:
+            rows.append(r)
+            continue
+        a = adds.setdefault(h, [0, 0, 0.0])
+        if agg.best.get(p, 0.0) >= settings.late_min_usd and p in agg.best and free[h] > 0:
+            rows.append(r)
+            free[h] -= 1
+            a[0] += 1
+        else:
+            n, v = agg.fold(p, hook_pool_id(h))
+            a[1] += n
+            a[2] += v
+    return rows, adds
+
+
 def _commit_swaps(engine: sa.Engine, chain: IndexedChain, agg: SwapAgg, expected: int, cursor: int, head: int,
-                  st: ChainStats, late=()) -> datetime | None:
-    """late: pools past their hook's cap that swapped in this page; inserted (sampled) with the page, after the CAS."""
+                  st: ChainStats, late=(), hook_adds: dict | None = None) -> datetime | None:
+    """late: pools past their hook's cap admitted as rows in this page (sampled); hook_adds: hook_pool_counts increments.
+    Both are written with the page, after the CAS."""
     block_time = utc(agg.seen_ts) if agg.seen_ts else None
     with engine.begin() as conn:
         store.advance_swap_cursor(conn, chain.chain_id, expected, cursor, head, block_time)   # first: a loser fails before writing
         store.insert_late_pools(conn, list(late))
+        store.add_hook_usage(conn, chain.chain_id, hook_adds or {})
         store.apply_swaps(conn, chain.chain_id, agg.daily, agg.wallets)
     st.late += len(late)
+    st.folded += sum(a[1] for a in (hook_adds or {}).values())
     st.swaps += agg.swaps
     st.unpriced += agg.unpriced
     return block_time
