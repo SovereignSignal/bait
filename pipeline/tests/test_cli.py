@@ -17,8 +17,9 @@ def test_cli_end_to_end_sqlite_idempotent(tmp_path, monkeypatch):
     e = db.make_engine(url)
     with e.connect() as c:
         assert c.execute(sa.select(sa.func.count()).select_from(db.hooks)).scalar_one() == 300
-        assert c.execute(sa.select(sa.func.count()).select_from(db.projects)).scalar_one() == 91
-        assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily)).scalar_one() == 91
+        # 78 named projects + 30 template-named hooks (LimitOrderHook, FeeHook, CurveHook, ...) that never merge by name
+        assert c.execute(sa.select(sa.func.count()).select_from(db.projects)).scalar_one() == 108
+        assert c.execute(sa.select(sa.func.count()).select_from(db.project_daily)).scalar_one() == 108
         assert c.execute(sa.select(sa.func.count()).select_from(db.digests)).scalar_one() == 1
         receipts = c.execute(sa.select(db.run_receipts)).all()
     assert len(receipts) == 2 and all(r.exit_code == 0 for r in receipts)

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { Terminal } from "@/components/Terminal";
-import { getAllSlugs, getProject, getRows, slugForOldUnlisted, usingFixtures } from "@/db/queries";
+import { getAllSlugs, getProject, getRows, slugForAlias, usingFixtures } from "@/db/queries";
 import { SAMPLE_NOW } from "@/fixtures/sample";
 import { movers } from "@/lib/feed";
 
@@ -30,7 +30,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
   const { slug } = await params;
   const [p, rows] = await Promise.all([getProject(slug), getRows()]);
   if (!p) {
-    const moved = await slugForOldUnlisted(slug);   // hook was named since this link was shared
+    const moved = await slugForAlias(slug);   // renamed or merged since this link was shared
     if (moved) permanentRedirect(`/p/${moved}`);
     notFound();
   }

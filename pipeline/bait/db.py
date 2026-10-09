@@ -65,6 +65,9 @@ hooks = sa.Table(
     sa.Column("code_hash", sa.Text, index=True),
     sa.Column("contract_name", sa.Text),       # verified-source name (Sourcify/Blockscout/Routescan), for unlisted hooks
     sa.Column("name_checked_at", TS),          # last contract-name lookup; misses are retried after 14 days
+    sa.Column("regroup", sa.Boolean, nullable=False, server_default=sa.false()),  # ingest named it / code_hash landed; group clears
+    sa.Column("is_proxy", sa.Boolean),         # from the bytecode (EIP-1967 slot / EIP-1167 clone) or explorer; NULL = unknown
+    sa.Column("proxy_kind", sa.Text),          # eip1167 | eip1967 | explorer | unknown; an eip1167 clone's hash is evidence
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), index=True),
     sa.Column("first_seen_at", TS, nullable=False),
 )
@@ -170,6 +173,17 @@ digests = sa.Table(
     "digests", metadata,
     sa.Column("week_of", sa.Date, primary_key=True),
     sa.Column("body", JSONType, nullable=False),
+)
+
+# Old project slugs -> current project (db/migrations/0011_grouping.sql). Written by the group step on every rename,
+# merge and regroup; the web redirects /p/<old_slug> through it.
+project_aliases = sa.Table(
+    "project_aliases", metadata,
+    sa.Column("old_slug", sa.Text, primary_key=True),
+    sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("reason", sa.Text, nullable=False),
+    sa.Column("created_at", TS, nullable=False),
+    sa.Index("project_aliases_project_idx", "project_id"),
 )
 
 # --- spend ---
@@ -326,6 +340,9 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("hooks", "contract_name", "text"),
     ("hooks", "name_checked_at", "timestamptz"),
     ("hooks", "hooklisted", "boolean"),
+    ("hooks", "regroup", "boolean NOT NULL DEFAULT false"),
+    ("hooks", "is_proxy", "boolean"),
+    ("hooks", "proxy_kind", "text"),
     ("indexer_state", "swap_block_time", "timestamptz"),
     ("pool_daily_onchain", "unpriced_swaps", "integer NOT NULL DEFAULT 0"),
     ("pool_stats", "vol_source", "text"),
