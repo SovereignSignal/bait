@@ -11,7 +11,7 @@ export default async function WeeksPage() {
   const all = await listDigests(26);
   return (
     <>
-      <main className="col">
+      <main className="col" id="main" tabIndex={-1}>
         <div className="lead">
           <h1>Weekly digest</h1>
           <p>

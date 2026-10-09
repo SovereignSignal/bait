@@ -79,7 +79,8 @@ export interface PoolView {
   tickSpacing: number;
   createdAt: string; // ISO
   tvlUsd: number;
-  vol7d: number;
+  /** null when the pool's on-chain volume is unknown (NULL cumulative volume) */
+  vol7d: number | null;
   tx7d: number;
   /** null until two daily snapshots (or a pool_stats row) exist */
   vol24h: number | null;
@@ -197,8 +198,8 @@ export interface ProjectSummary {
 export interface ProjectDetail extends ProjectSummary {
   hooks: HookView[];
   pools: PoolView[];
-  /** daily volume, oldest first (last ~14 days); filled on the project page only */
-  series: number[];
+  /** daily volume, oldest first (last ~14 days); null = volume unknown that day (a gap); project page only */
+  series: (number | null)[];
   /** top wallets across the project's pools, latest pool_top_wallets day; project page only */
   topWallets: WalletView[];
 }
@@ -207,6 +208,7 @@ export interface ProjectDetail extends ProjectSummary {
 export interface RowView {
   slug: string;
   name: string;
+  whatLine: string;
   color: string;
   category: Category;
   secondaryCategories: Category[];
@@ -265,7 +267,7 @@ export const CATEGORY_SHORT: Record<Category, string> = {
   "dynamic-fee": "Dynamic fee",
   launchpad: "Launchpad",
   orders: "Orders",
-  "lp-management": "LP mgmt",
+  "lp-management": "LP management",
   compliance: "Compliance",
   oracle: "Oracle",
   "mev-lvr": "MEV / LVR",
