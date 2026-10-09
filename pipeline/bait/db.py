@@ -59,6 +59,8 @@ hooks = sa.Table(
     sa.Column("audit_url", sa.Text),
     sa.Column("deployer", sa.Text),
     sa.Column("code_hash", sa.Text, index=True),
+    sa.Column("contract_name", sa.Text),       # verified-source name (Sourcify/Blockscout/Routescan), for unlisted hooks
+    sa.Column("name_checked_at", TS),          # last contract-name lookup; misses are retried after 14 days
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), index=True),
     sa.Column("first_seen_at", TS, nullable=False),
 )
@@ -282,6 +284,8 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("pool_stats", "sells_24h", "integer"),
     ("pool_stats", "buyers_24h", "integer"),
     ("pool_stats", "sellers_24h", "integer"),
+    ("hooks", "contract_name", "text"),
+    ("hooks", "name_checked_at", "timestamptz"),
 ]
 
 

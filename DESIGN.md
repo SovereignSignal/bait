@@ -261,3 +261,14 @@ shortlist instead of up to 400 names.
   Labs' own hooks and "Unknown Deployer" buckets need their own category.
 - To check: optimism 0x69afa...7fff ($642M in 7 days, all of its history, 3 pools: wash check); robinhood
   0xe5e70...e044 (10,082 pools, $231M in 7 days, launchpad pattern, unlabeled everywhere).
+
+## Naming unlisted hooks (2026-10-09)
+
+Hooks with no hooklist entry used to show as "Unlisted hook 0x…" (31 of the top 50 New/Trending projects on 10/8).
+The group step now looks up verified-source contract names (free): Sourcify, then Blockscout PRO when
+BLOCKSCOUT_API_KEY is set (free key; the Base/Arbitrum/Polygon/Robinhood Blockscout instances sit behind a Cloudflare
+challenge), then the per-chain Blockscout instance, then Routescan (Avalanche). 400 hooks per run (NAMES_MAX), busiest
+first, misses retried after 14 days. Same contract name on one chain = one project; curated projects are never merged
+into, a clash gets the chain appended; proxies and template names (UniswapV4Hook, BaseHook) are ignored.
+Dry run on 10/8 data: 400 checked, 202 named, 117 projects renamed, 28 merged; 10 of the top 50 stay unnamed (all
+unverified). The web labels those by their busiest pair: "WETH/USDC hook · 0x7bc2…2aec".
