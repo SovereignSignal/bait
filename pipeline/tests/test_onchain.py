@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 
 from bait import db
-from bait.rules import flags_from_address
+from bait.rules import custom_accounting, flags_from_address
 from bait.steps import onchain, score
 from tests.conftest import DAY, NOW, insert_hook
 
@@ -21,8 +21,9 @@ def _v4(conn, chain_id, pool_id, hook, block):
         sqrt_price_x96="1", tick=0, block_number=block, block_time=datetime(2026, 8, 1, tzinfo=timezone.utc), tx_hash="0x01"))
 
 
-def _daily(conn, chain_id, pool_id, day, swaps, wallets, vol):
-    conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=chain_id, pool_id=pool_id, day=day, swaps=swaps, wallets=wallets, volume_usd=vol))
+def _daily(conn, chain_id, pool_id, day, swaps, wallets, vol, unpriced=0):
+    conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=chain_id, pool_id=pool_id, day=day, swaps=swaps, wallets=wallets, volume_usd=vol,
+                                                         unpriced_swaps=unpriced))
 
 
 def _setup(conn, coverage_days=20, backfilled=True, updated=NOW - timedelta(hours=1)):
@@ -133,3 +134,33 @@ def test_stuck_swap_cursor_keeps_keyless_even_when_updated_at_is_fresh(conn, ctx
     out = onchain.run(conn, ctx)                   # ...but swaps stopped at 10-05 18:00, inside REF (10-05)
     assert out["chains_stale"] == 1 and out["pools_usage"] == 0
     assert conn.execute(sa.select(db.pool_stats.c.vol_24h).where(db.pool_stats.c.pool_id == PA)).scalar() == 999.0
+
+
+CUSTOM, PF = "0x" + "f" * 36 + "0088", "0x" + "f" * 64          # beforeSwap + beforeSwapReturnsDelta (bit 3)
+
+
+def test_custom_accounting_hook_keeps_keyless_volume_and_takes_onchain_wallets(conn, ctx):
+    assert custom_accounting(CUSTOM) and not custom_accounting(HOOK2) and not custom_accounting("0x" + "1" * 36 + "0044")
+    _setup(conn)
+    insert_hook(conn, CUSTOM, 8453, name="Curve Hook")
+    _v4(conn, 8453, PF, CUSTOM, 400)
+    for i in range(20, -1, -1):
+        _daily(conn, 8453, PF, DAY - timedelta(days=i), 5, 3, 0.0)         # the Swap event says 0/0: the hook took the trade
+    for i in range(15, -1, -1):
+        conn.execute(sa.insert(db.pool_snapshots).values(pool_id=PF, chain_id=8453, day=DAY - timedelta(days=i), tvl_usd=1.0,
+                                                         volume_usd_cum=5000.0 - i, tx_count_cum=0))
+    conn.execute(sa.insert(db.pool_stats).values(pool_id=PF, chain_id=8453, day=DAY, vol_24h=777.0, traders_24h=1))
+    onchain.run(conn, ctx)
+    st = {r.pool_id: r for r in conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.day == DAY))}
+    assert (st[PF].vol_24h, st[PF].traders_24h, st[PF].vol_source) == (777.0, 3, "hook")
+    assert (st[PA].vol_24h, st[PA].vol_source) == (500.0, "onchain")
+    assert _snaps(conn, PF)[DAY][0] == 5000.0                               # keyless series untouched
+
+
+def test_mostly_unpriced_pool_day_does_not_override_and_series_volume_is_null(conn, ctx):
+    _setup(conn)
+    conn.execute(sa.update(db.pool_daily_onchain).where(db.pool_daily_onchain.c.pool_id == PC).values(unpriced_swaps=3))
+    onchain.run(conn, ctx)
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PC)).one()
+    assert (st.vol_24h, st.traders_24h, st.vol_source) == (None, 2, "unpriced")
+    assert _snaps(conn, PC)[DAY][:2] == (None, 4)                           # swap count kept, volume unknown
