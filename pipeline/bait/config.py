@@ -28,22 +28,21 @@ class Chain:
     slug: str
     chain_id: int
     subgraph_id: str | None     # None = no public v4 subgraph (RPC log-scan fallback not built yet)
-    nansen: bool                # Nansen covers this chain
     blockscout: str | None      # base URL, None = no instance
 
 
 # From the research results; see README "Chains".
 CHAINS: list[Chain] = [
-    Chain("ethereum", 1, "DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G", True, "https://eth.blockscout.com"),
-    Chain("optimism", 10, "6RBtsmGUYfeLeZsYyxyKSUiaA6WpuC69shMEQ1Cfuj9u", True, "https://optimism.blockscout.com"),
-    Chain("bnb", 56, "EAq1nJKgjnuKH6Gj4RFjCW7LcL7E2uipbncdwV7TTWkX", True, None),
-    Chain("unichain", 130, "aa3YpPCxatg4LaBbLFuv2iBC8Jvs9u3hwt5GTpS4Kit", False, "https://unichain.blockscout.com"),
-    Chain("polygon", 137, "2CB2uQxcDKWDenagn2z17KQVCtfwSx5eXYuvqTciRTJu", True, "https://polygon.blockscout.com"),
-    Chain("robinhood", 4663, None, True, "https://robinhoodchain.blockscout.com"),
-    Chain("base", 8453, "Gqm2b5J85n1bhCyDMpGbtbVn4935EvvdyHdHrx3dibyj", True, "https://base.blockscout.com"),
-    Chain("arbitrum", 42161, "G5TsTKNi8yhPSV7kycaE23oWbqv9zzNqR49FoEQjzq1r", True, "https://arbitrum.blockscout.com"),
-    Chain("avalanche", 43114, "49JxRo9FGxWpSf5Y5GKQPj5NUpX2HhpoZHpGzNEWQZjq", True, None),
-    Chain("ink", 57073, None, False, "https://explorer.inkonchain.com"),
+    Chain("ethereum", 1, "DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G", "https://eth.blockscout.com"),
+    Chain("optimism", 10, "6RBtsmGUYfeLeZsYyxyKSUiaA6WpuC69shMEQ1Cfuj9u", "https://optimism.blockscout.com"),
+    Chain("bnb", 56, "EAq1nJKgjnuKH6Gj4RFjCW7LcL7E2uipbncdwV7TTWkX", None),
+    Chain("unichain", 130, "aa3YpPCxatg4LaBbLFuv2iBC8Jvs9u3hwt5GTpS4Kit", "https://unichain.blockscout.com"),
+    Chain("polygon", 137, "2CB2uQxcDKWDenagn2z17KQVCtfwSx5eXYuvqTciRTJu", "https://polygon.blockscout.com"),
+    Chain("robinhood", 4663, None, "https://robinhoodchain.blockscout.com"),
+    Chain("base", 8453, "Gqm2b5J85n1bhCyDMpGbtbVn4935EvvdyHdHrx3dibyj", "https://base.blockscout.com"),
+    Chain("arbitrum", 42161, "G5TsTKNi8yhPSV7kycaE23oWbqv9zzNqR49FoEQjzq1r", "https://arbitrum.blockscout.com"),
+    Chain("avalanche", 43114, "49JxRo9FGxWpSf5Y5GKQPj5NUpX2HhpoZHpGzNEWQZjq", None),
+    Chain("ink", 57073, None, "https://explorer.inkonchain.com"),
 ]
 CHAIN_BY_ID = {c.chain_id: c for c in CHAINS}
 CHAIN_BY_SLUG = {c.slug: c for c in CHAINS}

@@ -60,7 +60,7 @@ def test_signals_targets_receipts_alive_and_blurb_only_on_change(conn, ctx):
     ctx.clients.update(exa=exa, github=FakeGitHub(), claude=claude)
     out = signals.run(conn, ctx)
     assert out["projects"] == 2 and out["exa"] == 2 and out["receipts"] == 2 and out["github"] == 1
-    assert out["blurbs"] == 2 and out["errors"] == 0 and out["nansen"] == 0
+    assert out["blurbs"] == 2 and out["errors"] == 0
     rec = conn.execute(sa.select(db.receipts).where(db.receipts.c.project_id == hot)).one()
     assert rec.source == "blog.example.com" and rec.title == "Hot hook ships"
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == hot))}
@@ -115,7 +115,7 @@ def test_signals_unnamed_first_target_does_not_crash_or_leak_hits(conn, ctx):
     hit = {"url": "https://blog.example.com/hot", "title": "Hot hook ships", "source": "blog.example.com",
            "published_at": NOW - timedelta(days=3), "highlights": []}
     exa = FakeExa([hit])
-    ctx.clients.update(exa=exa, github=None, claude=None, nansen=None)
+    ctx.clients.update(exa=exa, github=None, claude=None)
     out = signals.run(conn, ctx)
     assert out["errors"] == 0
     assert exa.calls == 1                                  # only the named project was searched

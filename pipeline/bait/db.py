@@ -118,7 +118,8 @@ pool_top_wallets = sa.Table(
     sa.Column("last_trade_at", TS),
 )
 
-# Nansen labels per wallet; an empty list is a real answer ("no labels") and suppresses re-queries until stale.
+# Wallet labels from the retired Nansen lane (credits exhausted 2026-10-08). Frozen: the web still reads existing rows;
+# the pipeline no longer writes here. Delete the table when the web stops reading it.
 wallet_labels = sa.Table(
     "wallet_labels", metadata,
     sa.Column("address", sa.Text, primary_key=True),
@@ -168,7 +169,7 @@ digests = sa.Table(
 )
 
 # --- spend ---
-# One row per paid API call (Anthropic, Parallel, Exa; Nansen with usd=0). Written on its own connection by
+# One row per paid API call (Anthropic, Parallel, Exa). Written on its own connection by
 # costs.Meter so it survives step rollbacks. Budgets in costs.py read it.
 api_spend = sa.Table(
     "api_spend", metadata,

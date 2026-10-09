@@ -29,11 +29,11 @@ class RunContext:
         """Lazy from_env() per client; tests pre-populate ctx.clients."""
         if name in self.clients:
             return self.clients[name]
-        from ..clients import blockscout, claude, contract_names, exa, github, graph, nansen, parallel
+        from ..clients import blockscout, claude, contract_names, exa, github, graph, parallel
         factory = {
             "graph": graph.Graph.from_env, "blockscout": blockscout.Blockscout.from_env,
             "claude": claude.Claude.from_env, "exa": exa.Exa.from_env, "parallel": parallel.Parallel.from_env,
-            "nansen": nansen.Nansen.from_env, "github": github.GitHub.from_env,
+            "github": github.GitHub.from_env,
             "names": contract_names.ContractNames.from_env,
         }[name]
         c = factory()
