@@ -306,14 +306,22 @@ page with a red "Wash-like volume" badge; it never reaches Trending, New, movers
 A project gets a reason when the pools that rule flags carry >= 50% of its volume in that rule's window.
 
 - Wallet counts are a lower bound: the distinct count when known, else max(buyers, sellers), never buyers + sellers.
+  For the 7-day rules off ready chains it is the largest daily bound of the week's 7 pool_stats days (one quiet day is not
+  "0 wallets"); with no wallet data at all, the swaps behind the 7-day volume are an upper bound (8 swaps prove < 50).
+  Missing pool_wallet_day rows are unknown, never 0 wallets.
 - `24h`: pool >= $250K in 24 h through <= 25 wallets, and corroborated.
 - `7d` (indexer, ready chains only): pool >= $1M over 7 days through <= 10 distinct wallets, and corroborated.
 - Corroborated: 7-day volume > 50x a known TVL, or no liquidity (>= $1M in 7 days with a known TVL <= $1,000), or
   symmetric traders. Few wallets alone also describes private / RFQ hooks (Arrakis private hook) with real liquidity.
+  No liquidity never counts for a custom-accounting hook (address bit 3): its liquidity lives in the hook. A missing
+  GeckoTerminal reserve is unknown TVL, not $0.
 - `vol_tvl`: 7-day volume > 300x a known TVL, >= $10K, fewer than 50 wallets (Base launchpads churn 345x through ~30K).
 - `no_liquidity`: >= $1M in 7 days, a known TVL <= $1,000, fewer than 50 wallets. Unknown TVL never counts.
 - `symmetric`: the pool's top 10 wallets that day each have equal buys and sells and carry > 50% of its rolling 24h
-  volume (>= $10K). Data from the activity step, which covers the top 30 non-wash pools only.
+  volume (>= $10K), with at least 5 such wallets or 3 round trips each. Data from the activity step: the top 30 non-wash
+  pools plus up to 10 24h-wash candidates (`ACTIVITY_WASH_POOLS`).
+- `unverified`: not a rule. A project that escaped the spam rule only by moving $1M or more, matched no rule and has no
+  wallet data at all is listed as wash-like rather than ranked.
 - Live cases: OUROBOROS/CRCL on Robinhood (866x, 13 buyers + 13 sellers, symmetric bots) -> 24h, vol_tvl, symmetric;
   Optimism 0x69af...7fff ($436M from 1 wallet in 8 swaps at $0 TVL) -> 7d, no_liquidity; the Base 0x0f48 launchpad
   family and private RFQ hooks -> none.
