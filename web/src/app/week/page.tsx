@@ -4,7 +4,7 @@ import { Footer } from "@/components/Footer";
 import { listDigests } from "@/db/queries";
 import s from "./week.module.css";
 
-export const revalidate = 3600;
+export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Weekly", description: "Weekly digest of new and trending Uniswap v4 hook projects." };
 
 export default async function WeeksPage() {
