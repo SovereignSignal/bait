@@ -282,3 +282,11 @@ def test_retire_keeps_receipts_and_fills_missing_enrichment_on_the_target(conn, 
         "https://b.example", "https://github.com/a/a", "a_hooks", {"team": "A"}, "Does A things", "orders")
     urls = sorted(conn.execute(sa.select(db.receipts.c.url).where(db.receipts.c.project_id == b)).scalars())
     assert urls == ["https://news.example/1", "https://news.example/2"]
+
+
+def test_backfill_unlisted_aliases_covers_hooks_the_hooklist_listed_later(conn, ctx):
+    named = insert_project(conn, "OuroborosHook", NOW, slug="ouroboroshook")
+    insert_hook(conn, "0x7bc2af6fb9a989505e9629470869a19143532aec", 4663, project_id=named)
+    conn.execute(sa.update(db.hooks).values(hooklisted=True))         # found on-chain first, listed since
+    assert names.backfill_unlisted_aliases(conn, NOW) == 1
+    assert _aliases(conn) == {"unlisted-hook-0x7bc2-2aec": (named, "backfill")}
