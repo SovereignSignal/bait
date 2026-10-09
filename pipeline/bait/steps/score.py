@@ -20,7 +20,8 @@ import sqlalchemy as sa
 
 from ..db import (as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
-from ..rules import (WASH_REASONS, WASH_SHARE, corroborated, custom_accounting, is_new, is_spam, is_symmetric, is_wash_7d, is_wash_24h,
+from ..rules import (WASH_REASONS, WASH_SHARE, corroborated, custom_accounting, is_new, is_spam, is_symmetric, is_wash_7d,
+                     is_wash_7d_by_swaps, is_wash_24h,
                      is_wash_concentrated, is_wash_no_liquidity,
                      is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
@@ -240,10 +241,14 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     judged = {
         "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k], k in custom))
                 for k, r in stats.items()},
-        "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k), tvl.get(k), sym.get(k, False), k in custom)) for k, v in vol_on.items()},
+        # on ready chains from the indexer; anywhere through the swap bound (<= 10 swaps for >= $1M)
+        "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k), tvl.get(k), sym.get(k, False), k in custom)
+                   or is_wash_7d_by_swaps(vol7.get(k, v), swaps7.get(k)))
+               for k, v in {**vol7, **vol_on}.items()},
         # known distinct wallets only: pool_wallet_day on ready chains, else a week whose pool_stats days include an exact
         # count and whose largest bound is still <= 2
-        "concentrated": {k: (v, is_wash_concentrated(v, wallets_7d[k] if k in wallets_7d else (lb7[k] if k in exact7 else None)))
+        "concentrated": {k: (v, is_wash_concentrated(v, wallets_7d[k] if k in wallets_7d else (lb7[k] if k in exact7 else None))
+                             or is_wash_concentrated(v, swaps7.get(k)))      # <= 2 swaps prove <= 2 wallets
                          for k, v in vol7.items()},
         "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
         "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k], k in custom)) for k, v in vol7.items()},

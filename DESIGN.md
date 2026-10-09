@@ -310,7 +310,8 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
   "0 wallets"); with no wallet data at all, the swaps behind the 7-day volume are an upper bound (8 swaps prove < 50).
   Missing pool_wallet_day rows are unknown, never 0 wallets.
 - `24h`: pool >= $250K in 24 h through <= 25 wallets, and corroborated.
-- `7d` (indexer, ready chains only): pool >= $1M over 7 days through <= 10 distinct wallets, and corroborated.
+- `7d` (indexer, ready chains): pool >= $1M over 7 days through <= 10 distinct wallets, and corroborated. On any chain,
+  <= 10 known swaps carrying >= $1M prove <= 10 wallets; that concentration is its own corroboration.
 - Corroborated: 7-day volume > 50x a known TVL, or no liquidity (>= $1M in 7 days with a known TVL <= $1,000), or
   symmetric traders. Few wallets alone also describes private / RFQ hooks (Arrakis private hook) with real liquidity.
   No liquidity never counts for a custom-accounting hook (address bit 3): its liquidity lives in the hook. A missing

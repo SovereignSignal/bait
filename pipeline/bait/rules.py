@@ -298,6 +298,12 @@ def is_wash_concentrated(vol_7d: float, wallets: int | None) -> bool:
     return wallets is not None and vol_7d >= WASH_MIN_VOL_7D and wallets <= WASH_CONCENTRATED_WALLETS
 
 
+def is_wash_7d_by_swaps(vol_7d: float, swaps: int | None) -> bool:
+    """The 7-day rule through the swap bound, on any chain: >= $1M in 7 days carried by <= 10 known swaps proves <= 10
+    wallets, and that concentration is its own corroboration (no TVL needed)."""
+    return swaps is not None and vol_7d >= WASH_MIN_VOL_7D and swaps <= WASH_MAX_WALLETS_7D
+
+
 # Volume far above liquidity from few wallets. Launchpads churn many times their liquidity too (Base 0x0f48 family:
 # 345x) but through thousands of wallets; OUROBOROS/CRCL on Robinhood: 866x through 13 buyers and 13 sellers.
 WASH_VOL_TVL = 300
