@@ -40,7 +40,7 @@ def test_score_hand_computed(conn, ctx):
     assert d.is_new is False           # pipeline first saw it 3d ago, but its pool is 60d old: not new
     assert d.is_spam is False
     assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_24h": 0, "wash_7d": 0,
-                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0}
+                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_unverified": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):
@@ -153,7 +153,8 @@ def test_wash_7d_ignores_a_chain_whose_swaps_are_not_caught_up(conn, ctx):
     wash = _onchain_project(conn, "Desk", "0xdp", wallets=1, vol_per_day=60_000_000)
     _optimism_ready(conn, swap_time=NOW - timedelta(days=2))
     out = score.run(conn, ctx)
-    assert out["wash_7d"] == 0 and not daily(conn, wash).is_wash
+    # the 7-day rule does not judge it; its 14 swaps (an upper bound of its wallets) still let vol_tvl see 8,400x its TVL
+    assert out["wash_7d"] == 0 and daily(conn, wash).wash_reason == "vol_tvl"
 
 
 def test_held_back_pool_with_null_volume_is_left_out_of_both_weeks(conn, ctx):
@@ -351,3 +352,33 @@ def test_a_quiet_day_is_not_a_seven_day_wallet_count(conn, ctx):
                                                      buyers_24h=3_000 if busy else 0, sellers_24h=3_000 if busy else 0))
     score.run(conn, ctx)
     assert not daily(conn, p).is_wash
+
+
+def test_a_whale_with_no_wallet_data_is_judged_on_its_swap_count(conn, ctx):
+    """$436M over 4 days through a pool whose TVL is known to be $0, 8 swaps, no pool_stats row, on a chain the indexer
+    does not cover: 8 swaps prove fewer than 50 wallets, so no_liquidity fires instead of a free pass to Trending."""
+    p = insert_project(conn, "Whale", first_seen=NOW - timedelta(days=60), slug="whale")
+    insert_hook(conn, "0xwh", 4663, project_id=p, name="Whale")
+    insert_pool(conn, "0xwhp", 4663, "0xwh", created=NOW - timedelta(days=60))
+    days = [END - timedelta(days=i) for i in range(4)]
+    series(conn, "0xwhp", 4663, {d: 109_000_000.0 for d in days}, tvl=0.0, tx={d: 2 for d in days})
+    insert_snap(conn, "0xwhp", 4663, END - timedelta(days=13), 0.0, 0.0, 0, vol_day=0.0)     # last week: nothing
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_wash and "no_liquidity" in d.wash_reason.split(",") and d.score_trending == 0.0 and not d.is_spam
+    assert out["trending"] == 0
+
+
+def test_a_spam_shaped_project_that_moved_a_million_with_nothing_to_check_is_unverified(conn, ctx):
+    """$5M in a week through a $50 pool, swap counts and wallets unknown: not spam (it moved $1M), not provably wash, so
+    it is listed as unverified wash-like volume, never ranked."""
+    p = insert_project(conn, "Ghost", first_seen=NOW - timedelta(days=60), slug="ghostly")
+    insert_hook(conn, "0xgh", 4663, project_id=p, name="Ghost")
+    insert_pool(conn, "0xghp", 4663, "0xgh", created=NOW - timedelta(days=60))
+    series(conn, "0xghp", 4663, {END - timedelta(days=i): 714_286.0 for i in range(7)}, tvl=50.0)
+    for i in range(7, 14):
+        insert_snap(conn, "0xghp", 4663, END - timedelta(days=i), 50.0, 0.0, 0, vol_day=100_000.0)
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_wash and d.wash_reason == "unverified" and not d.is_spam and d.score_trending == 0.0
+    assert out["wash_unverified"] == 1

@@ -52,6 +52,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     unknown_vol: set[tuple] = set()   # cumulative volume NULL at window_end (onchain held it back): not $0
     pool_tvl: dict[tuple, float | None] = {}
     pool_vol7: dict[tuple, float] = {}
+    pool_swaps7: dict[tuple, int] = {}     # swaps on the days that carry the 7-day volume: an upper bound of its wallets
     for key, rows in by_pool.items():
         if key not in pool_project:
             continue
@@ -76,6 +77,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 if name == "vol7":
                     pool_vol7[key] = v
                 quiet[name] = v == 0
+        sb = _swap_bound(rows, w7)
+        if sb is not None:
+            pool_swaps7[key] = sb
         for name, w, vol_name in (("tx24", w24, "vol24"), ("tx7", w7, "vol7")):
             n, known = _swaps(rows, w, created)
             a[name] += n
@@ -83,7 +87,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 a[name + "_known"] = False
 
     ready = ready_chains(conn, ctx)
-    reasons = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl)
+    reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7)
     wallets = _wallets(conn, day, end, ready, pool_project)
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
@@ -96,6 +100,10 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     rows = []
     for pid, fs in first_seen.items():
         a = agg.get(pid) or _empty()
+        spam = is_spam(a["stats"], max(a["life"], a["vol7"]))
+        if not spam and is_spam(a["stats"]) and pid not in reasons and pid not in wallet_known:
+            # escaped the spam rule only by moving >= $1M, and nothing can check who moved it: listed, never ranked
+            reasons[pid] = ["unverified"]
         wash = pid in reasons
         # every pool's volume unknown (p5 held it back): the project's volume is unknown, never $0
         known = a["vol_known"] or not a["pools"]
@@ -109,7 +117,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"], a["vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
             "is_new": not wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
-            "is_spam": is_spam(a["stats"], max(a["life"], a["vol7"])),   # true spam only: no pools, or tiny, idle and < $1M
+            "is_spam": spam,           # true spam only: no pools, or tiny, idle and < $1M
             "is_wash": wash, "wash_reason": ",".join(reasons.get(pid, [])) or None,
         })
     for i in range(0, len(rows), 500):
@@ -147,6 +155,15 @@ def _swaps(rows: dict, w: tuple[date, date], created: date | None) -> tuple[int,
     return total, known
 
 
+def _swap_bound(rows: dict, w: tuple[date, date]) -> int | None:
+    """Swaps on the window's days that carry volume: at least one wallet per swap is impossible to beat, so this is an
+    upper bound of the wallets behind that volume. None unless every such day's count is known."""
+    days = [r for d, r in rows.items() if w[0] <= d <= w[1] and (r.volume_usd_day or 0) > 0]
+    if not days or any(r.tx_count_day is None for r in days):
+        return None
+    return sum(r.tx_count_day for r in days)
+
+
 def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -> dict[int, tuple[int, bool]]:
     """Wallets per project for the 24h figure, and whether the number is a distinct count across the project's pools.
     Ready chains: distinct addresses on `end` from pool_wallet_day, one union over the project's pools. Other pools:
@@ -173,12 +190,14 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
 
 
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,
-          tvl: dict) -> dict[int, list[str]]:
+          tvl: dict, swaps7: dict) -> tuple[dict[int, list[str]], set[int]]:
     """Wash reasons per project (DESIGN.md "Wash rules"). Each rule judges pools; a project gets the reason when the
     pools it flags carry >= WASH_SHARE of the project's volume in that rule's window. Pools with unknown volume are never
     judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers. Every few-wallet
     rule also needs rules.corroborated (volume far above a known TVL, no liquidity, or symmetric traders).
-    vol7 / tvl: the pool's closed 7-day volume and latest TVL from the snapshots."""
+    vol7 / tvl: the pool's closed 7-day volume and latest TVL from the snapshots. swaps7: the swaps behind that volume, an
+    upper bound of its wallets, used for the 7-day wallet rules when no wallet count is known (8 swaps prove < 50).
+    Returns the reasons and the projects with any wallet data (for the "unverified" fallback in run)."""
     stats = {(r.pool_id, r.chain_id): r for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day))}
     lb = {k: wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h) for k, r in stats.items()}
     lb7 = _wallets_7d_lower_bound(conn, day)
@@ -188,18 +207,20 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
         top.setdefault((r.pool_id, r.chain_id), []).append((r.volume_usd or 0.0, r.buys or 0, r.sells or 0))
     sym = {k: is_symmetric(top.get(k, []), r.vol_24h_rolling) for k, r in stats.items()}
     vol_on, wallets_7d = _onchain_7d(conn, end, ready)
+    # wallets behind a pool's 7-day volume: on-chain distinct count, else the week's lower bound, else its swap count
+    w7 = {k: wallets_7d.get(k, lb7.get(k, swaps7.get(k))) for k in vol7}
+    wallet_known = {pool_project[k][0] for k in (set(wallets_7d) | set(lb7) | set(swaps7) | {k for k, n in lb.items() if n is not None})
+                    if k in pool_project}
     judged = {
         "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k]))
                 for k, r in stats.items()},
         "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k, 0), tvl.get(k), sym.get(k, False))) for k, v in vol_on.items()},
-        "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), wallets_7d[k] if k in wallets_7d else lb7.get(k)))
-                    for k, v in vol7.items()},
-        "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), wallets_7d[k] if k in wallets_7d else lb7.get(k)))
-                         for k, v in vol7.items()},
+        "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
+        "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
         "symmetric": {k: (r.vol_24h_rolling or 0.0, sym[k]) for k, r in stats.items()},
     }
     reasons: dict[int, list[str]] = {}
-    for reason in WASH_REASONS:
+    for reason in (r for r in WASH_REASONS if r in judged):
         share: dict[int, list[float]] = {}
         for key, (v, hit) in judged[reason].items():
             if key not in pool_project or key in unknown or not v:
@@ -210,7 +231,7 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
         for pid, (total, washed) in share.items():
             if washed / total >= WASH_SHARE:
                 reasons.setdefault(pid, []).append(reason)
-    return reasons
+    return reasons, wallet_known
 
 
 def _wallets_7d_lower_bound(conn, day: date) -> dict[tuple, int]:
