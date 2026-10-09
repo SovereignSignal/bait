@@ -192,7 +192,8 @@ def _data_generic_norms(conn) -> set[str]:
     at least two such conflicts and no non-proxy code_hash is shared. Unknown deployers prove nothing, and a name on
     FACTORY_MIN_HOOKS or more hooks is a factory family by design."""
     by: dict[str, list] = {}
-    for r in conn.execute(sa.select(hooks.c.name, hooks.c.chain_id, hooks.c.deployer, hooks.c.code_hash, hooks.c.is_proxy)
+    for r in conn.execute(sa.select(hooks.c.name, hooks.c.chain_id, hooks.c.deployer, hooks.c.code_hash, hooks.c.is_proxy,
+                                    hooks.c.proxy_kind)
                           .where(hooks.c.name.is_not(None))):
         if norm := normalize_name(useful_name(r.name, max_len=None)):
             by.setdefault(norm, []).append(r)
@@ -282,12 +283,12 @@ def _refresh_code_facts(conn, ctx, out: dict) -> None:
         if key not in got:
             continue                                     # not answered: kept, asked again on a later run
         if got[key] is None:
-            vals = {"code_hash": None, "is_proxy": None}
+            vals = {"code_hash": None, "is_proxy": None, "proxy_kind": None}
             out["code_missing"] += 1
         else:
-            h, proxy = got[key]
-            vals = {"code_hash": h, "is_proxy": proxy}
-            if r.project_id is not None and (h != r.code_hash or not proxy):
+            h, kind = got[key]
+            vals = {"code_hash": h, "is_proxy": kind is not None, "proxy_kind": kind}
+            if r.project_id is not None and (h != r.code_hash or kind in (None, "eip1167")):
                 vals["regroup"] = True
             if r.contract_name is not None and useful_name(r.contract_name) is None:
                 vals.update(contract_name=None, name_checked_at=None)
@@ -301,7 +302,7 @@ def _split_proxy_families(conn, ctx) -> list[dict]:
     status was known. If a proxy hook has no evidence (non-proxy code, a real deployer) tying it to the rest of its
     project, the whole project goes back through the rules; settle_split hands its slug to where most hooks land."""
     rows = conn.execute(
-        sa.select(hooks.c.project_id, hooks.c.code_hash, hooks.c.is_proxy, hooks.c.deployer, hooks.c.name,
+        sa.select(hooks.c.project_id, hooks.c.code_hash, hooks.c.is_proxy, hooks.c.proxy_kind, hooks.c.deployer, hooks.c.name,
                   hooks.c.contract_name, projects.c.name.label("pname"), projects.c.norm_name.label("pnorm"))
         .join(projects, projects.c.id == hooks.c.project_id)
         .where(hooks.c.project_id.in_(sa.select(hooks.c.project_id).where(hooks.c.is_proxy.is_(True))))).all()
@@ -342,7 +343,7 @@ def _join_targets(conn) -> tuple[dict, dict]:
     deployments and CREATE2 factories deploy for everyone, so neither is evidence."""
     by_hash: dict[str, int] = {}
     by_dep: dict[tuple[int, str], int] = {}
-    for r in conn.execute(sa.select(hooks.c.code_hash, hooks.c.is_proxy, hooks.c.deployer, hooks.c.chain_id,
+    for r in conn.execute(sa.select(hooks.c.code_hash, hooks.c.is_proxy, hooks.c.proxy_kind, hooks.c.deployer, hooks.c.chain_id,
                                     hooks.c.project_id)
                           .where(hooks.c.project_id.is_not(None)).order_by(hooks.c.project_id)):
         if c := _code(r):
@@ -381,7 +382,7 @@ def _regroup_by_code(conn, ctx, code_hash: str, out: dict) -> None:
     """Rule 2 across time: same non-proxy bytecode, one project. Target: a curated holder, else a verified-name one,
     else the oldest. Only auto-named projects give hooks up."""
     rows = [r for r in conn.execute(
-        sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.code_hash, hooks.c.is_proxy, hooks.c.project_id,
+        sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.code_hash, hooks.c.is_proxy, hooks.c.proxy_kind, hooks.c.project_id,
                   projects.c.name.label("pname"), projects.c.norm_name.label("pnorm"))
         .join(projects, projects.c.id == hooks.c.project_id).where(hooks.c.code_hash == code_hash)) if _code(r)]
     if len({r.project_id for r in rows}) < 2:
@@ -433,7 +434,8 @@ def _fetch_code_hashes(conn, ctx, unassigned) -> int:
         info = bs.fetch_code(h.chain_id, h.address)
         n += 1
         if info and info.code_hash:
-            vals = {"code_hash": info.code_hash, "is_proxy": info.is_proxy, "regroup": h.project_id is not None}
+            vals = {"code_hash": info.code_hash, "is_proxy": info.is_proxy, "proxy_kind": info.proxy_kind,
+                    "regroup": h.project_id is not None}
             if info.verified:
                 vals["verified_source"] = True
             conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == h.address, hooks.c.chain_id == h.chain_id))

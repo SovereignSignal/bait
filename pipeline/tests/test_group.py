@@ -197,7 +197,7 @@ def test_legacy_sha1_hash_is_rehashed_and_the_clone_joins_the_registered_project
     _unlisted_project(conn, A(4), 8453, code_hash="f" * 40)                            # keyless sha1: never matched
     other = _unlisted_project(conn, A(5), 1, code_hash="e" * 40)                      # RPC did not answer: kept
     asked = []
-    facts = {(8453, A(3)): (canon, False), (8453, A(4)): (canon, False)}
+    facts = {(8453, A(3)): (canon, None), (8453, A(4)): (canon, None)}
     monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows, deadline: asked.extend(rows) or facts)
     out = group.run(conn, ctx)
     pid = {r.address: (r.project_id, r.code_hash) for r in conn.execute(sa.select(db.hooks))}
@@ -267,7 +267,7 @@ class _Names:
 
 
 def _all_proxies(monkeypatch):
-    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows, deadline: {(r.chain_id, r.address): (PROXY, True) for r in rows})
+    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows, deadline: {(r.chain_id, r.address): (PROXY, "eip1967") for r in rows})
 
 
 def test_unverified_proxies_sharing_bytecode_never_become_a_family(conn, ctx, monkeypatch):
@@ -432,3 +432,14 @@ def test_a_hook_marked_for_name_and_code_regroups_on_both(conn, ctx):
     group.run(conn, ctx)
     pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
     assert pid[A(101)] == bunni and pid[A(102)] == bunni
+
+
+def test_minimal_clones_of_one_implementation_are_one_family(conn, ctx, monkeypatch):
+    clone = "0x" + "c1" * 32
+    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows, deadline: {(r.chain_id, r.address): (clone, "eip1167") for r in rows})
+    for n in (131, 132):
+        insert_hook(conn, A(n), 8453, code_hash=clone)
+    out = group.run(conn, ctx)
+    rows = conn.execute(sa.select(db.hooks.c.project_id, db.hooks.c.is_proxy, db.hooks.c.proxy_kind)).all()
+    assert out["by_code"] == 2 and len({r.project_id for r in rows}) == 1
+    assert all(r.is_proxy is True and r.proxy_kind == "eip1167" for r in rows)

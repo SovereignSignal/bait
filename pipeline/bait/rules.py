@@ -107,16 +107,34 @@ EIP1967_IMPL_SLOT = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d3
 EIP1167_PREFIX = "363d3d373d3d3d363d73"
 
 
+ERC1967_MAX_BYTES = 2048
+
+
+def proxy_kind(code_hex: str | None) -> str | None:
+    """The proxy shape of a runtime, or None. "eip1167": the whole runtime is a 45-byte minimal clone (a hook that only
+    embeds the clone code, like OpenZeppelin Clones, is not). "eip1967": reads the implementation slot and is small
+    (< 2,048 bytes); a UUPS implementation also carries the slot constant but is a full contract."""
+    s = (code_hex or "").lower().removeprefix("0x")
+    if s.startswith(EIP1167_PREFIX) and len(s) == 90:
+        return "eip1167"
+    if EIP1967_IMPL_SLOT in s and len(s) < 2 * ERC1967_MAX_BYTES:
+        return "eip1967"
+    return None
+
+
 def is_proxy_code(code_hex: str | None) -> bool:
-    """A proxy by its runtime bytecode: reads the EIP-1967 implementation slot, or is an EIP-1167 minimal clone."""
-    s = (code_hex or "").lower()
-    return EIP1967_IMPL_SLOT in s or EIP1167_PREFIX in s
+    return proxy_kind(code_hex) is not None
 
 
 def code_evidence(r) -> str | None:
-    """The code_hash when it can join hooks: known not to be proxy bytecode (hooks.is_proxy is False). Proxy bytecode is
-    shared by unrelated deployments; unknown status (bytecode not fetched yet) is not evidence either."""
-    return r.code_hash if r.code_hash and getattr(r, "is_proxy", None) is False else None
+    """The code_hash when it can join hooks: known not to be a proxy (hooks.is_proxy is False), or an EIP-1167 clone,
+    whose bytecode embeds the implementation address (same hash, same implementation). Other proxy bytecode is shared
+    by unrelated deployments; unknown status (bytecode not fetched yet) is not evidence either."""
+    if not r.code_hash:
+        return None
+    if getattr(r, "is_proxy", None) is False or getattr(r, "proxy_kind", None) == "eip1167":
+        return r.code_hash
+    return None
 
 
 def merge_evidence(a, b) -> str | None:
