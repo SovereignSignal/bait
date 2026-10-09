@@ -90,6 +90,8 @@ def test_a_stop_between_batches_says_stopped_early_and_the_cli_exits_4(engine, c
     with caplog.at_level("INFO", logger="bait.indexer"):
         out = prune.prune_pools(engine, keep=4, apply=True, chain_ids=[8453], batch=1, should_stop=stop_after_first_batch)
     assert out["stopped"] and out["rows"] == 1 and any("stopped early" in m for m in caplog.messages)
+    assert any(m.startswith("prune-pools stopped:") for m in caplog.messages)
+    assert not any(m.startswith("prune-pools done:") for m in caplog.messages)
     monkeypatch.setattr(prune, "prune_pools", lambda *a, **k: {"locked": [8453], "stopped": True})
     url = f"sqlite:///{tmp_path / 'bait.db'}"
     assert main(["prune-pools", "--yes", "--database-url", url]) == 4

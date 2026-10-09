@@ -186,7 +186,7 @@ def prune_pools(engine, keep: int, apply: bool, chain_ids: list[int], batch: int
     if out["stopped"]:
         log.warning("prune-pools stopped early on a signal, between batches: every committed batch stands, rerun --yes to finish")
     log.info("prune-pools %s: hooks=%d rows=%d pools_rows=%d batches=%d est=%s database %s -> %s (deleted space is reused "
-             "after autovacuum; the volume does not shrink)", "done" if apply else "dry run", out["hooks"], out["rows"],
+             "after autovacuum; the volume does not shrink)", ("stopped" if out["stopped"] else "done") if apply else "dry run", out["hooks"], out["rows"],
              out["pools_rows"], out["batches"], _mb(out["est_bytes"]), _mb(out["db_before"]), _mb(out["db_after"]))
     return out
 
