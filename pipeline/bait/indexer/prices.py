@@ -24,7 +24,7 @@ TTL = 30 * 60
 BATCH = 80
 MIN_CONFIDENCE = 0.5
 MAX_PRICE = 10_000_000.0        # no token is worth more than $10M; above that the quote is broken
-MAX_SWAP_USD = 500_000_000.0    # a single swap above $500M is a broken quote, not a trade
+MAX_SWAP_USD = 500_000_000.0    # a single swap above $500M is a broken quote: the swap counts as unpriced
 MISMATCH = 20.0                 # sides disagree by more than 20x: trust the smaller one
 
 # Fallback when DefiLlama has no reliable quote (new chain keys, low confidence): the wrapped native coin (priced as the
@@ -149,7 +149,8 @@ def reliable(c: dict, native: bool = False) -> tuple[float, int] | None:
 
 def swap_usd(amount0: int, amount1: int, p0: tuple[float, int] | None, p1: tuple[float, int] | None) -> float | None:
     """USD value of one swap from whichever side has a price. Both priced: the larger, unless they disagree by more
-    than MISMATCH (one quote is wrong), then the smaller. None when neither side is priced."""
+    than MISMATCH (one quote is wrong), then the smaller. None (unpriced) when neither side is priced or the value is
+    above MAX_SWAP_USD."""
     sides = []
     for amt, p in ((amount0, p0), (amount1, p1)):
         if p is not None:
@@ -161,4 +162,4 @@ def swap_usd(amount0: int, amount1: int, p0: tuple[float, int] | None, p1: tuple
         v = lo if lo > 0 and hi / lo > MISMATCH else hi
     else:
         v = sides[0]
-    return 0.0 if v > MAX_SWAP_USD else v
+    return None if v > MAX_SWAP_USD else v          # a broken quote is unpriced (counted), not $0

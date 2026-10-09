@@ -296,7 +296,7 @@ def test_swap_usd_side_selection():
     assert swap_usd(-10 ** 18, 5 * 10 ** 6, eth, usdc) == 5.0                  # 400x apart: one quote is wrong, smaller
     assert swap_usd(7, 3 * 10 ** 6, None, usdc) == 3.0                         # only one side priced
     assert swap_usd(7, 3, None, None) is None
-    assert swap_usd(10 ** 30, 0, eth, None) == 0.0                              # absurd single swap dropped
+    assert swap_usd(10 ** 30, 0, eth, None) is None                             # absurd quote: unpriced, not $0
     assert reliable({"price": 1.0, "decimals": 6, "confidence": 0.99}) == (1.0, 6)
     assert reliable({"price": 1.0, "decimals": 6, "confidence": 0.2}) is None
     assert reliable({"price": 1e12, "decimals": 18}) is None
