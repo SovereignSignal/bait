@@ -33,7 +33,7 @@ export default async function TerminalPage({ searchParams }: { searchParams: Pro
   return (
     <Terminal
       rows={rows}
-      moverRows={movers(rows)}
+      moverRows={movers(rows, 60)}
       project={project}
       view="list"
       now={sample ? SAMPLE_NOW : Date.now()}
