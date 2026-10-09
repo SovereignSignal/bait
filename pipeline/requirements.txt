@@ -1,8 +1,10 @@
-sqlalchemy>=2
-psycopg[binary]
-httpx
-anthropic
-pydantic
-tenacity
-python-dotenv
-pytest
+# Direct dependencies, pinned to the versions the suite runs on. Refresh: update in a venv, run the tests, then
+# copy the versions from `pip freeze` for these names.
+sqlalchemy==2.1.4
+psycopg[binary]==3.3.6
+httpx==0.28.1
+anthropic==1.12.1
+pydantic==2.14.0
+tenacity==9.2.1
+python-dotenv==1.2.4
+pytest==9.1.1
