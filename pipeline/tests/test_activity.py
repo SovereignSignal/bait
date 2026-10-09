@@ -45,7 +45,7 @@ def _seed(conn):
     })
 
 
-def test_activity_aggregates_top_wallets_and_skips_wash(conn, ctx):
+def test_activity_aggregates_top_wallets_and_fetches_wash_candidates_last(conn, ctx):
     http = _seed(conn)
     ctx.extras["keyless_http"] = http
     # stale rows beyond retention are pruned
@@ -53,7 +53,7 @@ def test_activity_aggregates_top_wallets_and_skips_wash(conn, ctx):
                                                        address=_w(1), volume_usd=1.0, trades=1, buys=1, sells=0))
     out = activity.run(conn, ctx)
     assert out["errors"] == 0 and out["pools"] == 2 and out["pools_fetched"] == 2 and out["pruned"] == 1
-    assert not any(POOL_W in p for p in http.paths)
+    assert out["wash_pools"] == 1 and http.paths[-1].endswith(f"{POOL_W}/trades")   # the 24h-wash candidate, after the rest
     assert http.paths[0].endswith(f"{POOL_A}/trades")       # highest volume first
 
     rows = conn.execute(sa.select(db.pool_top_wallets).where(db.pool_top_wallets.c.pool_id == POOL_A)
@@ -75,6 +75,7 @@ def test_activity_aggregates_top_wallets_and_skips_wash(conn, ctx):
 def test_activity_pool_limit(conn, ctx, monkeypatch):
     ctx.extras["keyless_http"] = _seed(conn)
     monkeypatch.setenv("ACTIVITY_POOLS", "1")
+    monkeypatch.setenv("ACTIVITY_WASH_POOLS", "0")
     out = activity.run(conn, ctx)
     assert out["pools"] == 1 and len(ctx.extras["keyless_http"].paths) == 1
 
@@ -94,7 +95,8 @@ def test_additive_migration_on_sqlite_is_idempotent(tmp_path):
     db.create_all(e)                                     # leaves the existing table alone
     added = db.add_missing_columns(e)
     assert added == ["pool_stats.buys_24h", "pool_stats.sells_24h", "pool_stats.buyers_24h", "pool_stats.sellers_24h",
-                     "pool_stats.vol_source"]                                     # 0010
+                     "pool_stats.vol_source",                                      # 0010
+                     "pool_stats.vol_24h_rolling", "pool_stats.wallets_24h", "pool_stats.window_end"]   # 0012
     assert db.add_missing_columns(e) == []               # second run is a no-op
     cols = {c["name"] for c in sa.inspect(e).get_columns("pool_stats")}
     assert {"buys_24h", "sells_24h", "buyers_24h", "sellers_24h", "vol_24h"} <= cols
@@ -108,3 +110,16 @@ def test_additive_migration_on_sqlite_is_idempotent(tmp_path):
     assert db.add_missing_columns(e, [("nope", "x", "integer")]) == []
 
 
+
+
+def test_activity_records_distinct_wallets_only_when_it_saw_every_trade_of_the_day(conn, ctx):
+    http = _seed(conn)
+    ctx.extras["keyless_http"] = http
+    out = activity.run(conn, ctx)
+    st = {r.pool_id: r.wallets_24h for r in conn.execute(sa.select(db.pool_stats))}
+    assert (st[POOL_A], st[POOL_B], st[POOL_W], out["wallets_distinct"]) == (25, 3, None, 2)   # A: 26 trades, 25 wallets
+    http.responses[f"/networks/base/pools/{POOL_A}/trades"] = {"data": [
+        _trade(_w(i % 7), 10, "buy", "2026-10-06T01:00:00Z") for i in range(300)]}             # the cap: maybe not the whole day
+    conn.execute(sa.update(db.pool_stats).values(wallets_24h=None))
+    activity.run(conn, ctx)
+    assert conn.execute(sa.select(db.pool_stats.c.wallets_24h).where(db.pool_stats.c.pool_id == POOL_A)).scalar() is None

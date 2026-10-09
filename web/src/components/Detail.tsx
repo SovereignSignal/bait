@@ -2,7 +2,7 @@
 import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { weekDelta } from "@/lib/feed";
 import { ago, age, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd } from "@/lib/format";
-import { categoryLine, chainNames } from "@/lib/present";
+import { categoryLine, chainNames, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
 import { LiveTrades } from "./LiveTrades";
@@ -27,18 +27,24 @@ function poolPair(x: PoolView): string {
 export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
   const d = weekDelta(p.metrics);
   const u = p.usage;
-  const swaps = { k: "Swaps 24h", v: u.buys24h != null && u.sells24h != null ? u.buys24h + u.sells24h : u.tx24h };
-  const stats: Array<{ k: string; v: string; cls?: string }> = [
+  const stats: Array<{ k: string; v: string; cls?: string; title?: string }> = [
     { k: "7d volume", v: usd(p.metrics.vol7d) },
     { k: "vs last week", v: d == null ? (p.isNew ? "new" : NONE) : fmtDelta(d), cls: d == null ? undefined : d >= 0 ? "up" : "down" },
     { k: "TVL", v: usd(p.metrics.tvlUsd) },
     { k: "Pools", v: int(p.metrics.poolsN || p.pools.length) },
-    { k: "Wallets 24h", v: int(u.wallets24h) },
-    { k: swaps.k, v: int(swaps.v) },
+    {
+      k: "Wallets 24h",
+      v: walletsText(u.wallets24h, u.walletsExact),
+      title: u.walletsExact === false ? "Upper bound: buyers + sellers per pool, so a wallet that bought and sold counts twice." : undefined,
+    },
+    // the closed UTC day, from score: no longer GeckoTerminal's rolling buys + sells
+    { k: "Swaps 24h", v: int(u.tx24h) },
   ];
   const busy = busiestPool(p);
+  const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
     p.whyBlurb ||
+    (p.metrics.vol7d == null ? `The last 7 days' volume through this hook's ${pools} is unknown.` : null) ||
     `${usd(p.metrics.vol7d)} traded through this hook in the last 7 days across ${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}${
       d != null ? `, ${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))}% on the week` : ""
     }.`;
@@ -55,6 +61,11 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
             </div>
             {p.whatLine && <p className={s.what}>{p.whatLine}</p>}
             <div className={s.badges} data-testid="badges">
+              {p.isWash && (
+                <span className="b b-r" title={washLine(p.washReason)}>
+                  Wash-like volume
+                </span>
+              )}
               {p.hooklisted ? (
                 <span className="b b-v" title="Listed in the Uniswap hooklist, the public registry of v4 hooks.">✓ Hooklist</span>
               ) : (
@@ -91,7 +102,7 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
         </div>
         <div className={s.stats}>
           {stats.map((x) => (
-            <div key={x.k} className={s.stat}>
+            <div key={x.k} className={s.stat} title={x.title}>
               <div className={s.k}>{x.k}</div>
               <div className={`${s.val} num ${x.cls ?? ""}`}>{x.v}</div>
             </div>
@@ -198,7 +209,7 @@ function Bars({ series }: { series: (number | null)[] }) {
             rx={3}
             fill={i === n - 1 ? "#ff007a" : "rgba(255,0,122,.42)"}
           >
-            <title>{`${n - 1 - i === 0 ? "Today" : `${n - 1 - i}d ago`}: ${usd(v)}`}</title>
+            <title>{`${n - 1 - i === 0 ? "Yesterday" : `${n - i}d ago`}: ${usd(v)}`}</title>
           </rect>
         );
       })}
@@ -206,7 +217,7 @@ function Bars({ series }: { series: (number | null)[] }) {
     <div className={s.axis}>
       <span>{n}d ago</span>
       <span>peak {usd(max)}</span>
-      <span>today</span>
+      <span>yesterday</span>
     </div>
     </>
   );
@@ -240,7 +251,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
                 <td>{CHAINS[x.chainId]?.name ?? x.chainId}</td>
                 <td className="num">{usd(x.tvlUsd)}</td>
                 <td className="num">{usd(x.vol24h)}</td>
-                <td className="num">{int(x.wallets24h)}</td>
+                <td className="num">{walletsText(x.wallets24h, x.walletsExact)}</td>
                 <td>{feeLabel(x.fee)}</td>
               </tr>
             ))}
@@ -258,7 +269,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
               · {CHAINS[x.chainId]?.name ?? x.chainId} · {feeLabel(x.fee)}
             </span>
             <div className={`${s.stackSub} num`}>
-              TVL {usd(x.tvlUsd)} · 24h {usd(x.vol24h)} · {int(x.wallets24h)} wallets
+              TVL {usd(x.tvlUsd)} · 24h {usd(x.vol24h)} · {walletsText(x.wallets24h, x.walletsExact)} wallets
             </div>
           </li>
         ))}
@@ -277,6 +288,7 @@ type Ev = { cls: string; label: string; text: string; at?: string };
 /** The mock's derived events: the fallback when live trades are empty, and context under them. */
 function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
   const out: Ev[] = [];
+  if (p.isWash) out.push({ cls: "b-r", label: "Wash-like", text: washLine(p.washReason) });
   for (const x of p.pools.slice(0, 20)) {
     if (x.createdAt && (now - Date.parse(x.createdAt)) / DAY <= 14) {
       out.push({ cls: "b-p", label: "New pool", text: `${poolPair(x)} on ${CHAINS[x.chainId]?.name ?? x.chainId}`, at: x.createdAt });
@@ -294,7 +306,7 @@ function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
     out.push({
       cls: "b-n",
       label: "Top pool",
-      text: `${poolPair(busy)}: ${usd(busy.vol24h)}${busy.wallets24h != null ? ` from ${int(busy.wallets24h)} wallets` : ""} in 24h`,
+      text: `${poolPair(busy)}: ${usd(busy.vol24h)}${busy.wallets24h != null ? ` from ${walletsText(busy.wallets24h, busy.walletsExact)} wallets` : ""} in 24h`,
     });
   }
   if (p.upgradeable) out.push({ cls: "b-a", label: "Upgradeable", text: "The hook owner can change its code; read it before you trade." });

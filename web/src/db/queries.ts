@@ -18,7 +18,7 @@ import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
-import { toRow } from "@/lib/present";
+import { digestItem, toRow } from "@/lib/present";
 import type {
   Category,
   ChainId,
@@ -43,7 +43,7 @@ const SMART_MONEY_MARKERS = ["smart money", "fund", "smart trader", "smart lp", 
 
 const KNOWN_CHAINS = sql.raw(`array[${Object.keys(CHAINS).join(",")}]::int[]`);
 
-const EMPTY_USAGE: Usage = { vol24h: null, tx24h: null, wallets24h: null, buys24h: null, sells24h: null, buyers24h: null, sellers24h: null, smartWallets: null };
+const EMPTY_USAGE: Usage = { vol24h: null, vol24hRolling: null, tx24h: null, wallets24h: null, walletsExact: null, buys24h: null, sells24h: null, buyers24h: null, sellers24h: null, smartWallets: null };
 
 // ---------- derivation shared by both sources ----------
 
@@ -105,7 +105,7 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
     const rows = await cached(`project:${slug}`, () => loadFromDb(db, { slug, full: true }), degradedTtl);
     detail = rows[0] ?? null;
   }
-  if (!detail || detail.isSpam) return null;
+  if (!detail || detail.isSpam) return null; // spam 404s; a wash-like project keeps its page (Detail shows why)
   const rows = await getRows();
   const rank = applyTab(rows, { tab: "trending" }).find((x) => x.slug === slug)?.rank;
   return { ...detail, rank };
@@ -157,8 +157,8 @@ export async function getAllSlugs(): Promise<string[]> {
 
 /** Usage leaderboards across hook projects. */
 export async function getLeaders(n = 10): Promise<LeadersView> {
-  const all = (await loadAll()).filter((p) => !p.isSpam);
-  const active = all.filter((p) => p.metrics.vol7d > 0);
+  const all = (await loadAll()).filter((p) => !p.isSpam && !p.isWash); // wash-like volume never ranks
+  const active = all.filter((p) => (p.metrics.vol7d ?? 0) > 0);
   const board = (value: (p: ProjectDetail) => number | null): LeaderEntry[] =>
     all
       .map((p) => ({ p, v: value(p) }))
@@ -169,7 +169,7 @@ export async function getLeaders(n = 10): Promise<LeadersView> {
   const walletKnown = all.filter((p) => p.usage.wallets24h != null);
   return {
     totals: {
-      vol7d: active.reduce((s, p) => s + p.metrics.vol7d, 0),
+      vol7d: active.reduce((s, p) => s + (p.metrics.vol7d ?? 0), 0),
       wallets24h: walletKnown.length ? walletKnown.reduce((s, p) => s + (p.usage.wallets24h ?? 0), 0) : null,
       projects: active.length,
       chains: new Set(active.flatMap((p) => p.chains)).size,
@@ -279,13 +279,7 @@ async function loadAll(): Promise<ProjectDetail[]> {
 function toDigest(row: typeof t.digests.$inferSelect): DigestView {
   const week = String(row.weekOf);
   const b = row.body;
-  const card = (kind: DigestItem["kind"]) => (c: t.DigestCard): DigestItem => ({
-    slug: c.slug,
-    name: c.name,
-    kind,
-    line: c.what_line ?? "",
-    vol7d: c.vol_7d ?? 0,
-  });
+  const card = (kind: DigestItem["kind"]) => (c: t.DigestCard): DigestItem => digestItem(c, kind);
   const fresh = (b.new ?? []).map(card("new"));
   const hot = (b.trending ?? []).map(card("trending"));
   const totals = b.totals ?? { projects: 0, tvl_usd: 0, vol_7d: 0 };
@@ -341,8 +335,7 @@ type TopPoolRow = {
   project_id: number; pool_id: string; chain_id: number; hook_address: string;
   token0_symbol: string | null; token1_symbol: string | null; token0_id: string | null; token1_id: string | null;
 };
-type DayUsageRow = { project_id: number; vol24: unknown; tx24: unknown };
-type StatsUsageRow = { project_id: number; wallets: unknown; buys: unknown; sells: unknown; buyers: unknown; sellers: unknown };
+type StatsUsageRow = { project_id: number; rolling: unknown; buys: unknown; sells: unknown; buyers: unknown; sellers: unknown };
 type SmartRow = { project_id: number; smart: unknown };
 
 /**
@@ -359,9 +352,11 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
   if (!projectRows.length) return [];
   const ids = projectRows.map((p) => p.id);
   const idArray = sql.raw(`array[${ids.join(",")}]::int[]`);
-  const prev1 = latest ? shiftDay(latest, -1) : null;
+  // The run on `latest` reports closed UTC days through `end` (project_daily.window_end); the snapshot row for `latest` is
+  // the running day and is never read.
+  const end = latest ? shiftDay(latest, -1) : null;
 
-  const [daily, hookRows, signalRows, receiptRows, topPools, dayUsage, statsUsage, smartUsage] = await Promise.all([
+  const [daily, hookRows, signalRows, receiptRows, topPools, statsUsage, smartUsage] = await Promise.all([
     latest ? db.select().from(t.projectDaily).where(and(eq(t.projectDaily.day, latest), inArray(t.projectDaily.projectId, ids))) : [],
     db.select().from(t.hooks).where(inArray(t.hooks.projectId, ids)),
     db.select().from(t.signals).where(inArray(t.signals.projectId, ids)),
@@ -373,45 +368,25 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
           .where(inArray(t.receipts.projectId, ids))
           .orderBy(sql`${t.receipts.publishedAt} desc nulls last`)
       : [],
-    latest
+    end
       ? db.execute<TopPoolRow>(sql`
           select distinct on (h.project_id) h.project_id, p.pool_id, p.chain_id, p.hook_address,
                  p.token0->>'symbol' as token0_symbol, p.token1->>'symbol' as token1_symbol,
                  p.token0->>'id' as token0_id, p.token1->>'id' as token1_id
           from ${t.pools} p
           join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
-          join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${latest}
+          join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${end}
           where h.project_id = any(${idArray}) and p.chain_id = any(${KNOWN_CHAINS})
           order by h.project_id, s.tvl_usd desc nulls last`)
       : [],
-    // 24h volume and txs from consecutive daily snapshots.
-    latest && prev1
-      ? safe(
-          "usage:snapshots",
-          () =>
-            db.execute<DayUsageRow>(sql`
-              select h.project_id,
-                     -- a NULL cumulative volume (unknown on-chain volume) stays NULL; greatest(NULL, 0) would be 0
-                     sum(case when s.volume_usd_cum is null or s1.volume_usd_cum is null then null
-                              else greatest(s.volume_usd_cum - s1.volume_usd_cum, 0) end)::float8 as vol24,
-                     sum(greatest(s.tx_count_cum - s1.tx_count_cum, 0))::float8 as tx24
-              from ${t.pools} p
-              join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
-              join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${latest}
-              join ${t.poolSnapshots} s1 on s1.pool_id = p.pool_id and s1.chain_id = p.chain_id and s1.day = ${prev1}
-              where h.project_id = any(${idArray})
-              group by h.project_id`),
-          null,
-        )
-      : null,
-    // Wallets and buy/sell counts, latest pool_stats day. Table may be missing: null, not a failure.
+    // Rolling 24h volume and buy/sell counts, latest pool_stats day. Table may be missing: null, not a failure.
     safe(
       "usage:pool_stats",
       () =>
         db.execute<StatsUsageRow>(sql`
           with d as (select max(day) as day from ${t.poolStats})
           select h.project_id,
-                 sum(ps.traders_24h)::float8 as wallets,
+                 sum(ps.vol_24h_rolling)::float8 as rolling,
                  sum(ps.buys_24h)::float8 as buys,
                  sum(ps.sells_24h)::float8 as sells,
                  sum(ps.buyers_24h)::float8 as buyers,
@@ -447,7 +422,6 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
   const receiptsBy = groupBy(receiptRows, (r) => r.projectId);
   const topBy = new Map(rowsOf<TopPoolRow>(topPools).map((r) => [Number(r.project_id), r]));
   const sigBy = new Map(signalRows.map((s) => [`${s.projectId}:${s.kind}`, s.value ?? {}]));
-  const dayBy = dayUsage ? new Map(rowsOf<DayUsageRow>(dayUsage).map((r) => [Number(r.project_id), r])) : null;
   const statsBy = statsUsage ? new Map(rowsOf<StatsUsageRow>(statsUsage).map((r) => [Number(r.project_id), r])) : null;
   const smartBy = smartUsage ? new Map(rowsOf<SmartRow>(smartUsage).map((r) => [Number(r.project_id), num(r.smart) ?? 0])) : null;
 
@@ -466,7 +440,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
   }
 
   const out: Loaded = [];
-  out.degraded = (latest != null && prev1 != null && dayUsage === null) || statsUsage === null || smartUsage === null;
+  out.degraded = statsUsage === null || smartUsage === null;
   for (const p of projectRows) {
     const d = dailyBy.get(p.id);
     // Registry hooks span ~22 chains; Bait covers the ten in CHAINS. Unknown ids would crash every CHAINS[...] lookup.
@@ -480,7 +454,6 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
     const recs = (receiptsBy.get(p.id) ?? []).filter((r) => receiptRelevant(p.name, r.title ?? "", r.source ?? "")).map(toReceipt);
     const auditUrls = new Set(hs.map((h) => h.auditUrl).filter(Boolean));
     if (enrichment.parallel?.audit_url) auditUrls.add(enrichment.parallel.audit_url);
-    const du = dayBy?.get(p.id);
     const su = statsBy?.get(p.id);
 
     let pools: PoolView[] = [];
@@ -496,9 +469,12 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
 
     const usage: Usage = {
       ...EMPTY_USAGE,
-      vol24h: du ? num(du.vol24) : null,
-      tx24h: du ? num(du.tx24) : null,
-      wallets24h: su ? num(su.wallets) : null,
+      // the closed day `end`, from score: one definition for the list, the page, the blurb and the digest
+      vol24h: d?.vol24h ?? null,
+      tx24h: d?.swaps24h ?? null,
+      wallets24h: d?.wallets24h ?? null,
+      walletsExact: d?.walletsExact ?? null,
+      vol24hRolling: su ? num(su.rolling) : null,
       buys24h: su ? num(su.buys) : null,
       sells24h: su ? num(su.sells) : null,
       buyers24h: su ? num(su.buyers) : null,
@@ -527,9 +503,10 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
         upgradeable: hs.some((h) => !!h.properties.upgradeable),
         metrics: {
           tvlUsd: d?.tvlUsd ?? 0,
-          vol7d: d?.vol7d ?? 0,
-          vol7dPrev: d?.vol7dPrev ?? 0,
-          swaps7d: d?.swaps7d ?? 0,
+          // NULL = every pool's volume unknown (score): rendered as unknown, never $0
+          vol7d: d ? d.vol7d : 0,
+          vol7dPrev: d ? d.vol7dPrev : 0,
+          swaps7d: d?.swaps7d ?? null,
           poolsN: d?.poolsN ?? 0,
           hooksN: hs.length,
         },
@@ -554,6 +531,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
         usage,
         isNew: d?.isNew ?? false,
         isSpam: d?.isSpam ?? true, // no project_daily row yet = nothing to show
+        isWash: d?.isWash ?? false,
+        washReason: d?.washReason ?? null,
         scoreTrending: d?.scoreTrending ?? 0,
         color: enrichment.color ?? colorFor(p.id),
         hooks: hs,
@@ -580,25 +559,35 @@ type PoolRow = {
   tx7d: unknown;
   vol24: unknown;
 };
-type PoolStatRow = { pool_id: string; chain_id: number; vol_24h: unknown; traders_24h: unknown };
+type PoolStatRow = { pool_id: string; chain_id: number; wallets_24h: unknown; traders_24h: unknown };
 
 async function loadPools(db: Db, projectId: number, latest: string | null): Promise<PoolView[]> {
   if (!latest) return [];
-  const prev7 = shiftDay(latest, -7);
-  const prev1 = shiftDay(latest, -1);
+  const end = shiftDay(latest, -1);
+  const from7 = shiftDay(end, -6);
   const [rows, stats] = await Promise.all([
     db.execute<PoolRow>(sql`
       select p.pool_id, p.chain_id, p.hook_address, p.token0, p.token1, p.fee, p.tick_spacing, p.created_at,
              s.tvl_usd,
-             -- no snapshot reads as 0 (as before); a snapshot with NULL volume (unknown on-chain volume) stays NULL
-             case when s.pool_id is null then 0 else s.volume_usd_cum - coalesce(s7.volume_usd_cum, 0) end as vol7d,
-             s.tx_count_cum - coalesce(s7.tx_count_cum, 0) as tx7d,
-             s.volume_usd_cum - s1.volume_usd_cum as vol24
+             -- closed UTC days: 7d = from7..end, 24h = end. No row reads as 0; NULL cumulative (unknown on-chain volume) stays NULL
+             case when s.pool_id is not null and s.volume_usd_cum is null then null else coalesce(w.vol7d, 0) end as vol7d,
+             w.tx7d,
+             -- as score: a day without a row is $0, a NULL cumulative (unknown on-chain volume) is unknown
+             case when s.pool_id is null then 0 when s.volume_usd_cum is null then null else coalesce(s.volume_usd_day, 0) end as vol24
       from ${t.pools} p
       join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
-      left join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${latest}
-      left join ${t.poolSnapshots} s7 on s7.pool_id = p.pool_id and s7.chain_id = p.chain_id and s7.day = ${prev7}
-      left join ${t.poolSnapshots} s1 on s1.pool_id = p.pool_id and s1.chain_id = p.chain_id and s1.day = ${prev1}
+      left join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${end}
+      left join lateral (
+        select sum(x.volume_usd_day) as vol7d,
+               -- as score: a 7-day count only when every day is known; days before the pool existed count as 0 and a
+               -- pool with no volume in the window adds 0
+               case when coalesce(sum(x.volume_usd_day), 0) = 0 then coalesce(sum(x.tx_count_day), 0)
+                    when count(x.tx_count_day)
+                         + greatest(0, least(7, coalesce((p.created_at at time zone 'UTC')::date - ${from7}::date, 0))) >= 7
+                    then sum(x.tx_count_day) end as tx7d
+        from ${t.poolSnapshots} x
+        where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${from7} and ${end}
+      ) w on true
       where h.project_id = ${projectId} and p.chain_id = any(${KNOWN_CHAINS})
       order by s.tvl_usd desc nulls last
       limit 50`),
@@ -606,7 +595,7 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
       "pools:pool_stats",
       () =>
         db.execute<PoolStatRow>(sql`
-          select ps.pool_id, ps.chain_id, ps.vol_24h, ps.traders_24h
+          select ps.pool_id, ps.chain_id, ps.wallets_24h, ps.traders_24h
           from ${t.poolStats} ps
           join ${t.pools} p on p.pool_id = ps.pool_id and p.chain_id = ps.chain_id
           join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
@@ -619,7 +608,7 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
     .filter((r) => knownChain(Number(r.chain_id)))
     .map((r) => {
       const st = statBy.get(`${r.chain_id}:${r.pool_id}`);
-      const snapVol = num(r.vol24);
+      const vol24 = num(r.vol24);
       const vol7 = num(r.vol7d);
       return {
         poolId: String(r.pool_id),
@@ -634,9 +623,11 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         createdAt: r.created_at ? new Date(r.created_at).toISOString() : "",
         tvlUsd: num(r.tvl_usd) ?? 0,
         vol7d: vol7 == null ? null : Math.max(0, vol7),
-        tx7d: Math.max(0, num(r.tx7d) ?? 0),
-        vol24h: snapVol != null ? Math.max(0, snapVol) : st ? num(st.vol_24h) : null,
-        wallets24h: st ? num(st.traders_24h) : null,
+        tx7d: num(r.tx7d),
+        vol24h: vol24 == null ? null : Math.max(0, vol24),
+        // distinct when pool_stats has it (on-chain, or a trade fetch that saw the whole day); else buyers + sellers
+        wallets24h: st ? (num(st.wallets_24h) ?? num(st.traders_24h)) : null,
+        walletsExact: st != null && num(st.wallets_24h) != null,
         eligibility: "unknown" as const, // derive() evaluates it against the hook and this pool's fee
       };
     });
@@ -654,29 +645,26 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
   }));
 }
 
-/** Daily volume for the last 14 days from cumulative snapshots, oldest first. Days without snapshots are 0; a day whose
- * volume is unknown in every pool (NULL cumulative volume) is null, a gap, never 0. */
+/** Daily volume for the 14 closed UTC days ending the day before `latest`, oldest first. Days without snapshots are 0; a
+ * day whose volume is unknown in every pool (NULL daily volume) is null, a gap, never 0. */
 async function loadSeries(db: Db, projectId: number, latest: string | null): Promise<(number | null)[]> {
   if (!latest) return [];
-  const from = shiftDay(latest, -14);
+  const end = shiftDay(latest, -1);
+  const from = shiftDay(end, -13);
   const rows = await db.execute<{ day: string; v: unknown }>(sql`
-    select d.day::text as day, sum(case when d.v is null then null else greatest(d.v, 0) end)::float8 as v
-    from (
-      select s.day, s.volume_usd_cum - lag(s.volume_usd_cum) over w as v, lag(s.day) over w is null as first
-      from ${t.poolSnapshots} s
-      join ${t.pools} p on p.pool_id = s.pool_id and p.chain_id = s.chain_id
-      join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
-      where h.project_id = ${projectId} and s.day >= ${from} and s.day <= ${latest}
-      window w as (partition by s.pool_id, s.chain_id order by s.day)
-    ) d
-    where not d.first
-    group by d.day
-    order by d.day`);
+    select s.day::text as day,
+           sum(case when s.volume_usd_day is null then null else greatest(s.volume_usd_day, 0) end)::float8 as v
+    from ${t.poolSnapshots} s
+    join ${t.pools} p on p.pool_id = s.pool_id and p.chain_id = s.chain_id
+    join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
+    where h.project_id = ${projectId} and s.day >= ${from} and s.day <= ${end}
+    group by s.day
+    order by s.day`);
   const byDay = new Map(rowsOf<{ day: string; v: unknown }>(rows).map((r) => [String(r.day).slice(0, 10), num(r.v)]));
   if (byDay.size < 2) return [];
   const out: (number | null)[] = [];
   for (let i = 13; i >= 0; i--) {
-    const day = shiftDay(latest, -i);
+    const day = shiftDay(end, -i);
     out.push(byDay.has(day) ? (byDay.get(day) ?? null) : 0);
   }
   return out;

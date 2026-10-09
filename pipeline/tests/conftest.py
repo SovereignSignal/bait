@@ -53,8 +53,9 @@ def insert_pool(conn, pool_id, chain_id, hook, created):
     conn.execute(sa.insert(db.pools).values(pool_id=pool_id, chain_id=chain_id, hook_address=hook, created_at=created))
 
 
-def insert_snap(conn, pool_id, chain_id, day, tvl, vol, tx):
-    conn.execute(sa.insert(db.pool_snapshots).values(pool_id=pool_id, chain_id=chain_id, day=day, tvl_usd=tvl, volume_usd_cum=vol, tx_count_cum=tx))
+def insert_snap(conn, pool_id, chain_id, day, tvl, vol, tx, vol_day=None, tx_day=None):
+    conn.execute(sa.insert(db.pool_snapshots).values(pool_id=pool_id, chain_id=chain_id, day=day, tvl_usd=tvl, volume_usd_cum=vol,
+                                                     tx_count_cum=tx, volume_usd_day=vol_day, tx_count_day=tx_day))
 
 
 @pytest.fixture(autouse=True)

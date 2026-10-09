@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
-import { applyTab, availableCategories, emptyCopy, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
+import { applyTab, availableCategories, byVol7d, emptyCopy, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
 import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
 import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
@@ -22,6 +22,12 @@ export function useFeedQuery(): FeedQuery {
 }
 
 function Delta({ r }: { r: RowView }) {
+  if (r.isWash)
+    return (
+      <span className="b b-r" title="Wash-like volume: listed here, never ranked.">
+        Wash
+      </span>
+    );
   if (r.isNew) return <span className="b b-p">New</span>;
   const d = deltaText(r);
   if (!d) return <span className="mut3">{NONE}</span>;
@@ -48,7 +54,7 @@ function ProjectListView({ rows, selected, view, now, query, launches, launchesN
   const searching = t.q.trim().length > 0;
   // Search spans every project (chain / category filters still apply), not just the current tab.
   let list: Array<RowView & { rank?: number }> = watching
-    ? rows.filter((r) => t.watchlist.includes(r.slug)).sort((a, b) => b.vol7d - a.vol7d)
+    ? rows.filter((r) => t.watchlist.includes(r.slug)).sort(byVol7d)
     : applyTab(rows, searching ? { ...query, tab: "all" } : query);
   list = searchRows(list, t.q);
   const topHref = searching && list[0] ? projectHref(list[0].slug, query) : null;

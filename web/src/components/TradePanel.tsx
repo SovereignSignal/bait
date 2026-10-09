@@ -1,7 +1,7 @@
 // Right column: pool action card (links out to Uniswap), buys vs sells, hook facts.
 import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
-import { pace } from "@/lib/present";
+import { pace, walletsText } from "@/lib/present";
 import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
 import { WatchStar } from "./WatchStar";
@@ -54,7 +54,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           return { ok, reason, label: ok ? "Swap on Uniswap" : "View pool on Uniswap" };
         })()
       : null;
-  const share = pace(p.usage.vol24h, p.metrics.vol7d);
+  const share = pace(p.usage.vol24hRolling, p.metrics.vol7d);
   const u = p.usage;
   const hasBs = u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0;
   const buyPct = hasBs ? Math.round(((u.buys24h ?? 0) / ((u.buys24h ?? 0) + (u.sells24h ?? 0))) * 100) : 0;
@@ -101,7 +101,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           </div>
           <div className={s.bsSub}>
             <span className="num">{u.buyers24h != null ? `${int(u.buyers24h)} buyers` : ""}</span>
-            <span className="num">{u.wallets24h != null ? `${int(u.wallets24h)} wallets` : ""}</span>
+            <span className="num">{u.wallets24h != null ? `${walletsText(u.wallets24h, u.walletsExact)} wallets` : ""}</span>
             <span className="num">{u.sellers24h != null ? `${int(u.sellers24h)} sellers` : ""}</span>
           </div>
         </div>
@@ -127,8 +127,8 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           <b>{p.flagLabels.join(", ") || "none listed"}</b>
           <span>Hooks in project</span>
           <b className="num">{int(p.metrics.hooksN)}</b>
-          <span>Today vs daily avg</span>
-          <b className="num">{p.usage.vol24h == null ? NONE : `${share}%`}</b>
+          <span>Last 24h vs daily avg</span>
+          <b className="num">{p.usage.vol24hRolling == null ? NONE : `${share}%`}</b>
         </div>
         <div className={s.bar}>
           <i className={share >= 100 ? s.full : undefined} style={{ width: `${share}%` }} />

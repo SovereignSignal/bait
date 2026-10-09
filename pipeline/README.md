@@ -46,12 +46,12 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 | # | step | reads | writes | needs |
 |---|---|---|---|---|
 | 1 | ingest | hooklist.json (GitHub raw or `--hooklist-file`) | hooks (first_seen_at set once) | nothing |
-| 2 | snapshot | v4 subgraph per chain, `pools(where hooks != 0x0, id_gt)` paginated by 1000; keyless GeckoTerminal for the rest | pools, pool_snapshots(day), pool_stats(day) incl. buys/sells/buyers/sellers_24h | GRAPH_API_KEY, else keyless |
-| 3 | activity | pool_stats(day) ⨝ pools, wash excluded, top `ACTIVITY_POOLS` by 24h vol; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept) | keyless |
+| 2 | snapshot | v4 subgraph per chain, `pools(where hooks != 0x0, id_gt)` paginated by 1000; keyless GeckoTerminal for the rest | pools, pool_snapshots per UTC day (candles; pools past the OHLCV cap only yesterday, estimated; subgraph at day - 1), pool_stats(day) incl. buys/sells/buyers/sellers_24h and vol_24h_rolling | GRAPH_API_KEY, else keyless |
+| 3 | activity | pool_stats(day) ⨝ pools, top `ACTIVITY_POOLS` non-wash pools by 24h vol plus up to `ACTIVITY_WASH_POOLS` 24h-wash candidates; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept); pool_stats.wallets_24h when the fetch saw every trade of the day | keyless |
 | 3b | onchain | v4_pools, pool_daily_onchain, indexer_state (from `python -m bait.indexer`) | hooks (unlisted, capped), pools, pool_snapshots, pool_stats(day) overriding keyless usage | nothing; no-op when the indexer tables are empty |
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
 | 5 | enrich | projects with enriched_at null | what_line, category, website/github/x_handle, enrichment | ANTHROPIC_API_KEY; optional PARALLEL_API_KEY, Blockscout |
-| 6 | score | pool_snapshots (day-14..day), pool_stats(day) | project_daily(day) | nothing |
+| 6 | score | pool_snapshots (window_end-13..window_end), pool_stats(day), pool_top_wallets(day), pool_daily_onchain / pool_wallet_day (ready chains) | project_daily(day) incl. window_end, vol_24h, swaps, wallets, is_wash / wash_reason | nothing |
 | 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | receipts, signals, why_blurb | optional EXA_API_KEY, GITHUB_TOKEN, ANTHROPIC_API_KEY |
 | 8 | radar | Uniswap/hooklist issues + PRs (30d), GitHub repo/code search (30d), Exa (60d) classified by Claude Haiku | radar_items (one row per URL, 90 days kept) | optional GITHUB_TOKEN (else anonymous unless KEYLESS=0), EXA_API_KEY + ANTHROPIC_API_KEY |
 | 9 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
@@ -119,10 +119,12 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
    only when a value changed. token0/token1 are set on insert only, so GeckoTerminal/subgraph symbols survive; `created_at` =
    Initialize block time.
 3. Usage, only for chains whose `indexer_state.backfilled` is true and `updated_at` is within `ONCHAIN_MAX_STALE_HOURS`
-   (6) and `swap_block_time` has passed the end of the reference day (the 7-day wash rule uses the same chains): pools with `pool_daily_onchain` rows in day-14..day get a cumulative volume + swap-count series in
-   `pool_snapshots` (zero-seeded the day before, replacing the pool's older snapshots so one scale is used; TVL keeps the
-   latest GeckoTerminal/subgraph reserve, the indexer does not compute TVL) and `pool_stats(day)` `vol_24h` /
-   `traders_24h` from the last complete UTC day (buys/sells columns kept). `swaps_7d` for these pools is real swaps, not
+   (6) and `swap_block_time` has passed the end of the reference day (the 7-day wash rule uses the same chains): pools with `pool_daily_onchain` rows in day-14..day get one `pool_snapshots` row per day from `start`
+   (`volume_usd_day`, `tx_count_day`; the legacy cumulative columns zero-seeded the day before), replacing the pool's
+   rows from `start` on; older rows and the seed day's daily values are kept so a past day can be re-scored (TVL keeps the
+   latest GeckoTerminal/subgraph reserve, the indexer does not compute TVL), and `pool_stats(day)` `vol_24h` /
+   `traders_24h` / `wallets_24h` (distinct) from the last complete UTC day, `window_end` = its end (buys/sells columns
+   kept). Pools whose keyless series is kept still get exact `tx_count_day` from the indexer. `swaps_7d` for these pools is real swaps, not
    txCount. While a chain's on-chain history is shorter than the window, pools that keyless already snapshots keep their
    keyless series and only `pool_stats` is overridden. Custom-accounting hooks (address bit 3) and pool-days with more
    than half their swaps unpriced keep keyless volume; `pool_stats.vol_source` is `onchain`, `hook` or `unpriced`
@@ -139,12 +141,12 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
 4. `is_factory` when a project has more than 20 hooks.
 
 ### Scoring (step 6)
-Per pool, 7d deltas are `cum(day) - cum(baseline)` where baseline is the latest snapshot on/before
-day-7; a pool created inside the window has baseline 0; on cold start (pool older than the window but
-no snapshot that old) the earliest snapshot we hold is the baseline, so the first week never reports
-all-time volume as 7d volume. `score_trending = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)`
-when `vol_7d >= $10k`, else 0. `is_new`, `is_spam` as in DESIGN.md. `swaps_7d` is txCount delta
-(swaps + liquidity mods; label it "txs" in the UI).
+The run on day D reports closed UTC days: "24h" is D-1 (`window_end`), "7d" is D-7..D-1, "prev 7d" D-14..D-8.
+Volume windows sum `volume_usd_day` (a missing day adds $0; a pool whose cumulative is NULL is left out of every
+window). `swaps_24h` / `swaps_7d` are NULL unless every day is known. `wallets_24h` is distinct across the project's
+pools on ready chains (`wallets_exact`), else an upper bound. Wash is `is_wash` + `wash_reason` (DESIGN.md "Wash rules").
+`python -m bait run --steps score --day <d>` reads stored rows only and is repeatable. `score_trending = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)`
+when `vol_7d >= $10k`, else 0. `is_new`, `is_spam` as in DESIGN.md.
 
 ### Dev radar (step `radar`)
 What is being built before it has volume; the web app shows it at `/building`. Table `radar_items` (DDL
@@ -204,10 +206,12 @@ unused by the pipeline.
 Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_QUERIES` (6),
 `RADAR_CLASSIFY_MAX` (30); see "Dev radar" above.
 
-Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30),
+Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30), `ACTIVITY_WASH_POOLS` (24h-wash
+candidates fetched as well, for the symmetric-trader check; default 10),
 `ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 40), Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
-calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP`.
+calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP` (pools past it get yesterday's volume from the rolling 24h,
+marked `estimated`).
 
 Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs), `INDEXER_INTERVAL`
 (seconds per loop, 60), `INDEXER_CHAINS` (comma slugs or ids, default all 16), `INDEXER_MAX_PAGES` (40),
