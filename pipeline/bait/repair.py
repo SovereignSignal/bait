@@ -66,9 +66,12 @@ def backfill_window(today: date, since: int) -> tuple[date, date]:
 
 def replaceable(r) -> bool:
     """A row a candle may fill: written before 0012 with a known, non-zero cumulative (a zero cumulative is a seed: nothing
-    traded up to that day, so the day adds $0 either way; a NULL cumulative is volume the onchain step marked unknown), or
-    an estimate on a closed day (GeckoTerminal's rolling 24h, or a running-day candle that was never replaced)."""
-    return r.estimated is True or (r.volume_usd_day is None and r.volume_usd_cum is not None and r.volume_usd_cum > 0)
+    traded up to that day, so the day adds $0 either way), or an estimate on a closed day (GeckoTerminal's rolling 24h, or
+    a running-day candle that was never replaced). Never a row whose cumulative is NULL: volume the onchain step marked
+    unknown stays unknown."""
+    if r.volume_usd_cum is None:
+        return False
+    return r.estimated is True or (r.volume_usd_day is None and r.volume_usd_cum > 0)
 
 
 def backfill_targets(conn, today: date, since: int) -> tuple[list[tuple[str, int, float]], dict]:
@@ -77,7 +80,7 @@ def backfill_targets(conn, today: date, since: int) -> tuple[list[tuple[str, int
     returned."""
     start, end = backfill_window(today, since)
     c = pool_snapshots.c
-    cond = sa.or_(c.estimated.is_(True), sa.and_(c.volume_usd_day.is_(None), c.volume_usd_cum.is_not(None), c.volume_usd_cum > 0))
+    cond = sa.and_(c.volume_usd_cum.is_not(None), sa.or_(c.estimated.is_(True), sa.and_(c.volume_usd_day.is_(None), c.volume_usd_cum > 0)))
     need: dict[tuple[str, int], int] = {}
     for r in conn.execute(sa.select(c.pool_id, c.chain_id, sa.func.count().label("n"))
                           .where(c.day >= start, c.day <= end, cond).group_by(c.pool_id, c.chain_id)):
@@ -126,7 +129,8 @@ def fill_pool(conn, pool_id: str, chain_id: int, candles: list[tuple[int, float]
             v = vols.get(d, 0.0)
             r = rows.get(d)
             if r is not None:
-                if replaceable(r):
+                # before the first candle only a missing value becomes $0; an estimate there is kept
+                if replaceable(r) and (d >= first or r.volume_usd_day is None):
                     updates.append({"p": pool_id, "c": chain_id, "d": d, "v": v})
             elif v > 0:
                 earlier = [x for x in rows if x < d]
