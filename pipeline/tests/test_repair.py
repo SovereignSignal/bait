@@ -263,3 +263,21 @@ def test_prose_plan_shows_counts_worst_case_and_both_budget_options(engine):
     assert f"--max-usd {repair._cents_up(worst):.2f}" in text
     lines = repair.budget_lines(meter, 2.5, 1.02, "--max-usd")
     assert "SPEND_DAILY_USD=3.52" in lines[2] and "about 2 day(s)" in lines[1]
+
+
+# --- verify -------------------------------------------------------------------------------------
+def test_verify_prints_bait_and_geckoterminal_for_the_same_pools_and_closed_windows(engine):
+    end = DAY - D
+    with engine.begin() as c:
+        p = _project(c, "top", "0xht")
+        _pool(c, "0xpt", "0xht")
+        for i in range(14):
+            _snap(c, "0xpt", end - i * D, cum=1.0, vol_day=1_000.0, est=False)
+        _old_row(c, p, DAY, is_spam=False, score_trending=5.0, vol_24h=1_000.0, vol_7d=7_000.0, vol_7d_prev=7_000.0,
+                 window_end=end)
+    http = FakeGT({"0xpt": {end - i * D: (1_100.0 if i < 7 else 1_000.0) for i in range(14)} | {DAY: 99.0}})
+    lines = []
+    out = repair.verify(engine, _ctx(http), sample=5, per_project=3, seed=1, echo=lines.append)
+    assert out == {"day": DAY.isoformat(), "projects": 1, "pools": 1, "calls": 1, "failed": 0}
+    assert "| top | top trending | 1/1 | 24h | $1,000 | $1,000 | $1,100 | -9.1% |" in lines
+    assert "| top | top trending | 1/1 | prev 7d | $7,000 | $7,000 | $7,000 | +0.0% |" in lines
