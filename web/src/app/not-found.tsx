@@ -4,7 +4,7 @@ import { Footer } from "@/components/Footer";
 export default function NotFound() {
   return (
     <>
-      <main className="col">
+      <main className="col" id="main" tabIndex={-1}>
         <div className="lead">
           <h1>Not found</h1>
           <p>

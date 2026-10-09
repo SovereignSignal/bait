@@ -13,6 +13,16 @@ function isTerminalPath(p: string | null): boolean {
   return p === "/" || !!p?.startsWith("/p/");
 }
 
+/** First tab stop on every page; the target is each page's <main id="main">. */
+export function SkipLink() {
+  const pathname = usePathname();
+  return (
+    <a className="skip" href="#main">
+      {isTerminalPath(pathname) ? "Skip to feed" : "Skip to content"}
+    </a>
+  );
+}
+
 /** Brand, search (⌘K), chain select, Submit a hook. The same bar on every page. */
 export function TopBar({ chains }: { chains: ChainId[] }) {
   const t = useTerminal();
@@ -58,6 +68,13 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
           type="search"
           value={t.q}
           onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && t.topMatch) {
+              e.preventDefault();
+              router.push(t.topMatch);
+              input.current?.blur();
+            }
+          }}
           placeholder="Search hooks, projects or addresses"
           aria-label="Search hooks, projects or addresses"
           autoComplete="off"

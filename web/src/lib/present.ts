@@ -1,7 +1,7 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
 import { CHAINS } from "./chains";
 import { weekDelta } from "./feed";
-import { clip, fmtDelta } from "./format";
+import { clip, fmtDelta, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
@@ -68,4 +68,13 @@ export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
 export function pace(vol24h: number | null, vol7d: number): number {
   if (vol24h == null || vol7d <= 0) return 0;
   return Math.min(100, Math.round(((vol24h * 7) / vol7d) * 100));
+}
+
+export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev">, rank: number | undefined, m: { v: number; win: Win }): string {
+  const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
+  const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "24-hour"} volume`];
+  const d = weekDelta(r);
+  if (r.isNew) parts.push("new");
+  else if (d != null) parts.push(`${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))} percent`);
+  return parts.join(", ");
 }

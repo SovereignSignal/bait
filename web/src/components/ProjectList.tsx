@@ -2,11 +2,12 @@
 // The terminal's left column and the movers strip. Rows ship to the client once;
 // tab / category / chain come from the URL, search and watchlist from TerminalProvider.
 import Link from "next/link";
+import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
 import { applyTab, availableCategories, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
-import { categoryShort, chainNames, deltaText, rowMetric } from "@/lib/present";
+import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
 import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
 import { StarIcon } from "./Icons";
@@ -29,18 +30,18 @@ function Delta({ r }: { r: RowView }) {
 
 // ---------- list ----------
 
-type ListProps = { rows: RowView[]; selected?: string; now: number; launches?: LaunchView[]; launchesNow?: number };
+type ListProps = { rows: RowView[]; selected?: string; view: "list" | "detail"; now: number; launches?: LaunchView[]; launchesNow?: number };
 
 export function ProjectList(props: ListProps) {
   return <ProjectListView {...props} query={useFeedQuery()} />;
 }
 
 /** Suspense fallback on statically rendered pages (no URL yet): the default tab. */
-export function ProjectListFallback(props: { rows: RowView[]; selected?: string; now: number }) {
+export function ProjectListFallback(props: { rows: RowView[]; selected?: string; view: "list" | "detail"; now: number }) {
   return <ProjectListView {...props} query={DEFAULT_QUERY} />;
 }
 
-function ProjectListView({ rows, selected, now, query, launches, launchesNow }: ListProps & { query: FeedQuery }) {
+function ProjectListView({ rows, selected, view, now, query, launches, launchesNow }: ListProps & { query: FeedQuery }) {
   const t = useTerminal();
   const watching = t.watchOnly;
   const cats = availableCategories(rows);
@@ -50,17 +51,22 @@ function ProjectListView({ rows, selected, now, query, launches, launchesNow }: 
     ? rows.filter((r) => t.watchlist.includes(r.slug)).sort((a, b) => b.vol7d - a.vol7d)
     : applyTab(rows, searching ? { ...query, tab: "all" } : query);
   list = searchRows(list, t.q);
+  const topHref = searching && list[0] ? projectHref(list[0].slug, query) : null;
+  const { setTopMatch } = t;
+  useEffect(() => {
+    setTopMatch(topHref);
+    return () => setTopMatch(null);
+  }, [topHref, setTopMatch]);
   const tabForRows = watching || searching ? "all" : query.tab;
 
   return (
     <aside className={`panel ${s.list}`} aria-label="Hook projects">
-      <div className={s.tabs} role="tablist">
+      <nav className={s.tabs} aria-label="Feed views">
         {TABS.map(([id, label]) => (
           <Link
             key={id}
             className={s.tab}
-            role="tab"
-            aria-selected={!watching && !searching && query.tab === id}
+            aria-current={!watching && !searching && query.tab === id ? "page" : undefined}
             href={feedHref({ ...query, tab: id })}
             onClick={() => t.setWatchOnly(false)}
           >
@@ -77,7 +83,7 @@ function ProjectListView({ rows, selected, now, query, launches, launchesNow }: 
           <StarIcon size={14} filled={watching} />
           <span className="num">{t.watchlist.length}</span>
         </button>
-      </div>
+      </nav>
       {!watching && (
         <div className={s.cats} role="group" aria-label="Category">
           <Link className={s.chip} aria-current={!query.category} href={feedHref({ ...query, category: undefined })}>
@@ -109,11 +115,18 @@ function ProjectListView({ rows, selected, now, query, launches, launchesNow }: 
             const m = rowMetric(r, tabForRows === "new");
             const sub = r.whatLine || [r.category !== "other" ? categoryShort(r.category) : "", chainNames(r.chains)].filter(Boolean).join(" · ");
             return (
-              <Link key={r.slug} className={s.row} href={projectHref(r.slug, query)} aria-current={r.slug === selected ? "true" : undefined}>
+              <Link
+                key={r.slug}
+                className={s.row}
+                href={projectHref(r.slug, query)}
+                aria-label={rowLabel(r, tabForRows === "trending" ? (r.rank ?? i + 1) : undefined, m)}
+                data-selected={r.slug === selected ? "true" : undefined}
+                aria-current={r.slug === selected && view === "detail" ? "page" : undefined}
+              >
                 <ProjectAvatar name={r.name} color={r.color} chain={r.chains[0]} />
                 <div className={s.meta}>
                   <div className={s.n}>
-                    {tabForRows === "trending" && <span className={`${s.rank} num`}>{r.rank ?? i + 1}</span>}
+                    {tabForRows === "trending" && <span className={`${s.rank} num`} aria-hidden="true">{r.rank ?? i + 1}</span>}
                     {r.name}
                   </div>
                   <div className={s.s}>{sub}</div>
