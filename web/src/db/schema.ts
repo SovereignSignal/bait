@@ -43,6 +43,7 @@ export const hooks = pgTable(
     properties: jsonb("properties").$type<Record<string, unknown>>(),
     verifiedSource: boolean("verified_source"),
     auditUrl: text("audit_url"),
+    hooklisted: boolean("hooklisted"),
     deployer: text("deployer"),
     codeHash: text("code_hash"),
     projectId: integer("project_id").references(() => projects.id),

@@ -1,7 +1,7 @@
 // Tab / filter / ranking rules shared by the server (which project "/" selects)
 // and the client list (search, watchlist). Pure: no server-only imports.
 import { CHAINS, parseChainParam } from "./chains";
-import { CATEGORIES, isCategory, type Category, type ChainId, type FeedQuery, type RowView, type Tab } from "./types";
+import { CATEGORIES, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type RowView, type Tab } from "./types";
 
 export const TRENDING_TOP_N = 20;
 export const TRENDING_MIN_VOL = 10_000;
@@ -47,8 +47,9 @@ export function weekDelta(r: { vol7d: number; vol7dPrev: number }): number | nul
   return r.vol7dPrev >= 1000 ? (r.vol7d / r.vol7dPrev - 1) * 100 : null;
 }
 
-export function isVerified(r: { routable: boolean; audited: boolean }): boolean {
-  return r.audited || r.routable;
+/** The "In Uniswap app" tab: at least one pool our rule says the app will route to. Audit status is a separate badge. */
+export function inApp(r: { routable: Eligibility }): boolean {
+  return r.routable === "eligible";
 }
 
 type FeedItem = Pick<RowView, "slug" | "isNew" | "firstSeenAt" | "scoreTrending" | "vol7d" | "tvlUsd" | "chains" | "category" | "secondaryCategories" | "routable" | "audited">;
@@ -74,7 +75,7 @@ export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & 
   let rows: T[];
   if (q.tab === "new") rows = all.filter((p) => p.isNew).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
-  else if (q.tab === "verified") rows = all.filter(isVerified).sort((a, b) => b.vol7d - a.vol7d);
+  else if (q.tab === "verified") rows = all.filter(inApp).sort((a, b) => b.vol7d - a.vol7d);
   else rows = [...all].sort((a, b) => b.vol7d - a.vol7d);
   return rows.filter((p) => matches(p, q)).map((p) => ({ ...p, rank: rankOf.get(p.slug) }));
 }

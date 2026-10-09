@@ -23,7 +23,7 @@ import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from .rules import normalize_name, routable, score_trending, slugify
+from .rules import flags_from_address, normalize_name, routable, score_trending, slugify
 
 GT = "https://api.geckoterminal.com/api/v2"
 HOOKLIST = "https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json"
@@ -419,7 +419,7 @@ def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None =
             proj.update(name=name, inRegistry=True)
         proj["hooks"][(hook_addr, cid)] = entry or {"hook": {"address": hook_addr, "chainId": cid, "chain": cname,
                                                              "name": name, "description": "", "auditUrl": ""},
-                                                    "flags": {}, "properties": {}}
+                                                    "flags": flags_from_address(hook_addr), "properties": {}}
         a = p["attrs"]
         tx = a.get("transactions", {}).get("h24", {})
         daily = p.get("daily")

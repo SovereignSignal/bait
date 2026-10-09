@@ -127,7 +127,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
         <div style={{ display: "flex", flexDirection: "column", background: T.well, borderRadius: 28, padding: 24, gap: 14 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {money !== null && (money > 0 ? sig(true, `◆ ${money} smart money LP${money === 1 ? "" : "s"}`, true) : sig(false, "◇ No smart money yet"))}
-            {sig(p.signals.routable, p.signals.routable ? "● Routes in Uniswap app" : "○ Not routable in app")}
+            {sig(p.signals.routable === "eligible", p.signals.routable === "eligible" ? "● Routes in Uniswap app" : p.signals.routable === "ineligible" ? "○ Not routable in app" : "○ Routing unknown")}
             {sig(p.signals.auditCount > 0, p.signals.auditCount > 0 ? "✓ Audited" : "○ No audit linked")}
           </div>
         </div>

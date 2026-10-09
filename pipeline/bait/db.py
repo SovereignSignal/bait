@@ -58,6 +58,7 @@ hooks = sa.Table(
     sa.Column("properties", JSONType),
     sa.Column("verified_source", sa.Boolean),
     sa.Column("audit_url", sa.Text),
+    sa.Column("hooklisted", sa.Boolean),       # in the Uniswap hooklist as of the last ingest; NULL = not yet evaluated
     sa.Column("deployer", sa.Text),
     sa.Column("code_hash", sa.Text, index=True),
     sa.Column("contract_name", sa.Text),       # verified-source name (Sourcify/Blockscout/Routescan), for unlisted hooks
@@ -288,7 +289,19 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("pool_stats", "sellers_24h", "integer"),
     ("hooks", "contract_name", "text"),
     ("hooks", "name_checked_at", "timestamptz"),
+    ("hooks", "hooklisted", "boolean"),
 ]
+
+
+def backfill_address_flags(conn: sa.Connection) -> int:
+    """Hooks discovered on-chain were stored with flags={}; derive them from the address bits. Idempotent."""
+    from .rules import flags_from_address
+    rows = conn.execute(sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.flags)).all()
+    todo = [r for r in rows if not r.flags]
+    for r in todo:
+        conn.execute(sa.update(hooks).values(flags=flags_from_address(r.address))
+                     .where(hooks.c.address == r.address, hooks.c.chain_id == r.chain_id))
+    return len(todo)
 
 
 def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS) -> list[str]:

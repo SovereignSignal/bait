@@ -156,10 +156,13 @@ is logged and counted in `source_errors` without failing the run (radar is disco
 Logged: `registry= repos= exa_new= classified= dropped= bumped= github_calls= exa_calls= linked= pruned= source_errors=`.
 
 ### Routable
-`bait.rules.routable(hook)` implements DESIGN.md exactly: not `0x91…`, none of
-beforeSwapReturnsDelta / afterSwapReturnsDelta / afterAddLiquidityReturnsDelta /
-afterRemoveLiquidityReturnsDelta, not dynamicFee. The published Labs rule lists only the two swap
-deltas, so this is stricter; `NON_ROUTABLE_FLAGS` is the one place to relax it. Computed, never stored.
+`bait.rules.eligibility(hook, pool_fee=None)` implements DESIGN.md (2026-10-09 update) and returns
+`eligible | ineligible | unknown`: not `0x91…`, none of the beforeSwapReturnsDelta / afterSwapReturnsDelta /
+afterAddLiquidityReturnsDelta / afterRemoveLiquidityReturnsDelta bits in the address (permissions come from the
+low 14 address bits, `flags_from_address`, never the declared flags), and a static fee (the pool fee when known, else
+`properties.dynamicFee`; neither known is `unknown`). `routable(hook)` is `eligibility(hook) == "eligible"`. The
+published Labs rule lists only the two swap deltas, so this is stricter; `NON_ROUTABLE_FLAGS` is the one place to relax
+it. Computed, never stored. Registry membership is stored: `hooks.hooklisted` is set nightly by ingest.
 
 ## Claude usage
 `clients/claude.py`, Anthropic SDK 1.x. Blurbs and what_line: `claude-sonnet-5-5` via

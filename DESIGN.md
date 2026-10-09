@@ -283,3 +283,11 @@ unverified). The web labels those by their busiest pair: "WETH/USDC hook · 0x7b
   shows no all-time totals; build it together with the monthly aggregate, before any all-time view ships.
 - Robinhood 0xe5e70...e044 is V2MemeHook (named). It shows $0 because the indexer has not caught up on Robinhood
   swaps (also Base and BNB); those chains rely on the 24h rule until it does.
+
+## Update 2026-10-09: permissions from the address, three-state routing, registry membership
+
+- **Permissions.** A hook's 14 permission flags are the low 14 bits of its address (v4 `Hooks.sol`), enforced on-chain. The pipeline derives them for every hook it discovers (`rules.flags_from_address`) and backfills hooks stored with empty flags. Declared hooklist flags are informational; the bits win.
+- **Routing eligibility** is `eligible | ineligible | unknown`, evaluated per hook and pool: `0x91` prefix or any returnsDelta bit → ineligible; a pool's `fee & 0x800000` decides dynamic fee when a pool is known, else `properties.dynamicFee` when present; neither known → unknown. A project is eligible if any of its pools is. The badge is still a rule, not a guarantee.
+- **Registry membership** is stored (`hooks.hooklisted`), set every night by ingest from the full hooklist. The "✓ Hooklist" badge and the Registry activity entry render only when true; otherwise "Not in hooklist" / "Discovered on-chain".
+- **Tab.** "Verified" is now "In Uniswap app" (eligible projects only). Audit status is a separate badge, not part of the tab.
+- **Trade panel.** The decorative swap form is gone. The pool action card shows the pair, chain and fee, and a primary "Swap on Uniswap" only for an eligible pool with at least $1K TVL and two identified tokens; otherwise "View pool on Uniswap" plus the reason.

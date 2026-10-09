@@ -11,7 +11,7 @@ export const revalidate = 3600;
 const TAB_COPY: Record<Tab, { title: string; description: string }> = {
   trending: { title: "Bait", description: "What's moving in Uniswap v4 hooks this week, grouped by project and ranked by 7-day volume growth." },
   new: { title: "New hooks", description: "Uniswap v4 hook projects first seen in the last 7 days with real usage." },
-  verified: { title: "Verified hooks", description: "Uniswap v4 hook projects with a published audit link or that route in the Uniswap app." },
+  verified: { title: "Hooks in the Uniswap app", description: "Uniswap v4 hook projects with at least one pool that should route in the Uniswap app." },
   all: { title: "All hooks", description: "Every Uniswap v4 hook project with real usage, sorted by 7-day volume." },
 };
 
