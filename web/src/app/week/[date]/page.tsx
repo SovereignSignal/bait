@@ -42,7 +42,7 @@ export default async function WeekPage({ params }: { params: Promise<{ date: str
 
   return (
     <>
-      <main className="col">
+      <main className="col" id="main" tabIndex={-1}>
         <div className="lead">
           <h1>{d.title}</h1>
           <p>{d.intro}</p>

@@ -13,6 +13,16 @@ function isTerminalPath(p: string | null): boolean {
   return p === "/" || !!p?.startsWith("/p/");
 }
 
+/** First tab stop on every page; the target is each page's <main id="main">. */
+export function SkipLink() {
+  const pathname = usePathname();
+  return (
+    <a className="skip" href="#main">
+      {isTerminalPath(pathname) ? "Skip to feed" : "Skip to content"}
+    </a>
+  );
+}
+
 /** Brand, search (⌘K), chain select, Submit a hook. The same bar on every page. */
 export function TopBar({ chains }: { chains: ChainId[] }) {
   const t = useTerminal();
@@ -58,7 +68,14 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
           type="search"
           value={t.q}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="Search hooks, projects or addresses"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && t.topMatch) {
+              e.preventDefault();
+              router.push(t.topMatch);
+              input.current?.blur();
+            }
+          }}
+          placeholder="Search hooks or 0x…"
           aria-label="Search hooks, projects or addresses"
           autoComplete="off"
           spellCheck={false}
@@ -77,11 +94,14 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
         <Link href="/week" aria-current={pathname?.startsWith("/week") ? "page" : undefined}>
           Weekly
         </Link>
+        <Link href="/about" aria-current={pathname === "/about" ? "page" : undefined}>
+          How it works
+        </Link>
       </nav>
       <Suspense fallback={<ChainSelectView chains={chains} value="" onChange={() => {}} />}>
         <ChainSelect chains={chains} />
       </Suspense>
-      <a className={`${s.pill} ${s.pink}`} href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">
+      <a className={`${s.pill} ${s.pink} ${s.submit}`} href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">
         Submit a hook
       </a>
     </header>

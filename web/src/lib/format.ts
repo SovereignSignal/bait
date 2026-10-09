@@ -1,18 +1,34 @@
 const DAY = 86_400_000;
 
-/** Compact USD: $1.21B, $184.2M, $22.8K, $812. */
+/** The one glyph for a missing value. */
+export const NONE = "–";
+const trim = (x: number) => x.toFixed(1).replace(/\.0$/, "");
+
+/** Compact USD: $1.2B, $184.2M, $22.8K, $1K, $812. */
 export function usd(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return "–";
-  const abs = Math.abs(n);
-  const sign = n < 0 ? "-" : "";
-  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
-  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+  if (n == null || !Number.isFinite(n)) return NONE;
+  const abs = Math.abs(n), sign = n < 0 ? "-" : "";
+  if (abs >= 1e9) return `${sign}$${trim(abs / 1e9)}B`;
+  if (abs >= 1e6) return `${sign}$${trim(abs / 1e6)}M`;
+  if (abs >= 1e3) return `${sign}$${trim(abs / 1e3)}K`;
   return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
 }
 
+/** "+24%" / "-8%": the one week-over-week format. */
+export function fmtDelta(d: number): string {
+  return `${d >= 0 ? "+" : "-"}${Math.abs(Math.round(d))}%`;
+}
+
+/** At most `max` chars including the ellipsis, cut at the last word boundary. */
+export function clip(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max - 1), sp = head.lastIndexOf(" ");
+  return `${(sp > max / 2 ? head.slice(0, sp) : head).replace(/[\s,;:.-]+$/, "")}…`;
+}
+
 export function int(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(n)) return "–";
+  if (n == null || !Number.isFinite(n)) return NONE;
   return Math.round(n).toLocaleString("en-US");
 }
 

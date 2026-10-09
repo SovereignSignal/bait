@@ -1,9 +1,10 @@
-// Right column: pool action card (links out to Uniswap), buys vs sells, what it does, hook facts.
+// Right column: pool action card (links out to Uniswap), buys vs sells, hook facts.
 import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
-import { feeLabel, int, paletteColor, shortAddr } from "@/lib/format";
+import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
 import { pace } from "@/lib/present";
 import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
+import { WatchStar } from "./WatchStar";
 import s from "./Trade.module.css";
 
 function Token({ sym }: { sym: string }) {
@@ -36,6 +37,23 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
   const hook = (top?.hook ?? p.hooks[0]?.address ?? "").toLowerCase();
   const hookChain = top?.chainId ?? p.hooks[0]?.chainId;
   const hookHref = hook && hookChain != null ? explorerAddressUrl(hookChain, hook) : null;
+  const cta =
+    link && top
+      ? (() => {
+          const elig = top.eligibility;
+          const tvl = top.tvlUsd ?? 0;
+          const ok = elig === "eligible" && tvl >= 1000 && s0 !== "?" && s1 !== "?";
+          const reason =
+            elig === "ineligible"
+              ? "This hook does not route in the Uniswap app; trading happens through the project's own interface."
+              : elig === "unknown"
+                ? "Routing in the Uniswap app is unknown for this pool."
+                : tvl < 1000
+                  ? `No liquidity in this pool (${tvl < 1 ? "$0" : "under $1K"} TVL). Volume may not be organic.`
+                  : "One of the tokens could not be identified.";
+          return { ok, reason, label: ok ? "Swap on Uniswap" : "View pool on Uniswap" };
+        })()
+      : null;
   const share = pace(p.usage.vol24h, p.metrics.vol7d);
   const u = p.usage;
   const hasBs = u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0;
@@ -60,38 +78,19 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           <span>Through</span>
           <b>{p.name}</b>
         </div>
-        {link &&
-          top &&
-          (() => {
-            const elig = top.eligibility;
-            const tvl = top.tvlUsd ?? 0;
-            const ok = elig === "eligible" && tvl >= 1000 && s0 !== "?" && s1 !== "?";
-            const reason =
-              elig === "ineligible"
-                ? "This hook does not route in the Uniswap app; trading happens through the project's own interface."
-                : elig === "unknown"
-                  ? "Routing in the Uniswap app is unknown for this pool."
-                  : tvl < 1000
-                    ? `No liquidity in this pool (${tvl < 1 ? "$0" : "under $1K"} TVL). Volume may not be organic.`
-                    : "One of the tokens could not be identified.";
-            return ok ? (
-              <a className={s.cta} href={link} target="_blank" rel="noopener">
-                Swap on Uniswap
-              </a>
-            ) : (
-              <>
-                <a className={`${s.cta} ${s.alt}`} href={link} target="_blank" rel="noopener">
-                  View pool on Uniswap
-                </a>
-                <div className={s.note}>{reason}</div>
-              </>
-            );
-          })()}
+        {cta && link && (
+          <>
+            <a className={`${s.cta} ${s.inCard} ${cta.ok ? "" : s.alt}`} href={link} target="_blank" rel="noopener">
+              {cta.label}
+            </a>
+            {!cta.ok && <div className={s.note}>{cta.reason}</div>}
+          </>
+        )}
       </div>
 
       {hasBs && (
         <div className={`panel ${s.card}`}>
-          <h3>Last 24h</h3>
+          <h2>Last 24h</h2>
           <div className={s.bsTop}>
             <span className="up num">{int(u.buys24h)} buys</span>
             <span className="down num">{int(u.sells24h)} sells</span>
@@ -109,11 +108,6 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
       )}
 
       <div className={`panel ${s.card}`}>
-        <h3>What it does</h3>
-        <div className={s.what}>{p.whatLine || "No description in the registry."}</div>
-      </div>
-
-      <div className={`panel ${s.card}`}>
         <div className={s.kv}>
           <span>Hook</span>
           <b className="num mono" style={{ fontSize: 12 }}>
@@ -126,20 +120,29 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
                 shortAddr(hook)
               )
             ) : (
-              "–"
+              NONE
             )}
           </b>
           <span>Flags</span>
           <b>{p.flagLabels.join(", ") || "none listed"}</b>
           <span>Hooks in project</span>
           <b className="num">{int(p.metrics.hooksN)}</b>
-          <span>Today vs 7d pace</span>
-          <b className="num">{p.usage.vol24h == null ? "–" : `${share}%`}</b>
+          <span>Today vs daily avg</span>
+          <b className="num">{p.usage.vol24h == null ? NONE : `${share}%`}</b>
         </div>
         <div className={s.bar}>
-          <i style={{ width: `${share}%` }} />
+          <i className={share >= 100 ? s.full : undefined} style={{ width: `${share}%` }} />
         </div>
       </div>
+
+      {cta && link && (
+        <div className={s.sticky}>
+          <WatchStar slug={p.slug} name={p.name} className={s.stickyStar} />
+          <a className={`${s.cta} ${cta.ok ? "" : s.alt}`} href={link} target="_blank" rel="noopener">
+            {cta.label}
+          </a>
+        </div>
+      )}
     </>
   );
 }

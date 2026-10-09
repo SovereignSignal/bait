@@ -61,7 +61,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             continue
         par_res = enrichment.get("parallel") or {}
         vals = {
-            "what_line": res["what_line"].strip()[:200], "category": res["category"],
+            "what_line": cut_line(res["what_line"]), "category": res["category"],
             "enrichment": enrichment, "enriched_at": utcnow(),
             "website": p.website or par_res.get("website") or None,
             "github": p.github or par_res.get("github") or None,
@@ -70,6 +70,18 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         conn.execute(sa.update(projects).values(**vals).where(projects.c.id == p.id))
         out["enriched"] += 1
     return out
+
+
+def cut_line(text: str, limit: int = 200) -> str:
+    """Trim to `limit` chars at the last word boundary; append an ellipsis only when something was cut."""
+    t = text.strip()
+    if len(t) <= limit:
+        return t
+    head = t[: limit - 1]
+    sp = head.rfind(" ")
+    if sp > limit // 2:
+        head = head[:sp]
+    return head.rstrip(" ,;:.-") + "…"
 
 
 def select_candidates(conn) -> list:

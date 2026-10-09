@@ -7,10 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "test": "tsx --test src/lib/routable.test.ts src/lib/radar.test.ts src/lib/symbols.test.ts src/lib/relevance.test.ts src/lib/unlisted.test.ts src/lib/swr-cache.test.ts src/lib/xml.test.ts src/lib/token-bucket.test.ts src/lib/health.test.ts"
+    "test": "tsx --test src/lib/routable.test.ts src/lib/radar.test.ts src/lib/symbols.test.ts src/lib/relevance.test.ts src/lib/unlisted.test.ts src/lib/swr-cache.test.ts src/lib/xml.test.ts src/lib/token-bucket.test.ts src/lib/health.test.ts src/lib/ux.test.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
@@ -20,6 +21,7 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
