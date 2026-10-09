@@ -93,7 +93,7 @@ def test_no_client_still_renames_from_stored_names(conn, ctx):
 
 def test_useful_name():
     assert useful_name("FoundationHookV2") == "FoundationHookV2"
-    for g in ("UniswapV4Hook", "TransparentUpgradeableProxy", "ERC1967Proxy", "BaseHook", "", None, "x" * 61):
+    for g in ("UniswapV4Hook", "TransparentUpgradeableProxy", "ERC1967Proxy", "CustomHook", "", None, "x" * 61):
         assert useful_name(g) is None
 
 
