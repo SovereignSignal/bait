@@ -6,6 +6,7 @@ import { categoryLine, chainNames } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
 import { LiveTrades } from "./LiveTrades";
+import { ProjectHeading } from "./ProjectHeading";
 import { WatchStar } from "./WatchStar";
 import s from "./Detail.module.css";
 
@@ -26,7 +27,7 @@ function poolPair(x: PoolView): string {
 export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
   const d = weekDelta(p.metrics);
   const u = p.usage;
-  const swaps = u.buys24h != null && u.sells24h != null ? { k: "Swaps 24h", v: u.buys24h + u.sells24h } : { k: "Txs 24h", v: u.tx24h };
+  const swaps = { k: "Swaps 24h", v: u.buys24h != null && u.sells24h != null ? u.buys24h + u.sells24h : u.tx24h };
   const stats: Array<{ k: string; v: string; cls?: string }> = [
     { k: "7d volume", v: usd(p.metrics.vol7d) },
     { k: "vs last week", v: d == null ? (p.isNew ? "new" : NONE) : fmtDelta(d), cls: d == null ? undefined : d >= 0 ? "up" : "down" },
@@ -49,23 +50,37 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
           <ProjectAvatar name={p.name} color={p.color} chain={p.chains[0]} size="lg" />
           <div className={s.title}>
             <div className={s.titleLine}>
-              <h1>{p.name}</h1>
+              <ProjectHeading name={p.name} />
               <WatchStar slug={p.slug} name={p.name} />
             </div>
-            <div className={s.badges}>
-              {p.hooklisted ? <span className="b b-v">✓ Hooklist</span> : <span className="b b-n">Not in hooklist</span>}
-              {p.signals.routable === "eligible" && <span className="b b-g">Routes in Uniswap app</span>}
-              {p.signals.routable === "ineligible" && <span className="b b-n">Not routable in app</span>}
-              {p.signals.routable === "unknown" && <span className="b b-n">Routing unknown</span>}
-              {p.signals.auditCount > 0 ? <span className="b b-g">Audit linked</span> : <span className="b b-n">No audit linked</span>}
-              {p.upgradeable && <span className="b b-a">Upgradeable</span>}
-              {p.isNew && <span className="b b-p">New · {ago(p.firstSeenAt, now)}</span>}
-              {!p.isNew && p.rank && <span className="b b-a">#{p.rank} trending</span>}
+            {p.whatLine && <p className={s.what}>{p.whatLine}</p>}
+            <div className={s.badges} data-testid="badges">
+              {p.hooklisted ? (
+                <span className="b b-v" title="Listed in the Uniswap hooklist, the public registry of v4 hooks.">✓ Hooklist</span>
+              ) : (
+                <span className="b b-n" title="Found on-chain from its pools; not in the hooklist registry.">Not in hooklist</span>
+              )}
+              {p.signals.routable === "eligible" && (
+                <span className="b b-g" title="At least one pool should route in the Uniswap app. A rule, not a guarantee.">In Uniswap app</span>
+              )}
+              {p.signals.routable === "ineligible" && <span className="b b-n" title="The Uniswap app will not route swaps through this hook.">Not in app</span>}
+              {p.signals.routable === "unknown" && <span className="b b-n" title="Not enough data to say whether the app routes through this hook.">Routing unknown</span>}
+              {p.signals.auditCount > 0 ? (
+                <span className="b b-g" title="An audit link is published. It says nothing about scope or findings.">Audit linked</span>
+              ) : (
+                <span className="b b-n" title="No audit link found.">No audit</span>
+              )}
+              {p.upgradeable && <span className="b b-a" title="The owner can change this hook's code. Read it before you trade.">Upgradeable</span>}
+              {p.isNew && <span className="b b-p" title="First seen in the last 7 days.">New · {ago(p.firstSeenAt, now)}</span>}
+              {!p.isNew && p.rank && <span className="b b-a" title="Rank by 7-day volume growth.">#{p.rank} trending</span>}
               {u.smartWallets != null && u.smartWallets > 0 && (
-                <span className="b b-p">
-                  ◆ {u.smartWallets} smart-money wallet{u.smartWallets === 1 ? "" : "s"}
+                <span className="b b-p" title="Wallets Nansen labels as smart money traded here in the last day.">
+                  ◆ {u.smartWallets} smart wallet{u.smartWallets === 1 ? "" : "s"}
                 </span>
               )}
+            </div>
+            <div className={s.whereSub}>
+              {categoryLine(p)} · {chainNames(p.chains, " · ")}
             </div>
           </div>
           <div className={s.where}>
@@ -85,17 +100,17 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
       </div>
 
       <div className={`panel ${s.chart}`}>
-        <h3>Daily volume</h3>
+        <h2>Daily volume</h2>
         <Bars series={p.series} />
       </div>
 
       <div className={s.two}>
         <div className={`panel ${s.blk}`}>
-          <h3>Pools</h3>
+          <h2>Pools</h2>
           <PoolsTable pools={p.pools} total={p.metrics.poolsN} />
         </div>
         <div className={`panel ${s.blk}`}>
-          <h3>Activity</h3>
+          <h2>Activity</h2>
           {busy && knownChain(busy.chainId) && (
             <LiveTrades chainId={busy.chainId} chainSlug={chainSlug(busy.chainId)} poolId={busy.poolId} pair={`${poolPair(busy)} on ${CHAINS[busy.chainId]?.name ?? ""}`} />
           )}
@@ -115,7 +130,7 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
       <TopWallets p={p} now={now} />
 
       <div className={`panel ${s.blk}`}>
-        <h3>Why people care</h3>
+        <h2>Why people care</h2>
         <div className={s.why}>{why}</div>
         {p.receipts.length > 0 && (
           <div className={s.recs}>
@@ -280,7 +295,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
   return (
     <div className={`panel ${s.blk}`}>
       <div className={s.h3row}>
-        <h3>Top wallets</h3>
+        <h2>Top wallets</h2>
         {p.topWallets.length > 0 && <span>by 24h volume in the busiest pools</span>}
       </div>
       {p.topWallets.length === 0 ? (

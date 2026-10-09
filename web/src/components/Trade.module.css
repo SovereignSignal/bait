@@ -18,8 +18,7 @@
 .note { font-size: 12px; color: var(--fg3); padding: 8px 10px 2px; line-height: 1.5; }
 
 .card { padding: 14px 16px; }
-.card h3 { margin: 0 0 10px; font-size: 13px; color: var(--fg2); font-weight: 600; }
-.what { font-size: 13px; line-height: 1.55; color: var(--fg2); }
+.card h2 { margin: 0 0 10px; font-size: 13px; color: var(--fg2); font-weight: 600; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; font-size: 13px; }
 .kv span { color: var(--fg2); }
 .kv b { font-weight: 500; text-align: right; overflow-wrap: anywhere; }
