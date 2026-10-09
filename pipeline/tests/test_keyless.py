@@ -120,3 +120,21 @@ def test_an_explorer_can_upgrade_a_proxy_verdict_but_never_downgrade_eip1967():
     assert code_evidence(SimpleNamespace(code_hash=unresolved.code_hash, is_proxy=True, proxy_kind="eip1967")) is None
     upgraded = bs({"deployed_bytecode": "0x6080", "proxy_type": "eip1967"}).fetch_code(8453, a)
     assert upgraded.is_proxy is True and upgraded.proxy_kind == "explorer"
+
+
+def test_fetch_daily_parses_candles_oldest_first_and_none_on_failure():
+    from bait import keyless as K
+
+    class Http:
+        def __init__(self, res):
+            self.res, self.paths = res, []
+
+        def gt(self, path):
+            self.paths.append(path)
+            return self.res
+
+    h = Http({"data": {"attributes": {"ohlcv_list": [[1759968000, 1, 2, 0.5, 1.5, "1200.5"], [1759881600, 1, 1, 1, 1, None]]}}})
+    assert K.fetch_daily(h, "base", "0xpool", limit=30) == [(1759881600, 0.0), (1759968000, 1200.5)]
+    assert h.paths == ["/networks/base/pools/0xpool/ohlcv/day?aggregate=1&limit=30&currency=usd"]
+    assert K.fetch_daily(Http({"data": {"attributes": {"ohlcv_list": []}}}), "base", "0xpool") == []
+    assert K.fetch_daily(Http(None), "base", "0xpool") is None
