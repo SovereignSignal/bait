@@ -281,3 +281,75 @@ def test_verify_prints_bait_and_geckoterminal_for_the_same_pools_and_closed_wind
     assert out == {"day": DAY.isoformat(), "projects": 1, "pools": 1, "calls": 1, "failed": 0}
     assert "| top | top trending | 1/1 | 24h | $1,000 | $1,000 | $1,100 | -9.1% |" in lines
     assert "| top | top trending | 1/1 | prev 7d | $7,000 | $7,000 | $7,000 | +0.0% |" in lines
+
+
+# --- CLI ----------------------------------------------------------------------------------------
+def _today():
+    return datetime.now(timezone.utc).date()
+
+
+def _cli_db(tmp_path, nightly_rc=0, p8=True):
+    url = f"sqlite:///{tmp_path}/r.sqlite"
+    e = db.make_engine(url)
+    db.create_all(e)
+    db.add_missing_columns(e)
+    t = _today()
+    with e.begin() as c:
+        p = _project(c, "cli", "0xhc")
+        _pool(c, "0xpc", "0xhc")
+        _snap(c, "0xpc", t - 3 * D, cum=100.0)
+        if p8:
+            _snap(c, "0xpc", t, vol_day=1.0, est=True, cum=101.0)
+        _old_row(c, p, t)
+        c.execute(sa.insert(db.run_receipts).values(day=t, started_at=NOW, finished_at=NOW, exit_code=nightly_rc, soft_errors=0, steps={}))
+    return url, e
+
+
+def _receipts(e):
+    with e.connect() as c:
+        return c.execute(sa.select(db.run_receipts).where(db.run_receipts.c.notes.is_not(None)).order_by(db.run_receipts.c.id)).all()
+
+
+def test_repair_respects_the_run_lock_the_since_range_and_a_failed_nightly(tmp_path, monkeypatch):
+    from bait.__main__ import main
+    url, e = _cli_db(tmp_path)
+    assert main(["repair", "rescore", "--since", "16", "--database-url", url]) == 2
+    assert main(["repair", "prose", "--dry-run", "--database-url", url]) == 2          # neither --what-lines nor --blurbs
+    monkeypatch.setattr(db, "try_run_lock", lambda engine: None)
+    assert main(["repair", "rescore", "--database-url", url]) == 3
+    monkeypatch.undo()
+    (tmp_path / "failed").mkdir()
+    url2, e2 = _cli_db(tmp_path / "failed", nightly_rc=1)
+    assert main(["repair", "rescore", "--database-url", url2]) == repair.EXIT_PRECONDITION
+    (tmp_path / "pre8").mkdir()
+    url3, e3 = _cli_db(tmp_path / "pre8", p8=False)
+    assert main(["repair", "backfill-days", "--database-url", url3]) == repair.EXIT_PRECONDITION
+    assert main(["repair", "rescore", "--database-url", url3]) == repair.EXIT_PRECONDITION     # would read $0 windows
+    assert _receipts(e) == [] and _receipts(e2) == [] and _receipts(e3) == []
+
+
+def test_repair_all_dry_run_prints_the_plan_and_writes_nothing(tmp_path, capsys):
+    from bait.__main__ import main
+    url, e = _cli_db(tmp_path)
+    assert main(["repair", "all", "--since", "14", "--dry-run", "--database-url", url]) == 0
+    text = capsys.readouterr().out
+    for part in ("backfill-days: closed days", "GeckoTerminal calls: 1", "rescore: 1 stored run day(s)", "verify: up to 15",
+                 "prose what-lines:", "prose blurbs:", "option A", "option B", "--prose-budget-usd"):
+        assert part in text, part
+    assert _receipts(e) == []
+    with e.connect() as c:
+        assert c.execute(sa.select(db.pool_snapshots.c.volume_usd_day).where(db.pool_snapshots.c.day == _today() - 3 * D)).scalar_one() is None
+
+
+def test_repair_all_yes_runs_the_free_steps_with_a_receipt_each_and_stops_before_prose(tmp_path, monkeypatch, capsys):
+    from bait.__main__ import main
+    url, e = _cli_db(tmp_path)
+    t = _today()
+    monkeypatch.setattr(repair, "keyless_http", lambda ctx: FakeGT({"0xpc": {t - 3 * D: 123.0}}))
+    assert main(["repair", "all", "--since", "14", "--yes", "--stop-at", "", "--database-url", url]) == 0
+    assert "prose not run" in capsys.readouterr().out
+    got = _receipts(e)
+    assert [r.notes for r in got] == ["repair backfill-days", "repair rescore", "repair verify"]
+    assert all(r.exit_code == 0 and r.soft_errors == 0 and r.day == t for r in got)
+    assert got[0].steps["backfill-days"]["rows_updated"] == 1
+    assert _rows(e, "0xpc")[t - 3 * D].volume_usd_day == 123.0

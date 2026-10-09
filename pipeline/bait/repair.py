@@ -568,3 +568,205 @@ def verify(engine, ctx: RunContext, sample: int, per_project: int, seed: int | N
             g = sum(v for d, v in gt.items() if a <= d <= b)
             echo(f"| {r.slug} | {label} | {ok}/{n_pools} | {name} | {_usd(stored[name])} | {_usd(bait)} | {_usd(g)} | {_pct(bait, g)} |")
     return out
+
+
+# ------------------------------------------------------------------------------------------------
+# CLI
+# ------------------------------------------------------------------------------------------------
+def add_parsers(sub) -> None:
+    def common(p):
+        p.add_argument("--database-url", default=None)
+
+    b = sub.add_parser("backfill-days", help="free: GeckoTerminal daily candles into pool_snapshots for closed days")
+    b.add_argument("--since", type=int, default=14, help=f"run days to cover (1..{MAX_SINCE}); writes since + 14 closed days")
+    b.add_argument("--pools", type=int, default=None, help="pull at most N pools, busiest first (default all)")
+    b.add_argument("--stop-at", default="05:30", help="UTC HH:MM: stop between pools here so the 06:00 nightly gets the lock")
+    b.add_argument("--dry-run", action="store_true")
+    common(b)
+    r = sub.add_parser("rescore", help="free: score.run for stored run days, oldest first, after a backup")
+    r.add_argument("--since", type=int, default=14, help=f"run days today-N .. today that have rows (1..{MAX_SINCE})")
+    r.add_argument("--day", type=date.fromisoformat, default=None, help="one run day instead of --since")
+    r.add_argument("--restore", action="store_true", help="put the pre-repair rows of those days back instead")
+    r.add_argument("--dry-run", action="store_true")
+    common(r)
+    p = sub.add_parser("prose", help="PAID: Claude what_line / why_blurb rewrites from stored facts")
+    p.add_argument("--what-lines", action="store_true")
+    p.add_argument("--blurbs", action="store_true")
+    p.add_argument("--limit", type=int, default=None, help="at most N projects per kind, busiest first")
+    p.add_argument("--max-usd", type=float, default=None, help="cap on this run's spend, on top of the daily/30-day budgets")
+    p.add_argument("--signals-limit", type=int, default=50)
+    p.add_argument("--stale-before", type=datetime.fromisoformat, default=P8_MERGED_AT,
+                   help="blurbs written before this UTC time are rewritten (default: package 8's merge)")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--yes", action="store_true")
+    common(p)
+    v = sub.add_parser("verify", help="free: Bait vs GeckoTerminal for a few projects, as a markdown table")
+    v.add_argument("--sample", type=int, default=5)
+    v.add_argument("--pools-per-project", type=int, default=3)
+    v.add_argument("--seed", type=int, default=None, help="random picks; default: the run day, so reruns agree")
+    common(v)
+    a = sub.add_parser("all", help="the whole plan (--dry-run), or backfill-days, rescore, verify (and prose with a budget)")
+    a.add_argument("--since", type=int, default=14)
+    a.add_argument("--pools", type=int, default=None)
+    a.add_argument("--stop-at", default="05:30")
+    a.add_argument("--sample", type=int, default=5)
+    a.add_argument("--limit", type=int, default=None, help="prose: at most N projects per kind")
+    a.add_argument("--prose-budget-usd", type=float, default=None, help="run prose too, spending at most this")
+    ga = a.add_mutually_exclusive_group(required=True)
+    ga.add_argument("--dry-run", action="store_true")
+    ga.add_argument("--yes", action="store_true")
+    common(a)
+
+
+def deadline_at(hhmm: str | None, now: datetime) -> datetime | None:
+    """The next HH:MM UTC after `now`."""
+    if not hhmm:
+        return None
+    h, m = (int(x) for x in hhmm.split(":"))
+    at = datetime.combine(now.date(), dtime(h, m), tzinfo=timezone.utc)
+    return at if at > now else at + _D
+
+
+def _receipt(engine, name: str, started: datetime, rc: int, out: dict) -> None:
+    # soft_errors stays 0: /api/health reads the latest receipt, and a repair's GeckoTerminal misses are not a failed nightly
+    db.write_receipt(engine, day=started.date(), started_at=started, finished_at=_utcnow(), exit_code=rc, soft_errors=0,
+                     steps={name: out}, code_sha=os.environ.get("RAILWAY_GIT_COMMIT_SHA"), notes=f"repair {name}")
+
+
+def _failed_nightly(engine):
+    with engine.connect() as c:
+        r = c.execute(sa.select(run_receipts).where(run_receipts.c.notes.is_(None))
+                      .order_by(run_receipts.c.finished_at.desc()).limit(1)).first()
+    return r if r is not None and r.exit_code != 0 else None
+
+
+def _spacing() -> float:
+    return float(os.environ.get("KEYLESS_SPACING", "10"))
+
+
+def _step(engine, name: str, fn) -> tuple[int, dict]:
+    started = _utcnow()
+    rc, out = 1, {}
+    try:
+        out = fn()
+        rc = 0
+        return rc, out
+    except Exception as e:
+        log.exception("repair %s failed", name)
+        out = {"failed": type(e).__name__}
+        return rc, out
+    finally:
+        _receipt(engine, name, started, rc, out)
+
+
+def main(args: argparse.Namespace, engine) -> int:
+    cmd, now = args.repair_cmd, _utcnow()
+    today = now.date()
+    since = getattr(args, "since", None)
+    if since is not None and not 1 <= since <= MAX_SINCE:
+        log.error("--since must be 1..%d: %d candles cover since + %d closed days", MAX_SINCE, OHLCV_LIMIT, PRIOR_DAYS)
+        return 2
+    if cmd == "prose" and not (args.what_lines or args.blurbs):
+        log.error("prose: pass --what-lines and/or --blurbs")
+        return 2
+    if getattr(args, "dry_run", False):
+        return _dry_run(cmd, args, engine, now)
+    lock = db.try_run_lock(engine)
+    if lock is None:
+        log.error("another bait run holds the run lock (the nightly?); repair not started")
+        return 3
+    try:
+        bad = _failed_nightly(engine)
+        if bad is not None:
+            log.error("the last nightly receipt (day %s) exited %s; fix or rerun the nightly first, so a repair receipt "
+                      "never hides it from /api/health", bad.day, bad.exit_code)
+            return EXIT_PRECONDITION
+        if cmd in ("backfill-days", "all") or (cmd == "rescore" and not args.restore):
+            with engine.connect() as conn:
+                if not p8_rows_present(conn, today):
+                    log.error("no per-day snapshot rows from the last day: run after a package 8 nightly (before it, every "
+                              "window would read $0)")
+                    return EXIT_PRECONDITION
+        return _run(cmd, args, engine, now)
+    finally:
+        lock.close()
+
+
+def _ctx(now: datetime, meter=None) -> RunContext:
+    return RunContext(day=now.date(), now=now, meter=meter)
+
+
+def _run(cmd: str, args, engine, now: datetime) -> int:
+    today = now.date()
+    if cmd == "backfill-days":
+        rc, _ = _step(engine, "backfill-days", lambda: backfill(engine, _ctx(now), args.since, args.pools,
+                                                                deadline_at(args.stop_at, now)))
+        return rc
+    if cmd == "rescore":
+        with engine.connect() as conn:
+            days = rescore_days(conn, today, args.since, args.day)
+        if args.restore:
+            def go():
+                done = {}
+                for d in days:
+                    with engine.begin() as conn:
+                        done[d.isoformat()] = restore_day(conn, d)
+                    print(f"{d}  restored {done[d.isoformat()]} rows" if done[d.isoformat()] is not None else f"{d}  no backup")
+                return {"restored": done}
+            return _step(engine, "rescore-restore", go)[0]
+        print(pending_note(engine, today, args.since if args.day is None else (today - args.day).days))
+        return _step(engine, "rescore", lambda: {"days": rescore(engine, days, now)})[0]
+    if cmd == "verify":
+        return _step(engine, "verify", lambda: verify(engine, _ctx(now), args.sample, args.pools_per_project, args.seed))[0]
+    if cmd == "prose":
+        meter = CappedMeter(engine, args.max_usd)
+        meter.step = "repair-prose"
+        return _step(engine, "prose", lambda: prose(engine, _ctx(now, meter), args.what_lines, args.blurbs, args.limit,
+                                                     args.signals_limit, as_utc(args.stale_before)))[0]
+    # all: the free steps, then prose only within an explicit budget
+    rc, out = _step(engine, "backfill-days", lambda: backfill(engine, _ctx(now), args.since, args.pools,
+                                                              deadline_at(args.stop_at, now)))
+    if rc or out.get("left_at_deadline"):
+        return rc
+    with engine.connect() as conn:
+        days = rescore_days(conn, today, args.since)
+    rc = _step(engine, "rescore", lambda: {"days": rescore(engine, days, now)})[0]
+    if rc:
+        return rc
+    rc = _step(engine, "verify", lambda: verify(engine, _ctx(now), args.sample, 3, None))[0]
+    if rc or args.prose_budget_usd is None:
+        if not rc:
+            print("prose not run: pass --prose-budget-usd X after the owner's go (see `repair all --dry-run`)")
+        return rc
+    meter = CappedMeter(engine, args.prose_budget_usd)
+    meter.step = "repair-prose"
+    return _step(engine, "prose", lambda: prose(engine, _ctx(now, meter), True, True, args.limit, 50, P8_MERGED_AT))[0]
+
+
+def _dry_run(cmd: str, args, engine, now: datetime) -> int:
+    today = now.date()
+    lines: list[str] = []
+    with engine.connect() as conn:
+        if cmd in ("backfill-days", "all"):
+            lines += backfill_plan(conn, today, args.since, args.pools, _spacing())[0]
+        if cmd in ("rescore", "all"):
+            days = rescore_days(conn, today, args.since, getattr(args, "day", None))
+            lines.append(f"rescore: {len(days)} stored run day(s) {', '.join(map(str, days)) or '-'}; free, seconds per day; "
+                         "each day is backed up once before its first re-score")
+        if cmd == "rescore":
+            lines.append(pending_note(engine, today, args.since))
+        if cmd == "all":
+            sample = args.sample
+            lines.append(f"verify: up to {sample * 3} GeckoTerminal calls ({sample} projects x 3 pools), about "
+                         f"{sample * 3 * _spacing() / 60:.0f} min, free")
+    if cmd in ("prose", "all"):
+        meter = CappedMeter(engine, None)
+        what, blurbs = (True, True) if cmd == "all" else (args.what_lines, args.blurbs)
+        stale = as_utc(getattr(args, "stale_before", P8_MERGED_AT))
+        flag = "--prose-budget-usd" if cmd == "all" else "--max-usd"
+        lines += prose_plan(engine, meter, now, what, blurbs, args.limit, getattr(args, "signals_limit", 50), stale, flag)[0]
+    if cmd == "all":
+        lines.append("`repair all --yes` runs backfill-days, rescore and verify; prose only with --prose-budget-usd.")
+    print("\n".join(lines))
+    return 0
