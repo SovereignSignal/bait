@@ -477,3 +477,94 @@ def prose(engine, ctx: RunContext, what: bool, blurbs: bool, limit: int | None, 
     ctx.meter.flush()
     out["usd"] = round(ctx.meter.run_usd, 4)
     return out
+
+
+# ------------------------------------------------------------------------------------------------
+# verify
+# ------------------------------------------------------------------------------------------------
+def verify_sample(conn, day: date, sample: int, seed: int) -> list[tuple[str, object]]:
+    """Top trending, top new, the busiest wash-flagged project, then random projects with pools (seeded, so a rerun on
+    the same day picks the same ones). Spam is never picked."""
+    rows = conn.execute(sa.select(projects.c.id, projects.c.slug, project_daily)
+                        .join(project_daily, project_daily.c.project_id == projects.c.id)
+                        .where(project_daily.c.day == day, project_daily.c.is_spam.is_(False))
+                        .order_by(projects.c.id)).all()
+    live = [r for r in rows if not r.is_wash]
+    picks: list[tuple[str, object]] = []
+
+    def take(label, cands):
+        for r in cands:
+            if all(r.id != q.id for _, q in picks):
+                picks.append((label, r))
+                return
+
+    take("top trending", sorted([r for r in live if (r.score_trending or 0) > 0], key=lambda r: (-(r.score_trending or 0), -(r.tvl_usd or 0))))
+    take("top new", sorted([r for r in live if r.is_new], key=lambda r: -(r.tvl_usd or 0)))
+    take("wash", sorted([r for r in rows if r.is_wash], key=lambda r: -(r.vol_7d or 0)))
+    picks = picks[:sample]
+    rest = [r for r in rows if (r.pools_n or 0) > 0 and all(r.id != q.id for _, q in picks)]
+    picks += [("random", r) for r in random.Random(seed).sample(rest, min(len(rest), max(sample - len(picks), 0)))]
+    return picks
+
+
+def _pct(bait: float, gt: float) -> str:
+    if gt == 0:
+        return "0" if bait == 0 else "n/a"
+    return f"{(bait - gt) / gt * 100:+.1f}%"
+
+
+def _usd(v) -> str:
+    return "–" if v is None else f"${v:,.0f}"
+
+
+def verify(engine, ctx: RunContext, sample: int, per_project: int, seed: int | None, echo=print) -> dict:
+    with engine.connect() as conn:
+        day = latest_day(conn)
+        if day is None:
+            echo("verify: no project_daily rows")
+            return {"projects": 0}
+        end = day - _D
+        windows = (("24h", end, end), ("7d", end - 6 * _D, end), ("prev 7d", end - 13 * _D, end - 7 * _D))
+        picks = verify_sample(conn, day, sample, day.toordinal() if seed is None else seed)
+        plan = []
+        for label, r in picks:
+            ps = conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id).select_from(
+                pools.join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
+                .where(hooks.c.project_id == r.id)).all()
+            per_pool = {}
+            for p in ps:
+                if p.chain_id not in NET_BY_CHAIN:
+                    continue
+                snap = {s.day: s.volume_usd_day for s in conn.execute(sa.select(pool_snapshots.c.day, pool_snapshots.c.volume_usd_day)
+                        .where(pool_snapshots.c.pool_id == p.pool_id, pool_snapshots.c.chain_id == p.chain_id,
+                               pool_snapshots.c.day >= windows[2][1], pool_snapshots.c.day <= end))}
+                per_pool[(p.pool_id, p.chain_id)] = snap
+            busiest = sorted(per_pool, key=lambda k: -sum(v or 0.0 for d, v in per_pool[k].items() if d >= windows[1][1]))[:per_project]
+            plan.append((label, r, len(ps), {k: per_pool[k] for k in busiest}))
+    http = keyless_http(ctx)
+    out = {"day": day.isoformat(), "projects": len(plan), "pools": 0, "calls": 0, "failed": 0}
+    echo(f"Bait vs GeckoTerminal, run day {day}: closed UTC days ending {end}. Bait (checked pools) and GeckoTerminal sum the "
+         f"same pools' daily volume; Bait stored is the project row (all pools).")
+    echo("")
+    echo("| project | picked as | pools checked | window | Bait stored | Bait (checked pools) | GeckoTerminal | delta |")
+    echo("|---|---|---|---|---|---|---|---|")
+    for label, r, n_pools, chosen in plan:
+        gt: dict[date, float] = {}
+        ok = 0
+        for (pid, cid) in chosen:
+            candles = K.fetch_daily(http, NET_BY_CHAIN[cid], pid, limit=OHLCV_LIMIT)
+            out["calls"] += 1
+            if candles is None:
+                out["failed"] += 1
+                continue
+            ok += 1
+            for ts, v in candles:
+                d = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+                gt[d] = gt.get(d, 0.0) + v
+        out["pools"] += ok
+        stored = {"24h": r.vol_24h, "7d": r.vol_7d, "prev 7d": r.vol_7d_prev}
+        for name, a, b in windows:
+            bait = sum(v or 0.0 for snap in chosen.values() for d, v in snap.items() if a <= d <= b)
+            g = sum(v for d, v in gt.items() if a <= d <= b)
+            echo(f"| {r.slug} | {label} | {ok}/{n_pools} | {name} | {_usd(stored[name])} | {_usd(bait)} | {_usd(g)} | {_pct(bait, g)} |")
+    return out
