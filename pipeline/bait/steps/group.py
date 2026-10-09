@@ -8,7 +8,7 @@ import time
 
 import sqlalchemy as sa
 
-from ..db import backfill_address_flags, hooks, projects, utcnow
+from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow
 from ..rules import SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, slugify, useful_name
 from . import RunContext, log
 from .names import add_alias, backfill_unlisted_aliases, hook_rows, retire_project, unique_slug
@@ -161,6 +161,7 @@ def _create_project(conn, ctx, name: str, norm: str | None, description: str | N
     base = slugify(name)
     slug, i = base, 2
     taken = {r[0] for r in conn.execute(sa.select(projects.c.slug).where(projects.c.slug.like(base + "%")))}
+    taken |= set(conn.execute(sa.select(project_aliases.c.old_slug).where(project_aliases.c.old_slug.like(base + "%"))).scalars())
     while slug in taken:
         slug, i = f"{base}-{i}", i + 1
     what = (description or "").strip().split(". ")[0][:160] or None  # placeholder until step 4 runs Claude
