@@ -8,7 +8,7 @@ from tests.conftest import DAY, NOW, insert_pool
 
 BASE, UNI = 8453, 130
 POOL_A = "0x" + "a" * 64        # base, busy: 25 wallets -> capped at 20
-POOL_B = "0x" + "b" * 64        # unichain: Nansen does not cover it
+POOL_B = "0x" + "b" * 64        # unichain
 POOL_W = "0x" + "c" * 64        # wash: $5M from 5 wallets, never fetched
 
 
@@ -29,22 +29,6 @@ class FakeHttp:
     def gt(self, path):
         self.paths.append(path)
         return self.responses.get(path)
-
-
-class FakeNansen:
-    source = "nansen-labels"
-
-    def __init__(self, answers):
-        self.answers = answers
-        self.calls = []
-
-    @staticmethod
-    def supports(chain_id):
-        return chain_id not in (130, 57073)
-
-    def labels(self, address, chain_id):
-        self.calls.append((address, chain_id))
-        return self.answers.get(address, [])
 
 
 def _seed(conn):
@@ -97,55 +81,8 @@ def test_activity_pool_limit(conn, ctx, monkeypatch):
 
 def test_activity_without_keyless_or_keys_is_a_noop(conn, ctx):
     _seed(conn)
-    out = activity.run(conn, ctx)                            # KEYLESS=0 from conftest, nansen None
+    out = activity.run(conn, ctx)                            # KEYLESS=0 from conftest
     assert out["pools"] == 2 and out["pools_fetched"] == 0 and out["errors"] == 0
-
-
-def test_nansen_labels_cap_window_chains_and_flags(conn, ctx, monkeypatch):
-    ctx.extras["keyless_http"] = _seed(conn)
-    monkeypatch.setenv("NANSEN_MAX_ADDRESSES", "4")
-    # unichain wallets rank first by volume but are not covered. _w(24) was labeled 2 days ago -> fresh, skipped. _w(23) is stale (30d) -> re-queried.
-    conn.execute(sa.insert(db.wallet_labels).values(address=_w(24), chain_id=BASE, labels=["Old"], smart_money=False,
-                                                    source="nansen-labels", as_of=NOW - timedelta(days=2)))
-    conn.execute(sa.insert(db.wallet_labels).values(address=_w(23), chain_id=BASE, labels=[], smart_money=False,
-                                                    source="nansen-labels", as_of=NOW - timedelta(days=40)))
-    nansen = FakeNansen({_w(23): ["Smart Trader"], _w(22): ["Binance: Hot Wallet"]})
-    ctx.clients["nansen"] = nansen
-    out = activity.run(conn, ctx)
-
-    assert nansen.calls == [(_w(23), BASE), (_w(22), BASE), (_w(21), BASE), (_w(20), BASE)]   # cap 4, by volume
-    assert all(cid != UNI for _, cid in nansen.calls)
-    assert out["nansen_queried"] == 4 and out["nansen_labeled"] == 2 and out["nansen_smart_money"] == 1
-    assert out["nansen_fresh"] == 1 and out["nansen_skipped_chain"] == 3 and out["errors"] == 0
-
-    lab = {r.address: r for r in conn.execute(sa.select(db.wallet_labels))}
-    assert lab[_w(23)].smart_money and lab[_w(23)].labels == ["Smart Trader"] and db.as_utc(lab[_w(23)].as_of) == NOW
-    assert not lab[_w(22)].smart_money
-    assert lab[_w(21)].labels == [] and lab[_w(21)].source == "nansen-labels"     # empty answer stored
-    assert lab[_w(24)].labels == ["Old"]                                          # untouched
-    assert _w(100) not in lab
-
-    # second run the same day: everything already queried is fresh; the cap moves on to the next wallets
-    nansen.calls.clear()
-    activity.run(conn, ctx)
-    assert nansen.calls == [(_w(19), BASE), (_w(18), BASE), (_w(17), BASE), (_w(16), BASE)]
-
-
-def test_nansen_errors_are_counted_not_raised(conn, ctx):
-    ctx.extras["keyless_http"] = _seed(conn)
-
-    class Boom(FakeNansen):
-        def labels(self, address, chain_id):
-            self.calls.append(address)
-            if address == _w(24):
-                raise RuntimeError("timeout")
-            return []
-
-    nansen = Boom({})
-    ctx.clients["nansen"] = nansen
-    out = activity.run(conn, ctx)
-    assert out["errors"] == 1 and out["nansen_queried"] == 10   # default per-run cap
-    assert conn.execute(sa.select(sa.func.count()).select_from(db.wallet_labels)).scalar_one() == 9   # 10 queried, 1 failed
 
 
 def test_additive_migration_on_sqlite_is_idempotent(tmp_path):
@@ -170,36 +107,3 @@ def test_additive_migration_on_sqlite_is_idempotent(tmp_path):
     assert db.add_missing_columns(e, [("nope", "x", "integer")]) == []
 
 
-def test_parse_nansen_labels_defensively():
-    from bait.clients.nansen import parse_labels
-    assert parse_labels({"data": [{"label": "Smart LP"}, {"name": "Fund"}, "Whale", {"x": 1}, None]}) == ["Smart LP", "Fund", "Whale"]
-    assert parse_labels({"labels": ["A", "A", " "]}) == ["A"]
-    assert parse_labels({"data": {"labels": [{"label": "B"}]}}) == ["B"]
-    assert parse_labels({"data": []}) == [] and parse_labels(None) == [] and parse_labels([{"label": "C"}]) == ["C"]
-
-
-def test_signals_reuses_fresh_wallet_labels(conn, ctx):
-    from bait.steps import signals
-    conn.execute(sa.insert(db.wallet_labels).values(address=_w(1), chain_id=BASE, labels=["Smart Money"], smart_money=True,
-                                                    source="nansen-labels", as_of=NOW))
-    nansen = FakeNansen({_w(2): ["Fund"]})
-    out = {}
-    assert signals._labels_cached(conn, ctx, nansen, _w(1).upper().replace("0X", "0x"), BASE, out) == ["Smart Money"]
-    assert signals._labels_cached(conn, ctx, nansen, _w(2), BASE, out) == ["Fund"]
-    assert nansen.calls == [(_w(2), BASE)] and out["nansen_cached"] == 1
-    assert conn.execute(sa.select(db.wallet_labels.c.smart_money).where(db.wallet_labels.c.address == _w(2))).scalar_one()
-
-
-
-def test_nansen_monthly_budget_stops_lookups(conn, ctx, monkeypatch):
-    """Rolling 30-day budget: labeled answers in wallet_labels count 100 credits each."""
-    from bait.clients import nansen as N
-    monkeypatch.setenv("NANSEN_MONTHLY_CREDITS", "300")
-    for i in range(3):   # 3 labeled answers this month = 300 credits = budget exhausted
-        conn.execute(sa.insert(db.wallet_labels).values(address=f"0x{i:040x}", chain_id=BASE, labels=["Fund"], smart_money=True,
-                                                        source="nansen-labels", as_of=NOW - timedelta(days=3)))
-    conn.execute(sa.insert(db.wallet_labels).values(address="0x" + "9" * 40, chain_id=BASE, labels=[], smart_money=False,
-                                                    source="nansen-labels", as_of=NOW - timedelta(days=3)))   # empty = free
-    assert N.credits_spent_30d(conn, NOW) == 300 and N.budget_left(conn, NOW) == 0
-    monkeypatch.setenv("NANSEN_MONTHLY_CREDITS", "10000")
-    assert N.budget_left(conn, NOW) == 9700

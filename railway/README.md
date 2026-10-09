@@ -34,7 +34,7 @@ No API keys are required. Chains without `GRAPH_API_KEY` use the keyless source 
 35 minutes per run because of the GeckoTerminal free-tier limit. Tables are created on first run.
 
 Optional keys, each one switches on a layer: `GRAPH_API_KEY` (subgraph usage, faster nightly run), `ANTHROPIC_API_KEY`
-(what-it-does and why-it-matters blurbs), `EXA_API_KEY` (receipt links), `NANSEN_API_KEY` (smart money),
+(what-it-does and why-it-matters blurbs), `EXA_API_KEY` (receipt links),
 `GITHUB_TOKEN`, `PARALLEL_API_KEY`. Tuning: `KEYLESS_PAGES` (4), `KEYLESS_OHLCV_CAP` (70), `KEYLESS_SPACING` (10 s),
 `KEYLESS=0` to disable the keyless source.
 
