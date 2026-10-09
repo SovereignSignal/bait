@@ -405,6 +405,22 @@ def backfill_address_flags(conn: sa.Connection) -> int:
     return len(todo)
 
 
+def missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS) -> list[str]:
+    """Read-only: "table.column" of the additive columns whose table exists but the column does not (catalog reads)."""
+    if engine.dialect.name == "postgresql":
+        have = _pg_existing(engine, "SELECT table_name, column_name FROM information_schema.columns "
+                                    "WHERE table_schema = current_schema()")
+        tables = {t for t, _ in have}
+        return [f"{t}.{c}" for t, c, _ in columns if t in tables and (t, c) not in have]
+    out = []
+    with engine.connect() as conn:
+        insp = sa.inspect(conn)
+        for t, c, _ in columns:
+            if insp.has_table(t) and c not in {r[1] for r in conn.execute(sa.text(f'PRAGMA table_info("{t}")'))}:
+                out.append(f"{t}.{c}")
+    return out
+
+
 def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str]] = ADDITIVE_COLUMNS,
                         lock_timeout: str = "5s") -> list[str]:
     """Idempotent additive migration; returns "table.column" added. Tables that do not exist are skipped (create_all owns
