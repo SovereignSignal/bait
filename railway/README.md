@@ -93,7 +93,8 @@ by `python -m bait.indexer prune-pools`, run as a temporary start command on the
 `DATABASE_URL`; `--keep` defaults to `INDEXER_POOLS_PER_HOOK`, 2000). Set the restart policy to `NEVER` while it is
 overridden: with `ALWAYS` the one-shot command would run again every time it exits. Indexing pauses while the override is
 deployed; the old container may still hold a chain's lock for a few seconds during the swap, which `--lock-wait` (600 s)
-covers. Avoid 06:00 UTC, when the nightly `pipeline` copies `v4_pools` into `pools`.
+covers. The nightly `pipeline` (06:00 UTC) must not run while the prune does: its copy can re-create a `pools` row for a
+row the prune is deleting. Check that no `pipeline` run is in progress, and finish before 06:00 UTC.
 
 ```sh
 # 1. dry run: per-hook lines "prune-pools dry run chain_id= hook= rows= keep= delete= pools_rows= est=" and a total
@@ -106,7 +107,8 @@ railway logs --service indexer      # read the dry run; nothing was changed
 railway api 'mutation { serviceInstanceUpdate(serviceId: "<indexer id>", environmentId: "<env>",
   input: { startCommand: "python -m bait.indexer prune-pools --yes", restartPolicyType: NEVER }) }'
 railway api 'mutation { serviceInstanceDeployV2(serviceId: "<indexer id>", environmentId: "<env>") }'
-railway logs --service indexer      # ends with "prune-pools done: ... database <before> -> <after>"; exit 3 = a chain was locked
+railway logs --service indexer      # ends with "prune-pools done: ... database <before> -> <after>"; exit 3 = a chain was
+                                    # locked, exit 4 = stopped early by SIGTERM (rerun --yes)
 
 # 3. back to the indexer
 railway api 'mutation { serviceInstanceUpdate(serviceId: "<indexer id>", environmentId: "<env>",
@@ -118,5 +120,5 @@ The prune does not VACUUM. Railway Postgres autovacuum marks the deleted rows' s
 growing into new disk until that space is used again, but `pg_database_size` and the volume do not shrink on their own;
 giving the space back to the volume needs `VACUUM FULL v4_pools, pools` (an exclusive lock for its duration) or a
 dump and restore. The deletes write WAL as they go; it is recycled at checkpoints (bounded by `max_wal_size`), so watch the
-volume during the run rather than expecting it to fall. Safe to rerun: a second `--yes` finds nothing to delete. SIGTERM
-(a redeploy) stops it between batches.
+volume during the run rather than expecting it to fall. Rerunnable: a second `--yes` right away finds nothing to delete. Later, it can delete a few rows the first run kept: the
+newest-N window per hook moves as sampled rows arrive. SIGTERM (a redeploy) stops it between batches.

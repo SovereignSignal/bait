@@ -92,12 +92,16 @@ usage). Additive changes: `../db/migrations/0010_indexer_safety.sql`, `../db/mig
   the hook, stored or not; the check runs in the page's transaction, and only blocks after the counter's `last_block` count,
   so a page seen twice counts once. On a chain with a capped hook the swap phase always scans; a swap of a pool id that is
   not a row is resolved from the process's memory or one HyperSync Initialize query by pool id (topic1), at most
-  `INDEXER_POOL_LOOKUPS` (10) calls per chain per loop. A page with ids left unresolved is not committed and waits for the
-  next loop, so no swap is skipped. The pool becomes a row (`sampled = true`) when it has a priced swap of at least
+  `INDEXER_POOL_LOOKUPS` (10) calls per chain per loop, every paged call counted (times `INDEXER_POOL_LOOKUPS_CATCHUP`, 3,
+  while the swap cursor is more than 100K blocks behind). A page with ids left unresolved is not committed and waits for
+  the next loop, so no swap is skipped; what its lookups found waits in a `pending` map until the page commits. Each swap
+  page with lookups logs `unknown=` and the ids and calls it took. The pool becomes a row (`sampled = true`) when it has a priced swap of at least
   `INDEXER_LATE_INSERT_MIN_USD` ($10) and the hook has fewer than `INDEXER_SAMPLED_POOLS_PER_HOOK` (1,000) such rows
   (`sampled_total`). Otherwise its swaps and wallets are folded, per day, onto the hook's aggregate pool id `hook:<address>`
   in `pool_daily_onchain` / `pool_wallet_day`, and into `hook_pool_counts.swaps_total` / `volume_usd_total`. Heartbeat:
-  `capped=`, `late=`, `folded=`, `lookups=` per chain when non-zero.
+  `capped=`, `late=`, `folded=`, `lookups=`, `unknown=`, `chunk_calls=` per chain when non-zero. A chain with a capped hook
+  always scans swaps, so a cap at or below `INDEXER_TOPIC_FILTER_MAX` moves a small chain to scan mode once one hook
+  reaches it.
 - **Swap:** only hooked pools, from the first block of the UTC day 14 days back (found by binary search on HyperSync
   block timestamps), then followed. Up to `INDEXER_TOPIC_FILTER_MAX` (2000) hooked pools on a chain the query filters
   `topic1` by pool id in chunks of `INDEXER_TOPIC_CHUNK` (500); above that it scans every v4 Swap and keeps hooked pools by
@@ -134,7 +138,8 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
    capped), written only when it changed; `score` reports `pools_n` per hook as the larger of that and its pools with a
    snapshot. A capped hook with folded swaps gets a `pools` row for `hook:<address>`, so step 3 gives it a series and
    `pool_stats` with `vol_source = 'hook_total'` and the project's windows include that usage; it is never counted as a
-   pool, and `activity` and the web's per-pool lists skip it.
+   pool, and `activity` and the web's per-pool lists skip it. Its volume counts in the project's totals but not in
+   `score_trending`: no wash rule can judge folded pools.
 3. Usage, only for chains whose `indexer_state.backfilled` is true and `updated_at` is within `ONCHAIN_MAX_STALE_HOURS`
    (6) and `swap_block_time` has passed the end of the reference day (the 7-day wash rule uses the same chains): pools with `pool_daily_onchain` rows in day-14..day get one `pool_snapshots` row per day from `start`
    (`volume_usd_day`, `tx_count_day`; the legacy cumulative columns zero-seeded the day before), replacing the pool's
@@ -155,7 +160,8 @@ activity (`pool_daily_onchain`, `pool_snapshots`, `pool_stats` or `pool_top_wall
 `pools` rows; `hook_pool_counts` keeps the true pool count. `--dry-run` prints per-hook counts and the estimated bytes;
 `--yes` works per chain under the indexer's advisory lock, 5,000 rows per transaction, and logs `pg_database_size` before
 and after. It does not VACUUM: autovacuum makes the space reusable inside Postgres, and the volume itself does not shrink.
-Exit 3 when a chain's lock was not granted within `--lock-wait` (600 s).
+Exit 3 when a chain's lock was not granted within `--lock-wait` (600 s); exit 4 when SIGTERM stopped it between batches
+(committed batches stand; rerun `--yes`). Do not run it while the nightly `pipeline` runs.
 
 ### Grouping rules (step 4)
 1. Same normalized name -> same project (`BunniHook`, `bunni hooks` -> `bunni`).
@@ -242,7 +248,7 @@ marked `estimated`).
 Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs), `INDEXER_INTERVAL`
 (seconds per loop, 60), `INDEXER_CHAINS` (comma slugs or ids, default all 16), `INDEXER_MAX_PAGES` (40),
 `INDEXER_TOPIC_FILTER_MAX` (2000), `INDEXER_TOPIC_CHUNK` (500), `INDEXER_RPC_MAX_WINDOWS` (30), `INDEXER_POOLS_PER_HOOK`
-(2000; 0 = no new caps), `INDEXER_POOL_LOOKUPS` (10, at least 1), `INDEXER_LATE_INSERT_MIN_USD` (10),
+(2000; 0 = no new caps), `INDEXER_POOL_LOOKUPS` (10, at least 1), `INDEXER_POOL_LOOKUPS_CATCHUP` (3), `INDEXER_LATE_INSERT_MIN_USD` (10),
 `INDEXER_SAMPLED_POOLS_PER_HOOK` (1000). Step `onchain`:
 `ONCHAIN_MAX_NEW_HOOKS` (500), `ONCHAIN_MAX_STALE_HOURS` (6), `DISK_LIMIT_GB` (50; nightly `pg_database_size` line,
 warning at 60%).
