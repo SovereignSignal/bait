@@ -330,3 +330,17 @@ def test_a_hooklist_name_shared_by_unrelated_deployers_is_generic(conn, ctx):
     names_ = set(conn.execute(sa.select(db.projects.c.name)).scalars())
     assert pid[A(71)] != pid[A(72)] and "Zephyr" not in names_
     assert pid[A(73)] == pid[A(74)] and "Mistral" in names_
+
+
+def test_a_generic_claude_answer_is_not_created_split_and_recreated(conn, ctx):
+    insert_hook(conn, A(81), 8453, name=None)
+    conn.execute(sa.update(db.hooks).values(description="Counts swaps per pool, a template deployment"))
+    fc = FakeClaude({A(81): {"project": "Counter", "category": "other", "reason": "template"}})
+    ctx.clients["claude"] = fc
+    pids = []
+    for _ in range(3):
+        group.run(conn, ctx)
+        pids.append(conn.execute(sa.select(db.hooks.c.project_id).where(db.hooks.c.address == A(81))).scalar_one())
+    p = conn.execute(sa.select(db.projects).where(db.projects.c.id == pids[0])).one()
+    assert len(fc.calls) == 1 and len(set(pids)) == 1
+    assert p.name.startswith("Unlisted hook 0x") and p.norm_name is None and p.category == "other"
