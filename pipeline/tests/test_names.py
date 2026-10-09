@@ -297,3 +297,19 @@ def test_backfill_unlisted_aliases_covers_only_hooks_that_once_had_an_unlisted_s
     conn.execute(sa.update(db.hooks).where(db.hooks.c.address == found).values(name_checked_at=NOW))
     assert names.backfill_unlisted_aliases(conn, NOW) == 1
     assert _aliases(conn) == {"unlisted-hook-0x7bc2-2aec": (named, "backfill")}
+
+
+def test_explorers_never_downgrade_a_proxy(conn, ctx):
+    h = _Http({"sourcify.dev": _Resp(200, {"compilation": {"name": "OrcaHook"}, "proxyResolution": {"isProxy": False}}),
+               "robinhoodchain.blockscout.com": _Resp(200, {"name": "OrcaHook", "proxy_type": None, "implementations": []})})
+    assert ContractNames(None, http_client=h).lookup(4663, A(1)).is_proxy is None        # "not a proxy" is no verdict
+    _unlisted(conn, A(50), 4663)
+    conn.execute(sa.update(db.hooks).values(is_proxy=True, proxy_kind="eip1967"))
+
+    class SaysNo(FakeNames):
+        def lookup(self, chain_id, address):
+            return ("OrcaHook", "sourcify", False)
+    ctx.clients["names"] = SaysNo({})
+    names.run(conn, ctx, {})
+    row = conn.execute(sa.select(db.hooks.c.is_proxy, db.hooks.c.proxy_kind).where(db.hooks.c.address == A(50))).one()
+    assert tuple(row) == (True, "eip1967")

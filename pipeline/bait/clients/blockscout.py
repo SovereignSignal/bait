@@ -76,10 +76,9 @@ class Blockscout:
 
 
 def _proxy_verdict(d: dict, code: str) -> dict:
-    """Prefer the explorer: proxy_type / implementations, when the response carries them, decide is_proxy; the bytecode
-    shape decides otherwise and names the kind."""
+    """The bytecode shape decides; the explorer may only upgrade it. Blockscout returns proxy_type null and no
+    implementations for a proxy it could not resolve, so its "not a proxy" never overrides an eip1967 runtime."""
     kind = proxy_kind(code)
-    if "proxy_type" in d or "implementations" in d:
-        is_proxy = bool(d.get("proxy_type") or d.get("implementations"))
-        return {"is_proxy": is_proxy, "proxy_kind": (kind or "explorer") if is_proxy else None}
+    if d.get("proxy_type") or d.get("implementations"):
+        return {"is_proxy": True, "proxy_kind": kind if kind in ("eip1167", "eip1967") else "explorer"}
     return {"is_proxy": kind is not None, "proxy_kind": kind}
