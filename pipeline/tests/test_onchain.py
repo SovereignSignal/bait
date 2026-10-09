@@ -164,3 +164,14 @@ def test_mostly_unpriced_pool_day_does_not_override_and_series_volume_is_null(co
     st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PC)).one()
     assert (st.vol_24h, st.traders_24h, st.vol_source) == (None, 2, "unpriced")
     assert _snaps(conn, PC)[DAY][:2] == (None, 4)                           # swap count kept, volume unknown
+
+
+def test_pools_copy_is_incremental_and_catches_up_hooks_known_later(conn, ctx, monkeypatch):
+    monkeypatch.setenv("ONCHAIN_MAX_NEW_HOOKS", "1")
+    _setup(conn)
+    assert onchain.run(conn, ctx)["pools"] == 2                     # PA, PC; HOOK3 deferred, PE now below the watermark
+    out = onchain.run(conn, ctx)                                    # HOOK3 known now: the catch-up copies its pool
+    assert out["pools"] == 1 and (PE, 143) in {(r.pool_id, r.chain_id) for r in conn.execute(sa.select(db.pools))}
+    assert onchain.run(conn, ctx)["pools"] == 0                     # nothing new: nothing read
+    _v4(conn, 8453, "0x" + "9" * 64, HOOK, 500)
+    assert onchain.run(conn, ctx)["pools"] == 1
