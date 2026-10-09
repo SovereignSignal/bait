@@ -447,3 +447,24 @@ def test_runner_stops_between_chains(engine, monkeypatch):
     r = Runner(engine, "tok", select_chains("ethereum,base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
                core.Settings(), should_stop=lambda: len(seen) >= 1)
     assert set(r.run_once()) == {"ethereum"} and seen == ["ethereum"]
+
+
+def _seed_pool_and_cursor(engine, swap_block=1000):
+    """PA known, Initialize history complete, swap cursor at `swap_block` (block 1000 = 09-22 00:00): swap phase running."""
+    with engine.begin() as c:
+        store.upsert_pools(c, core.hooked_pools_from_page(BASE.chain_id, [init_log(PA, ZERO, USDC, HOOK, 500)], {500: T0 + 500 * BT}))
+        store.set_state(c, BASE.chain_id, initialize_block=HEAD - BASE.lag + 1, swap_block=swap_block, head_block=HEAD,
+                        backfilled=False, swap_block_time=core.utc(T0 + swap_block * BT))
+
+
+def test_two_indexers_on_the_same_page_count_it_once(engine, monkeypatch):
+    _seed_pool_and_cursor(engine)
+    with engine.connect() as c:
+        stale = store.get_state(c, BASE.chain_id)          # what the second container read before the first committed
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    monkeypatch.setattr(store, "get_state", lambda conn, chain_id: stale)
+    with pytest.raises(store.CursorMoved):
+        core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    monkeypatch.undo()
+    _, daily, _, state = _tables(engine)
+    assert state.swap_block == 1700 and daily == {(PA, date(2026, 9, 22)): (3, 2, 6000.0)}
