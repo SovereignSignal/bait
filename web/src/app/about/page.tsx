@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: "About", description: "How Bait finds
 export default function AboutPage() {
   return (
     <>
-      <main className="col">
+      <main className="col" id="main" tabIndex={-1}>
         <div className="lead">
           <h1>How this works</h1>
           <p>A terminal for Uniswap v4 hooks. Projects, not hook addresses. Figures refreshed nightly; trades live.</p>
@@ -86,6 +86,16 @@ export default function AboutPage() {
             <li>Figures are derived from public subgraphs and can lag or be wrong when a subgraph halts. Metrics are USD estimates.</li>
             <li>Bait is a personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</li>
           </ul>
+        </section>
+        <section className="block">
+          <h2>Submit a hook</h2>
+          <p>
+            To get a hook listed, open a pull request on the{" "}
+            <a className="inline" href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">
+              Uniswap hooklist
+            </a>{" "}
+            repository.
+          </p>
         </section>
         <Footer />
       </main>

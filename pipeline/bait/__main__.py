@@ -64,8 +64,15 @@ def main(argv: list[str] | None = None) -> int:
         log.info("init-db ok url=%s", engine.url.render_as_string(hide_password=True))
         return 0
     db.create_all(engine)  # idempotent (checkfirst); a fresh Railway Postgres needs no manual migration
-    db.add_missing_columns(engine)  # create_all never alters existing tables; additive columns go here
-    db.add_missing_indexes(engine)
+    try:
+        db.add_missing_columns(engine)  # create_all never alters existing tables; additive columns go here
+        db.add_missing_indexes(engine)
+    except db.SchemaLocked:  # already logged; the indexer (or the next run) applies it once the lock is free
+        missing = db.missing_columns(engine)
+        if missing:  # steps would fail mid-way on these; a missing index only costs speed
+            log.error("schema: required columns still missing (%s) after a lock timeout; not running. Retry when the "
+                      "table lock is free (the indexer applies them on its next loop).", ", ".join(missing))
+            return 4
     meter = Meter(engine)
     if args.cmd == "cost-preview":
         with engine.connect() as conn:
@@ -124,9 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             log.info("step=%s ok %s elapsed=%.1fs", name, " ".join(f"{k}={v}" for k, v in counts.items()), time.monotonic() - t0)
         log.info("run spend $%.4f (paid API calls this run; ledger: api_spend)", meter.run_usd)
         if soft_errors:
-            log.error("run finished with %d soft errors (see warnings above)", soft_errors)
-            rc = 1
-            return rc
+            log.warning("run completed with %d soft errors (recorded in the run receipt; exit 0)", soft_errors)
         rc = 0
         return rc
     finally:

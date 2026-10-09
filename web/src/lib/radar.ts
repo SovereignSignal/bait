@@ -54,3 +54,15 @@ export function groupRadar(items: RadarItemView[], kind?: RadarKind): Array<[Rad
 export function radarHref(kind?: RadarKind): string {
   return kind ? `/building?kind=${kind}` : "/building";
 }
+
+/** One row per project (or unnamed hook), newest first; `more` counts the older pools folded in. */
+export function collapseLaunches<T extends { projectSlug: string | null; hook: string }>(ls: T[]): Array<{ l: T; more: number }> {
+  const seen = new Map<string, { l: T; more: number }>();
+  for (const l of ls) {
+    const k = l.projectSlug ?? l.hook.toLowerCase();
+    const e = seen.get(k);
+    if (e) e.more += 1;
+    else seen.set(k, { l, more: 0 });
+  }
+  return [...seen.values()];
+}

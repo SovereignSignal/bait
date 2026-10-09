@@ -1,7 +1,7 @@
 """On-chain indexer: decoding, HyperSync request shape, cursor resume, aggregation, prices, RPC fallback. No network:
 HyperSync, RPC and DefiLlama are httpx.MockTransport fakes."""
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -279,12 +279,12 @@ def test_follow_live_adds_new_pool_and_swaps(engine):
 def test_apply_swaps_increments_and_recounts_unique_wallets(engine):
     d = date(2026, 10, 1)
     with engine.begin() as c:
-        store.apply_swaps(c, 1, {(PA, d): [2, 10.0]}, {(PA, d, W1): 2})
-        store.apply_swaps(c, 1, {(PA, d): [3, 5.5]}, {(PA, d, W1): 1, (PA, d, W2): 2})
+        store.apply_swaps(c, 1, {(PA, d): [2, 10.0, 0]}, {(PA, d, W1): 2})
+        store.apply_swaps(c, 1, {(PA, d): [3, 5.5, 1]}, {(PA, d, W1): 1, (PA, d, W2): 2})
     with engine.connect() as c:
         r = c.execute(sa.select(db.pool_daily_onchain)).one()
         w = dict(c.execute(sa.select(db.pool_wallet_day.c.address, db.pool_wallet_day.c.swaps)).all())
-    assert (r.swaps, r.wallets, r.volume_usd) == (5, 2, 15.5) and w == {W1: 3, W2: 2}
+    assert (r.swaps, r.wallets, r.volume_usd, r.unpriced_swaps) == (5, 2, 15.5, 1) and w == {W1: 3, W2: 2}
     with engine.begin() as c:
         assert store.prune_wallets(c, d.replace(month=11, day=5)) == 2
 
@@ -296,7 +296,7 @@ def test_swap_usd_side_selection():
     assert swap_usd(-10 ** 18, 5 * 10 ** 6, eth, usdc) == 5.0                  # 400x apart: one quote is wrong, smaller
     assert swap_usd(7, 3 * 10 ** 6, None, usdc) == 3.0                         # only one side priced
     assert swap_usd(7, 3, None, None) is None
-    assert swap_usd(10 ** 30, 0, eth, None) == 0.0                              # absurd single swap dropped
+    assert swap_usd(10 ** 30, 0, eth, None) is None                             # absurd quote: unpriced, not $0
     assert reliable({"price": 1.0, "decimals": 6, "confidence": 0.99}) == (1.0, 6)
     assert reliable({"price": 1.0, "decimals": 6, "confidence": 0.2}) is None
     assert reliable({"price": 1e12, "decimals": 18}) is None
@@ -398,7 +398,7 @@ def test_rpc_gap_clears_swap_cursor_for_later_hypersync_backfill(engine):
 def test_runner_one_chain_failing_does_not_stop_others(engine, monkeypatch, caplog):
     seen = []
 
-    def fake_sync(engine_, ch, hs, prices, settings):
+    def fake_sync(engine_, ch, hs, prices, settings, **kw):
         seen.append(ch.slug)
         if ch.slug == "ethereum":
             raise RuntimeError("boom")
@@ -412,3 +412,236 @@ def test_runner_one_chain_failing_does_not_stop_others(engine, monkeypatch, capl
     line = heartbeat(1, "hypersync", out)
     assert "ethereum:ERR(RuntimeError)" in line and "base:lag=1/2,new=3" in line and "new_pools=3" in line
     assert any("heartbeat loop=1" in m for m in caplog.messages)
+
+
+def test_additive_schema_upgrades_an_existing_indexer_database():
+    e = db.make_engine("sqlite://")
+    with e.begin() as c:
+        c.execute(sa.text("CREATE TABLE indexer_state (chain_id integer PRIMARY KEY, initialize_block bigint, swap_block bigint, "
+                          "head_block bigint, backfilled boolean NOT NULL DEFAULT 0, updated_at timestamp)"))
+        c.execute(sa.text("CREATE TABLE pool_daily_onchain (chain_id integer, pool_id text, day date, swaps integer NOT NULL DEFAULT 0, "
+                          "wallets integer NOT NULL DEFAULT 0, volume_usd float NOT NULL DEFAULT 0, PRIMARY KEY (chain_id, pool_id, day))"))
+        c.execute(sa.text("INSERT INTO pool_daily_onchain (chain_id, pool_id, day, swaps) VALUES (1, '0xp', '2026-10-01', 4)"))
+    db.create_all(e)
+    assert {"indexer_state.swap_block_time", "pool_daily_onchain.unpriced_swaps"} <= set(db.add_missing_columns(e))
+    assert "v4_pools_chain_block_idx" in db.add_missing_indexes(e)
+    with e.connect() as c:
+        assert c.execute(sa.text("SELECT unpriced_swaps FROM pool_daily_onchain")).scalar_one() == 0
+    assert "onchain_watermarks" in sa.inspect(e).get_table_names()
+
+
+def test_stop_flag_ends_a_sync_between_pages(engine):
+    asked = {"n": 0}
+
+    def stop():
+        asked["n"] += 1
+        return asked["n"] > 3
+    st = core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(), now=NOW, should_stop=stop)
+    assert st.pages == 3                                  # three Initialize pages, then the stop was honoured
+
+
+def test_runner_stops_between_chains(engine, monkeypatch):
+    seen = []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: seen.append(ch.slug) or core.ChainStats(mode="hypersync"))
+    r = Runner(engine, "tok", select_chains("ethereum,base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings(), should_stop=lambda: len(seen) >= 1)
+    assert set(r.run_once()) == {"ethereum"} and seen == ["ethereum"]
+
+
+def _seed_pool_and_cursor(engine, swap_block=1000):
+    """PA known, Initialize history complete, swap cursor at `swap_block` (block 1000 = 09-22 00:00): swap phase running."""
+    with engine.begin() as c:
+        store.upsert_pools(c, core.hooked_pools_from_page(BASE.chain_id, [init_log(PA, ZERO, USDC, HOOK, 500)], {500: T0 + 500 * BT}))
+        store.set_state(c, BASE.chain_id, initialize_block=HEAD - BASE.lag + 1, swap_block=swap_block, head_block=HEAD,
+                        backfilled=False, swap_block_time=core.utc(T0 + swap_block * BT))
+
+
+def test_two_indexers_on_the_same_page_count_it_once(engine, monkeypatch):
+    _seed_pool_and_cursor(engine)
+    with engine.connect() as c:
+        stale = store.get_state(c, BASE.chain_id)          # what the second container read before the first committed
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    monkeypatch.setattr(store, "get_state", lambda conn, chain_id: stale)
+    with pytest.raises(store.CursorMoved):
+        core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    monkeypatch.undo()
+    _, daily, _, state = _tables(engine)
+    assert state.swap_block == 1700 and daily == {(PA, date(2026, 9, 22)): (3, 2, 6000.0)}
+
+
+def test_swap_block_time_is_the_newest_block_of_the_committed_page(engine):
+    _seed_pool_and_cursor(engine)
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    _, _, _, st = _tables(engine)
+    assert st.swap_block == 1700 and db.as_utc(st.swap_block_time) == core.utc(T0 + 1300 * BT)   # last swap in 1000..1700
+
+
+def test_caught_up_quiet_chain_anchors_swap_block_time_at_the_head(engine):
+    _sync_until_done(engine, FakeHyperSync(), core.Settings())
+    _, _, _, st = _tables(engine)
+    end = HEAD - BASE.lag + 1                         # newest swap is block 2500; the anchor reads block end-1
+    assert db.as_utc(st.swap_block_time) == core.utc(T0 + (end - 1) * BT)
+
+
+class NoSwapBlocks(FakeHyperSync):
+    """Swap pages arrive without the joined blocks."""
+
+    def __call__(self, request):
+        r = super().__call__(request)
+        q = json.loads(request.content) if request.content else {}
+        if "transaction" not in q.get("field_selection", {}):
+            return r
+        body = r.json()
+        for b in body["data"]:
+            b["blocks"] = []
+        return httpx.Response(200, json=body)
+
+
+def test_swap_logs_without_block_timestamp_fail_the_page_instead_of_vanishing(engine):
+    _seed_pool_and_cursor(engine)
+    with pytest.raises(RuntimeError, match="without a block timestamp"):
+        core.sync_hypersync(engine, BASE, _hs(NoSwapBlocks()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    _, daily, _, st = _tables(engine)
+    assert st.swap_block == 1000 and daily == {}
+
+
+def test_swap_window_start_moves_up_when_the_swap_phase_begins_days_later(engine):
+    fake = FakeHyperSync()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=0), now=NOW)   # first run: block 1000 (09-22)
+    later = NOW + timedelta(days=2)                                     # Initialize backfill took two more days
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=2), now=later)
+    _, daily, _, st = _tables(engine)
+    assert (st.initialize_block, st.swap_block, daily) == (1400, 3880, {})                  # block 3880 = 09-24 00:00
+    assert db.as_utc(st.swap_block_time) == datetime(2026, 9, 24, tzinfo=timezone.utc)
+
+
+def test_defillama_outage_does_not_commit_the_page(engine):
+    from bait.indexer.prices import PricesUnavailable
+    _seed_pool_and_cursor(engine)
+    down = PriceBook(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503))))
+    with pytest.raises(PricesUnavailable):
+        core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), down, core.Settings(max_pages=1), now=NOW)
+    _, daily, _, st = _tables(engine)
+    assert st.swap_block == 1000 and daily == {}
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=1), now=NOW)
+    _, daily, _, st = _tables(engine)
+    assert st.swap_block == 1700 and daily == {(PA, date(2026, 9, 22)): (3, 2, 6000.0)}
+    bad_request = PriceBook(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(400))))
+    assert bad_request.get(BASE, [TOKX]) == {}                       # a 4xx is "no price", never a wedged chain
+
+
+def test_unpriced_swaps_are_counted_not_silently_zero(engine):
+    class NoPrices:
+        def get(self, chain, addrs):
+            return {}
+    _seed_pool_and_cursor(engine)
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), NoPrices(), core.Settings(max_pages=1), now=NOW)
+    with engine.connect() as c:
+        r = c.execute(sa.select(db.pool_daily_onchain)).one()
+    assert (r.swaps, r.unpriced_swaps, r.volume_usd) == (3, 3, 0.0)
+
+
+def test_fallback_prices_wrapped_native_and_stables_when_llama_has_no_quote():
+    from bait.indexer.prices import STABLES, WRAPPED_NATIVE
+
+    def llama(request):
+        ids = request.url.path.split("/prices/current/")[1].split(",")
+        coins = {"coingecko:ethereum": {"price": 2500.0, "confidence": 0.99}} if "coingecko:ethereum" in ids else {}
+        return httpx.Response(200, json={"coins": coins})
+    pb = PriceBook(httpx.Client(transport=httpx.MockTransport(llama)))
+    rh_weth = WRAPPED_NATIVE[4663]
+    assert pb.get(CHAIN_BY_ID[4663], [rh_weth, TOKX]) == {rh_weth: (2500.0, 18)}     # Robinhood WETH via the ETH coin id
+    assert pb.get(BASE, [USDC]) == {USDC: (1.0, 6)}                                    # no DefiLlama quote for USDC
+    for cid, addr in WRAPPED_NATIVE.items():
+        assert cid in CHAIN_BY_ID and addr == addr.lower() and len(addr) == 42
+    for cid, m in STABLES.items():
+        assert cid in CHAIN_BY_ID and all(a == a.lower() and len(a) == 42 and d in (6, 18) for a, d in m.items())
+
+
+def test_runner_retries_a_locked_schema_migration_next_loop(engine, monkeypatch):
+    seen, tries = [], []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: seen.append(ch.slug) or core.ChainStats(mode="hypersync"))
+
+    def migrate():
+        tries.append(1)
+        return len(tries) > 1                          # first attempt hits a lock timeout
+    r = Runner(engine, "tok", select_chains("base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings(), migrate=migrate)
+    assert r.run_once() == {} and seen == []
+    assert set(r.run_once()) == {"base"} and seen == ["base"]
+    r.run_once()
+    assert len(tries) == 2                             # not re-run once it succeeded
+
+
+def test_runner_survives_a_connect_error_while_taking_the_chain_lock(engine, monkeypatch):
+    seen = []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: seen.append(ch.slug) or core.ChainStats(mode="hypersync"))
+    real = db.try_advisory_lock
+
+    def flaky(engine_, key):
+        if key.endswith(":1"):
+            raise sa.exc.OperationalError("SELECT pg_try_advisory_lock", {}, Exception("connection refused"))
+        return real(engine_, key)
+    monkeypatch.setattr(db, "try_advisory_lock", flaky)
+    r = Runner(engine, "tok", select_chains("ethereum,base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings())
+    out = r.run_once()
+    assert out["ethereum"].error == "lock" and seen == ["base"]
+
+
+def test_a_rejected_batch_is_split_so_one_bad_id_does_not_unprice_the_rest():
+    def llama(request):
+        ids = request.url.path.split("/prices/current/")[1].split(",")
+        if f"base:{TOKX}" in ids:
+            return httpx.Response(400, json={"message": "bad coin id"})
+        return httpx.Response(200, json={"coins": {i: {"price": 2000.0, "confidence": 0.99} for i in ids if i == "coingecko:ethereum"}})
+    pb = PriceBook(httpx.Client(transport=httpx.MockTransport(llama)))
+    assert pb.get(BASE, [ZERO, TOKX]) == {ZERO: (2000.0, 18)}
+
+
+def test_runner_warns_after_three_consecutive_price_outages_on_a_chain(engine, monkeypatch, caplog):
+    from bait.indexer.prices import PricesUnavailable
+    results = iter([PricesUnavailable("base"), PricesUnavailable("base"), PricesUnavailable("base"), None, PricesUnavailable("base")])
+
+    def fake_sync(e, ch, hs, p, s, **kw):
+        r = next(results)
+        if r is not None:
+            raise r
+        return core.ChainStats(mode="hypersync")
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync", fake_sync)
+    r = Runner(engine, "tok", select_chains("base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings())
+    warned = []
+    for _ in range(5):
+        caplog.clear()
+        with caplog.at_level("INFO", logger="bait.indexer"):
+            out = r.run_once()
+        warned.append(any(rec.levelname == "WARNING" and "consecutive" in rec.getMessage() for rec in caplog.records))
+        assert out["base"].error in ("prices", None)
+    assert warned == [False, False, True, False, False]    # third in a row warns; a success resets the count
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_defillama_auth_errors_are_transient_not_a_rejected_batch(status):
+    from bait.indexer.prices import PricesUnavailable
+    pb = PriceBook(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(status))))
+    with pytest.raises(PricesUnavailable):
+        pb.get(BASE, [TOKX, ZERO])
+    assert pb.calls == 1                                   # not split into per-coin retries
+
+
+def test_runner_escalates_repeated_schema_locks_and_reports_them_in_the_heartbeat(engine, caplog):
+    r = Runner(engine, "tok", select_chains("base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings(), migrate=lambda: False)
+    levels, beats = [], []
+    for _ in range(3):
+        caplog.clear()
+        with caplog.at_level("INFO", logger="bait.indexer"):
+            r.run_once()
+        levels.append([rec.levelname for rec in caplog.records if "schema migration" in rec.getMessage()])
+        beats.append([rec.getMessage() for rec in caplog.records if rec.getMessage().startswith("heartbeat")])
+    assert levels == [["WARNING"], ["WARNING"], ["ERROR"]]
+    assert [b[0].split("schema_locked=")[1].split()[0] for b in beats] == ["1", "2", "3"]
