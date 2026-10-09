@@ -208,11 +208,10 @@ def hook_rows(conn, pid: int):
 
 def backfill_unlisted_aliases(conn, now) -> int:
     """Bounded migration (delete 30 days after deploy): links shared before project_aliases existed point at
-    "unlisted-hook-0x7bc2-2aec". Recreate that slug for each on-chain hook whose project slug differs now, unless two hooks
-    would share it (ambiguous) or a live project or alias already holds it. Family slugs are not recreated: their 16-bit
-    prefix is too ambiguous to redirect safely. Idempotent."""
-    rows = conn.execute(sa.select(hooks.c.address, hooks.c.project_id)
-                        .where(hooks.c.project_id.is_not(None), hooks.c.hooklisted.is_(False))).all()
+    "unlisted-hook-0x7bc2-2aec". Recreate that slug for each hook whose project slug differs now (listed hooks too: many
+    were found on-chain before their PR merged), unless two hooks would share it (ambiguous) or a live project or alias
+    already holds it. Family slugs are not recreated: their 16-bit prefix is too ambiguous to redirect safely. Idempotent."""
+    rows = conn.execute(sa.select(hooks.c.address, hooks.c.project_id).where(hooks.c.project_id.is_not(None))).all()
     want: dict[str, set[int]] = {}
     for r in rows:
         want.setdefault(slugify(f"Unlisted hook {r.address[:6]}…{r.address[-4:]}"), set()).add(r.project_id)
