@@ -20,10 +20,9 @@ import sqlalchemy as sa
 
 from ..db import (as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
-from ..rules import (WASH_REASONS, WASH_SHARE, corroborated, custom_accounting, is_new, is_spam, is_symmetric, is_wash_7d,
-                     is_wash_7d_by_swaps, is_wash_24h,
-                     is_wash_concentrated, is_wash_no_liquidity,
-                     is_wash_vol_tvl, score_trending, wallets_lower_bound)
+from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
+                     is_new, is_spam, is_symmetric, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
+                     is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
 from .onchain import ready_chains
 
@@ -58,6 +57,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     pool_tvl: dict[tuple, float | None] = {}
     pool_vol7: dict[tuple, float] = {}
     pool_swaps7: dict[tuple, int] = {}     # swaps on the days that carry the 7-day volume: an upper bound of its wallets
+    pool_vol_days: dict[tuple, list[date]] = {}   # the days that carry it
     for key, rows in by_pool.items():
         if key not in pool_project:
             continue
@@ -84,6 +84,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 if name == "vol7":
                     pool_vol7[key] = v
                 quiet[name] = v == 0
+        pool_vol_days[key] = [d for d, r in rows.items() if w7[0] <= d <= w7[1] and (r.volume_usd_day or 0) > 0]
         sb = _swap_bound(rows, w7)
         if sb is not None:
             pool_swaps7[key] = sb
@@ -94,7 +95,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 a[name + "_known"] = False
 
     ready = _ready(conn, ctx, end)
-    reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom)
+    reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom,
+                                  pool_vol_days)
     wallets = _wallets(conn, day, end, ready, pool_project)
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
@@ -217,7 +219,7 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
 
 
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,
-          tvl: dict, swaps7: dict, custom: set[tuple]) -> tuple[dict[int, list[str]], set[int]]:
+          tvl: dict, swaps7: dict, custom: set[tuple], vol_days: dict) -> tuple[dict[int, list[str]], set[int]]:
     """Wash reasons per project (DESIGN.md "Wash rules"). Each rule judges pools; a project gets the reason when the
     pools it flags carry >= WASH_SHARE of the project's volume in that rule's window. Pools with unknown volume are never
     judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers. Every few-wallet
@@ -227,13 +229,16 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     Returns the reasons and the projects with any wallet data (for the "unverified" fallback in run)."""
     stats = {(r.pool_id, r.chain_id): r for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day))}
     lb = {k: wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h) for k, r in stats.items()}
-    lb7, exact7 = _wallets_7d_lower_bound(conn, day)
+    lb7 = _wallets_7d_lower_bound(conn, day)
     top: dict[tuple, list] = {}
     for r in conn.execute(sa.select(pool_top_wallets.c.pool_id, pool_top_wallets.c.chain_id, pool_top_wallets.c.volume_usd,
                                     pool_top_wallets.c.buys, pool_top_wallets.c.sells).where(pool_top_wallets.c.day == day)):
         top.setdefault((r.pool_id, r.chain_id), []).append((r.volume_usd or 0.0, r.buys or 0, r.sells or 0))
     sym = {k: is_symmetric(top.get(k, []), r.vol_24h_rolling) for k, r in stats.items()}
     vol_on, wallets_7d = _onchain_7d(conn, end, ready)
+    distinct7 = {k: wallets_7d.get(k) for k in vol7}
+    distinct7.update(_distinct_week(conn, {k: vol_days.get(k, []) for k, v in vol7.items()
+                                           if k not in wallets_7d and v >= WASH_MIN_VOL_7D}))
     # wallets behind a pool's 7-day volume: on-chain distinct count, else the week's lower bound, else its swap count
     w7 = {k: wallets_7d.get(k, lb7.get(k, swaps7.get(k))) for k in vol7}
     wallet_known = {pool_project[k][0] for k in (set(wallets_7d) | set(lb7) | set(swaps7) | {k for k, n in lb.items() if n is not None})
@@ -245,10 +250,9 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
         "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k), tvl.get(k), sym.get(k, False), k in custom)
                    or is_wash_7d_by_swaps(vol7.get(k, v), swaps7.get(k)))
                for k, v in {**vol7, **vol_on}.items()},
-        # known distinct wallets only: pool_wallet_day on ready chains, else a week whose pool_stats days include an exact
-        # count and whose largest bound is still <= 2
-        "concentrated": {k: (v, is_wash_concentrated(v, wallets_7d[k] if k in wallets_7d else (lb7[k] if k in exact7 else None))
-                             or is_wash_concentrated(v, swaps7.get(k)))      # <= 2 swaps prove <= 2 wallets
+        # a real distinct count only: pool_wallet_day on ready chains, else exact counts on every volume day joined through
+        # pool_top_wallets; or <= 2 swaps, which prove <= 2 wallets
+        "concentrated": {k: (v, is_wash_concentrated(v, distinct7[k]) or is_wash_concentrated(v, swaps7.get(k)))
                          for k, v in vol7.items()},
         "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
         "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k], k in custom)) for k, v in vol7.items()},
@@ -269,21 +273,55 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     return reasons, wallet_known
 
 
-def _wallets_7d_lower_bound(conn, day: date) -> tuple[dict[tuple, int], set[tuple]]:
+def _wallets_7d_lower_bound(conn, day: date) -> dict[tuple, int]:
     """Per pool off ready chains: a lower bound of the wallets behind its 7-day volume, the largest daily lower bound over
     the 7 stored pool_stats days (day-6 .. day, each covering the 24 h before it). One quiet day's 0 buyers / 0 sellers
-    is not a 7-day count. A pool with no known day is absent (unknown), so the 7-day wallet rules cannot fire on it.
-    Also returns the pools with at least one exact (distinct) day."""
+    is not a 7-day count. A pool with no known day is absent (unknown), so the 7-day wallet rules cannot fire on it."""
     out: dict[tuple, int] = {}
-    exact: set[tuple] = set()
     for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day >= day - 6 * _D, pool_stats.c.day <= day)):
         n = wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h)
         if n is not None:
             k = (r.pool_id, r.chain_id)
             out[k] = max(out.get(k, 0), n)
-            if r.wallets_24h is not None:
-                exact.add(k)
-    return out, exact
+    return out
+
+
+def _distinct_week(conn, pools_days: dict[tuple, list[date]]) -> dict[tuple, int | None]:
+    """Distinct wallets behind a pool's 7-day volume off ready chains, or None when it cannot be known. Every day that
+    carries volume needs an exact count (pool_stats.wallets_24h on the next day's row, which covers it); a day over 2
+    wallets settles it (> 2). Otherwise each day's <= 2 wallets are all in that day's pool_top_wallets (top 20), so the
+    union of their addresses is the week's distinct count; a day whose top wallets are missing leaves it unknown."""
+    out: dict[tuple, int | None] = {k: None for k in pools_days}
+    want = {k: {d + _D for d in days} for k, days in pools_days.items() if days}
+    if not want:
+        return out
+    stat_days = {d for days in want.values() for d in days}
+    pids = sorted({k[0] for k in want})
+    exact: dict[tuple, dict[date, int]] = {}
+    addrs: dict[tuple, dict[date, set]] = {}
+    for i in range(0, len(pids), 500):
+        part = pids[i:i + 500]
+        for r in conn.execute(sa.select(pool_stats.c.pool_id, pool_stats.c.chain_id, pool_stats.c.day, pool_stats.c.wallets_24h)
+                              .where(pool_stats.c.pool_id.in_(part), pool_stats.c.day >= min(stat_days),
+                                     pool_stats.c.day <= max(stat_days), pool_stats.c.wallets_24h.is_not(None))):
+            exact.setdefault((r.pool_id, r.chain_id), {})[r.day] = r.wallets_24h
+        for r in conn.execute(sa.select(pool_top_wallets.c.pool_id, pool_top_wallets.c.chain_id, pool_top_wallets.c.day,
+                                        pool_top_wallets.c.address)
+                              .where(pool_top_wallets.c.pool_id.in_(part), pool_top_wallets.c.day >= min(stat_days),
+                                     pool_top_wallets.c.day <= max(stat_days))):
+            addrs.setdefault((r.pool_id, r.chain_id), {}).setdefault(r.day, set()).add(r.address)
+    for k, days in want.items():
+        counts = exact.get(k, {})
+        if any(d not in counts for d in days):
+            continue                                   # a volume day without an exact count: unknown
+        if any(counts[d] > WASH_CONCENTRATED_WALLETS for d in days):
+            out[k] = max(counts[d] for d in days)      # more than 2 on one day is more than 2 in the week
+            continue
+        seen = addrs.get(k, {})
+        if any(len(seen.get(d, ())) < counts[d] for d in days):
+            continue                                   # top wallets missing for a day: unknown
+        out[k] = len(set().union(*(seen.get(d, set()) for d in days)))
+    return out
 
 
 def _onchain_7d(conn, end: date, chains: list[int]) -> tuple[dict, dict]:

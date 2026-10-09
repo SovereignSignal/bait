@@ -316,9 +316,12 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
   symmetric traders. Few wallets alone also describes private / RFQ hooks (Arrakis private hook) with real liquidity.
   No liquidity never counts for a custom-accounting hook (address bit 3): its liquidity lives in the hook. A missing
   GeckoTerminal reserve is unknown TVL, not $0.
-- `concentrated`: >= $1M in 7 days carried by at most 2 known distinct wallets (pool_wallet_day on ready chains, or a
-  week of pool_stats days with an exact count and every bound <= 2). No TVL corroboration, custom-accounting hooks
-  included: one wallet moving $1M through its own pool is not usage; an RFQ hook with 5-10 real counterparties stays clear.
+- `concentrated`: >= $1M in 7 days carried by at most 2 known distinct wallets: pool_wallet_day on ready chains;
+  elsewhere an exact count (pool_stats.wallets_24h) on every day that carries volume, with the union of those days'
+  pool_top_wallets addresses as the week's count (rotating pairs are not concentrated); or <= 2 swaps. No TVL
+  corroboration, custom-accounting hooks included: one wallet moving $1M through its own pool is not usage; an RFQ hook
+  with 5-10 real counterparties stays clear. A legitimate two-counterparty desk moving $1M+ will carry the
+  "concentrated" badge and never rank: an accepted cost, and the badge text is accurate.
 - `vol_tvl`: 7-day volume > 300x a known TVL, >= $10K, fewer than 50 wallets (Base launchpads churn 345x through ~30K).
 - `no_liquidity`: >= $1M in 7 days, a known TVL <= $1,000, fewer than 50 wallets. Unknown TVL never counts.
 - `symmetric`: the pool's top 10 wallets that day each have equal buys and sells and carry > 50% of its rolling 24h

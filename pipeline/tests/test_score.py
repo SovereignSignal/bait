@@ -496,3 +496,31 @@ def test_two_swaps_carrying_a_million_prove_concentration_anywhere(conn, ctx):
     series(conn, "0xpap", 4663, {END: 3_000_000.0}, tvl=None, tx={END: 2})
     score.run(conn, ctx)
     assert "concentrated" in daily(conn, p).wash_reason.split(",")
+
+
+def _week_off_ready(conn, name, per_day):
+    """A $1.4M week on a chain the indexer does not cover, TVL $10M, swaps unknown. per_day[i] for day END-i:
+    (exact wallets or None, buyers, sellers, top-wallet addresses); its pool_stats row is day END-i+1."""
+    p = insert_project(conn, name, first_seen=NOW - timedelta(days=60), slug=name.lower())
+    hook, pool = f"0x{name.lower()}", f"0x{name.lower()}p"
+    insert_hook(conn, hook, 4663, project_id=p, name=name)
+    insert_pool(conn, pool, 4663, hook, created=NOW - timedelta(days=60))
+    series(conn, pool, 4663, {END - timedelta(days=i): 200_000.0 for i in range(7)}, tvl=10_000_000.0)
+    for i, (exact, b, s, addrs) in enumerate(per_day):
+        sd = DAY - timedelta(days=i)
+        conn.execute(sa.insert(db.pool_stats).values(pool_id=pool, chain_id=4663, day=sd, vol_24h=200_000.0, traders_24h=b + s,
+                                                     buyers_24h=b, sellers_24h=s, wallets_24h=exact))
+        for a in addrs:
+            conn.execute(sa.insert(db.pool_top_wallets).values(pool_id=pool, chain_id=4663, day=sd, address=a, volume_usd=100_000.0,
+                                                               trades=2, buys=1, sells=1))
+    return p
+
+
+def test_concentrated_off_ready_chains_needs_the_same_few_wallets_every_day(conn, ctx):
+    rotating = _week_off_ready(conn, "Rotating", [(2, 1, 1, [f"0xr{i}a", f"0xr{i}b"]) for i in range(7)])   # 14 wallets
+    one_exact = _week_off_ready(conn, "OneExact", [(2, 1, 1, ["0xa", "0xb"])] + [(None, 2, 2, [])] * 6)
+    same = _week_off_ready(conn, "Same", [(2, 1, 1, ["0xa", "0xb"])] * 7)
+    score.run(conn, ctx)
+    assert "concentrated" not in (daily(conn, rotating).wash_reason or "")
+    assert "concentrated" not in (daily(conn, one_exact).wash_reason or "")
+    assert "concentrated" in (daily(conn, same).wash_reason or "")
