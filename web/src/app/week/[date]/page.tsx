@@ -15,15 +15,23 @@ export async function generateStaticParams() {
   return d.map((x) => ({ date: x.week }));
 }
 
+/** A digest week is a real Monday (UTC). Anything else is a 404 before it can reach the database. */
+function isWeekStart(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const d = new Date(date + "T00:00:00Z");
+  return !Number.isNaN(d.getTime()) && d.toISOString().startsWith(date) && d.getUTCDay() === 1;
+}
+
 export async function generateMetadata({ params }: { params: Promise<{ date: string }> }): Promise<Metadata> {
   const { date } = await params;
+  if (!isWeekStart(date)) return { title: "Not found" };
   const d = await getDigest(date);
   return d ? { title: d.title, description: d.intro } : { title: "Not found" };
 }
 
 export default async function WeekPage({ params }: { params: Promise<{ date: string }> }) {
   const { date } = await params;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) notFound();
+  if (!isWeekStart(date)) notFound();
   const [d, all] = await Promise.all([getDigest(date), listDigests(12)]);
   if (!d) notFound();
   const idx = all.findIndex((x) => x.week === d.week);
