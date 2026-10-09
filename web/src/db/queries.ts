@@ -111,23 +111,27 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
   return { ...detail, rank };
 }
 
-/** `chainId:poolId` (lowercase) for every pool Bait knows: scored pools plus the indexer's v4_pools. The trades proxy only serves these. */
-export function knownPoolKeys(): Promise<Set<string>> {
+/**
+ * Whether Bait knows this pool: a scored pool or one of the indexer's v4_pools. The trades proxy only serves these.
+ * One primary-key probe per table, cached per pool for ten minutes. Never the whole table: v4_pools runs to millions of
+ * rows and loading it into a Set took the web process past the Node heap limit.
+ */
+export function isKnownPool(chainId: number, poolId: string): Promise<boolean> {
+  const id = poolId.toLowerCase();
   const db = getDb();
   if (!db) {
-    const keys = usingFixtures() ? SAMPLE_PROJECTS.flatMap((p) => p.pools.map((x) => `${x.chainId}:${x.poolId.toLowerCase()}`)) : [];
-    return Promise.resolve(new Set(keys));
+    const known = usingFixtures() && SAMPLE_PROJECTS.some((p) => p.pools.some((x) => x.chainId === chainId && x.poolId.toLowerCase() === id));
+    return Promise.resolve(known);
   }
-  return cached(
-    "poolkeys",
+  return poolKeyCache.get(
+    `${chainId}:${id}`,
     async () => {
       const [scored, indexed] = await Promise.all([
-        safe("poolkeys:pools", () => db.select({ poolId: t.pools.poolId, chainId: t.pools.chainId }).from(t.pools), []),
-        safe("poolkeys:v4_pools", () => db.select({ poolId: t.v4Pools.poolId, chainId: t.v4Pools.chainId }).from(t.v4Pools), []),
+        safe("poolkey:pools", () => db.select({ one: sql`1` }).from(t.pools).where(and(eq(t.pools.chainId, chainId), eq(t.pools.poolId, id))).limit(1), []),
+        safe("poolkey:v4_pools", () => db.select({ one: sql`1` }).from(t.v4Pools).where(and(eq(t.v4Pools.chainId, chainId), eq(t.v4Pools.poolId, id))).limit(1), []),
       ]);
-      return new Set([...scored, ...indexed].map((r) => `${r.chainId}:${r.poolId.toLowerCase()}`));
+      return scored.length > 0 || indexed.length > 0;
     },
-    600_000,
   );
 }
 
@@ -242,6 +246,8 @@ export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T):
 
 // ---------- one-hour stale-while-revalidate cache for the heavy reads (single replica on Railway) ----------
 const cache = createSwrCache<unknown>({ ttlMs: 3_600_000, max: 400 });
+// Pool probes get their own cache: a burst of unknown pool ids from /api/trades must never evict loadAll or the leaders.
+const poolKeyCache = createSwrCache<boolean>({ ttlMs: 600_000, max: 5_000 });
 function cached<T>(key: string, fn: () => Promise<T>, ttl?: Ttl<T>): Promise<T> {
   return cache.get(key, fn as () => Promise<unknown>, ttl as Ttl<unknown> | undefined) as Promise<T>;
 }
