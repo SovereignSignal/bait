@@ -234,7 +234,7 @@ def test_proxy_named_project_is_split_and_proxies_never_join_by_bytecode(conn, c
     assert out["split"] == 1 and out["by_code"] == 0 and out["by_name"] == 0
     rows = conn.execute(sa.select(db.projects.c.name, db.projects.c.slug).join(db.hooks)).all()
     assert len({r.slug for r in rows}) == 3 and all(r.name.startswith("Unlisted hook 0x") for r in rows)
-    assert _alias(conn, "erc1967proxy").project_id in {r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert _alias(conn, "erc1967proxy") is None                                       # no majority holder
 
 
 def test_template_named_hooks_group_by_deployer_never_by_name(conn, ctx):
@@ -373,8 +373,10 @@ def test_a_split_carries_its_slug_receipts_and_enrichment_to_where_most_hooks_la
     conn.execute(sa.insert(db.receipts).values(project_id=old, url="https://news.example/th", title="t", source="news.example"))
     from bait.steps import names
     names.add_alias(conn, "testhook-older", old, "renamed", NOW)
-    for n in (121, 122):
+    for n in (121, 122, 123):
         insert_hook(conn, A(n), 8453, project_id=old, name="TestHook")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address.in_([A(121), A(122)]))      # one bytecode: 2 of 3 together
+                 .values(code_hash="0x" + "7" * 64, is_proxy=False))
     out = group.run(conn, ctx)
     holder = conn.execute(sa.select(db.projects.c.id).where(db.projects.c.x_handle == "th_hooks")).scalars().all()
     assert out["split"] == 1 and len(holder) == 1
@@ -460,3 +462,16 @@ def test_an_unknown_delegatecall_runtime_is_stored_once_and_never_evidence(conn,
     rows = conn.execute(sa.select(db.hooks.c.project_id, db.hooks.c.is_proxy, db.hooks.c.proxy_kind)).all()
     assert len(asked) == 2 and out["by_code"] == 0 and len({r.project_id for r in rows}) == 2
     assert all(r.is_proxy is None and r.proxy_kind == "unknown" for r in rows)
+
+
+def test_a_split_without_a_majority_moves_receipts_but_not_the_slug(conn, ctx):
+    old = insert_project(conn, "TestHook", NOW, slug="testhook")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == old).values(norm_name="test", x_handle="th_hooks"))
+    conn.execute(sa.insert(db.receipts).values(project_id=old, url="https://news.example/th", title="t", source="news.example"))
+    for n in (151, 152):
+        insert_hook(conn, A(n), 8453, project_id=old, name="TestHook")
+    group.run(conn, ctx)
+    holders = sorted({r.project_id for r in conn.execute(sa.select(db.hooks))})
+    assert len(holders) == 2 and _alias(conn, "testhook") is None
+    assert conn.execute(sa.select(sa.func.count()).select_from(db.projects).where(db.projects.c.x_handle == "th_hooks")).scalar_one() == 0
+    assert conn.execute(sa.select(db.receipts.c.project_id)).scalar_one() == holders[0]
