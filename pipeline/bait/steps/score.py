@@ -9,6 +9,9 @@ never read, but it carries the pool's TVL "now", so a pool created this morning 
   that is every pool of a project, its vol_24h / vol_7d / vol_7d_prev are NULL.
 - Swaps: a pool's count is known when every day of the window is (days before the pool was created count as 0; a pool
   with no volume in the window adds 0). Otherwise swaps_7d / swaps_24h are NULL, never a 7-day number built from one day.
+- A capped hook's aggregate pool (pool id 'hook:<address>', swaps of pools the indexer does not store) adds to the project's
+  volume and swaps and to whether its volume is known, never to pools_n or score_trending: its per-pool concentration is
+  lost in the aggregate, so no wash rule can judge it.
 - pools_n: per hook, its pools with a snapshot in the window, or hooks.pools_total (every pool initialized through it, from
   the indexer) when larger.
 Wash (rules.WASH_REASONS) is its own flag: listed in All with a badge, never ranked; is_spam is only rules.is_spam.
@@ -72,7 +75,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         now = rows[max(rows)]          # latest row up to the running day: existence and TVL (a pool born this morning counts)
         closed = [d for d in rows if d <= end]
         cur = rows[max(closed)] if closed else now   # latest closed row: the volume-unknown marker and lifetime volume
-        if not key[0].startswith(HOOK_POOL_PREFIX):   # a hook's aggregate pool adds usage, never a pool
+        folded = key[0].startswith(HOOK_POOL_PREFIX)
+        a["usage_rows"] += 1
+        if not folded:                                 # a hook's aggregate pool adds usage, never a pool
             a["pools"] += 1
             active[pool_hook[key]] = active.get(pool_hook[key], 0) + 1
         a["tvl"] += now.tvl_usd or 0.0
@@ -89,6 +94,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             for name, w in (("vol24", w24), ("vol7", w7), ("vol7p", wp)):
                 v = _vol(rows, w)
                 a[name] += v
+                if folded:
+                    a["fold_" + name] += v
                 if name == "vol7":
                     pool_vol7[key] = v
                 quiet[name] = v == 0
@@ -131,7 +138,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             reasons[pid] = ["unverified"]
         wash = pid in reasons
         # every pool's volume unknown (p5 held it back): the project's volume is unknown, never $0
-        known = a["vol_known"] or not a["pools"]
+        known = a["vol_known"] or not a["usage_rows"]
         young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
         rows.append({
             "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"] + extra.get(pid, 0),
@@ -139,7 +146,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "vol_7d_prev": a["vol7p"] if known else None,
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
             "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
-            "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"], a["vol7p"]),
+            # folded usage (a capped hook's aggregate pool) is displayed, never ranked: no wash rule can judge it
+            "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"] - a["fold_vol7"], a["vol7p"] - a["fold_vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
             "is_new": not wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
             "is_spam": spam,           # true spam only: no pools, or tiny, idle and < $1M
@@ -178,7 +186,7 @@ def _custom(hook: str | None) -> bool:
 def _empty() -> dict:
     return {"tvl": 0.0, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
             "tx24_known": True, "tx7_known": True, "stats": [], "life": 0.0,
-            "vol_known": False}
+            "vol_known": False, "usage_rows": 0, "fold_vol24": 0.0, "fold_vol7": 0.0, "fold_vol7p": 0.0}
 
 
 def _vol(rows: dict, w: tuple[date, date]) -> float:
