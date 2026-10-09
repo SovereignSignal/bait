@@ -103,15 +103,18 @@ def aggregate_swaps(chain: IndexedChain, logs: list[dict], blocks: dict[int, int
                     known: dict[str, tuple[str, str]], prices: PriceBook | None, agg: SwapAgg) -> None:
     """Swaps of known hooked pools -> agg. Wallet = transaction sender (tx.from), falling back to the Swap sender."""
     agg.seen_ts = max([agg.seen_ts, *(t for t in blocks.values() if t)])
-    decoded = []
+    decoded, missing = [], 0
     for lg in logs:
         s = decode_swap(lg)
         if s is None or s["pool_id"] not in known:
             continue
         ts = blocks.get(num(lg.get("block_number")))
         if ts is None:
+            missing += 1
             continue
         decoded.append((s, ts, txs.get((lg.get("transaction_hash") or "").lower()) or s["sender"] or "unknown"))
+    if missing:  # the cursor would move past swaps we never counted
+        raise RuntimeError(f"chain={chain.slug}: {missing} swap logs of hooked pools without a block timestamp; page not committed")
     if not decoded:
         return
     book = {}
@@ -127,6 +130,24 @@ def aggregate_swaps(chain: IndexedChain, logs: list[dict], blocks: dict[int, int
 def swap_start_ts(now: datetime) -> tuple[date, int]:
     d = now.astimezone(timezone.utc).date() - timedelta(days=SWAP_BACKFILL_DAYS)
     return d, int(datetime.combine(d, dtime.min, tzinfo=timezone.utc).timestamp())
+
+
+def _start_swap_phase(engine, chain: IndexedChain, hs: HyperSync, swap_from: int, end: int, head: int,
+                      now: datetime) -> tuple[int, datetime]:
+    """Initialize history just reached the swap cursor picked on the first run, which is days old after a long backfill
+    (Base). Move it up to the first block of today-14 so the window is 14 days. Always writes swap_block_time, so it runs
+    once per reset. No reset_swaps_from: swap_time None means no swap page was committed since the last reset."""
+    start_day, ts = swap_start_ts(now)
+    cur_ts = hs.block_timestamp(swap_from)
+    if cur_ts is not None and cur_ts >= ts:
+        new, t = swap_from, cur_ts
+    else:
+        new, t = max(swap_from, hs.block_at_or_after(ts, end - 1)), ts
+    with engine.begin() as conn:
+        store.advance_swap_cursor(conn, chain.chain_id, swap_from, new, head, utc(t))
+    if new != swap_from:
+        log.info("chain=%s swap phase starts: window moved from block %d to %d (%s 00:00 UTC)", chain.slug, swap_from, new, start_day)
+    return new, utc(t)
 
 
 def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices: PriceBook | None,
@@ -170,6 +191,8 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
 
     swap_from = state.swap_block
     swap_time = as_utc(state.swap_block_time)
+    if swap_time is None and not state.backfilled and init_from > swap_from:
+        swap_from, swap_time = _start_swap_phase(engine, chain, hs, swap_from, end, head, now)
     swap_end = min(init_from, end)      # never count swaps past the block our pool list is complete for
     with engine.connect() as conn:
         n_pools = store.pool_count(conn, chain.chain_id)
