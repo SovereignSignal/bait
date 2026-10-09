@@ -244,3 +244,14 @@ def test_sourcify_proxy_flag_is_stored(conn, ctx):
     ctx.clients["names"] = Proxying({})
     names.run(conn, ctx, {})
     assert conn.execute(sa.select(db.hooks.c.is_proxy).where(db.hooks.c.address == A(45))).scalar_one() is True
+
+
+def test_a_generic_name_does_not_stop_the_lookup_and_stays_the_fallback():
+    h = _Http({"sourcify.dev": _Resp(200, {"compilation": {"name": "ERC1967Proxy"}}),
+               "robinhoodchain.blockscout.com": _Resp(200, {"name": "ERC1967Proxy", "is_verified": True,
+                                                            "implementations": [{"name": "OrcaHook"}]})})
+    assert tuple(ContractNames(None, http_client=h).lookup(4663, A(1))) == ("OrcaHook", "blockscout", True)
+    only_raw = _Http({"sourcify.dev": _Resp(200, {"compilation": {"name": "ERC1967Proxy"}})})
+    cn = ContractNames(None, http_client=only_raw)
+    assert cn.lookup(4663, A(1))[:2] == ("ERC1967Proxy", "sourcify")                   # raw kept, like before
+    assert cn.outcomes["sourcify:generic"] == 1 and cn.outcomes["blockscout:miss"] == 1
