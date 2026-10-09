@@ -7,7 +7,7 @@ from datetime import date, timedelta
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 
-from ..db import as_utc, hook_pool_counts, indexer_state, pool_daily_onchain, pool_wallet_day, upsert, utcnow, v4_pools
+from ..db import HOOK_POOL_PREFIX, as_utc, hook_pool_counts, indexer_state, pool_daily_onchain, pool_wallet_day, upsert, utcnow, v4_pools
 
 CHUNK = 500
 WALLET_RETAIN_DAYS = 30
@@ -49,10 +49,11 @@ def upsert_pools(conn: sa.Connection, rows: list[dict]) -> int:
 
 
 def insert_late_pools(conn: sa.Connection, rows: list[dict]) -> int:
-    """Pools past their hook's cap that just swapped: rows with sampled = true. hook_pool_counts already counts them."""
+    """Pools that were not rows and just swapped. A row's own "sampled" flag wins (default true: past its hook's cap,
+    already counted in hook_pool_counts); a pool missing for another reason comes with sampled = false."""
     ins = _ins(conn)
     for i in range(0, len(rows), CHUNK):
-        conn.execute(ins(v4_pools).values([{**r, "sampled": True} for r in rows[i:i + CHUNK]])
+        conn.execute(ins(v4_pools).values([{"sampled": True, **r} for r in rows[i:i + CHUNK]])
                      .on_conflict_do_nothing(index_elements=["chain_id", "pool_id"]))
     return len(rows)
 
@@ -141,6 +142,13 @@ def _counted(chain_id: int, hook: str, total: int, first, last, seen_at, rows: l
             "last_seen": max(seens) if seens else None}
 
 
+def widen_lookup_floor(conn: sa.Connection, chain_id: int) -> None:
+    """History was reset (an RPC-mode hole, a fresh backfill): pools past a cap may sit below any first_block recorded
+    since, so lookups by pool id start from block 0 on this chain."""
+    conn.execute(sa.update(hook_pool_counts).where(hook_pool_counts.c.chain_id == chain_id, hook_pool_counts.c.first_block != 0)
+                 .values(first_block=0))
+
+
 def capped_floor(conn: sa.Connection, chain_id: int) -> int | None:
     """None: no hook on this chain is past the cap, so every hooked pool is a row. Else the oldest block a hooked pool
     that is not a row can have (where the lookup by pool id starts)."""
@@ -172,7 +180,13 @@ def all_pools(conn: sa.Connection, chain_id: int) -> dict[str, tuple[str, str]]:
 
 def reset_swaps_from(conn: sa.Connection, chain_id: int, day: date) -> None:
     """Swap counting (re)starts at the first block of `day`: drop what was counted from that day on so the
-    incremental upserts below never double count."""
+    incremental upserts below never double count. Days of a hook's aggregate pool also come out of its all-time totals."""
+    folded = conn.execute(sa.select(pool_daily_onchain.c.pool_id, sa.func.sum(pool_daily_onchain.c.swaps),
+                                    sa.func.sum(pool_daily_onchain.c.volume_usd))
+                          .where(pool_daily_onchain.c.chain_id == chain_id, pool_daily_onchain.c.day >= day,
+                                 pool_daily_onchain.c.pool_id.like(HOOK_POOL_PREFIX + "%"))
+                          .group_by(pool_daily_onchain.c.pool_id)).all()
+    add_hook_usage(conn, chain_id, {p[len(HOOK_POOL_PREFIX):]: [0, -(n or 0), -(v or 0.0)] for p, n, v in folded})
     conn.execute(sa.delete(pool_daily_onchain).where(pool_daily_onchain.c.chain_id == chain_id, pool_daily_onchain.c.day >= day))
     conn.execute(sa.delete(pool_wallet_day).where(pool_wallet_day.c.chain_id == chain_id, pool_wallet_day.c.day >= day))
 
