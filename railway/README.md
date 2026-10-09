@@ -40,7 +40,7 @@ Optional keys, each one switches on a layer: `GRAPH_API_KEY` (subgraph usage, fa
 
 ## Adding the `indexer` service (on-chain v4 indexer)
 
-Not created yet. `python -m bait.indexer` is a long-running process (one loop every `INDEXER_INTERVAL`, 60 s) that
+The `indexer` service exists in the Railway project; the steps below are how to recreate it. `python -m bait.indexer` is a long-running process (one loop every `INDEXER_INTERVAL`, 60 s) that
 writes `v4_pools`, `pool_daily_onchain`, `pool_wallet_day` and `indexer_state`; the nightly `pipeline` run copies them
 into the feed tables (step `onchain`). Same image as `pipeline`, different start command, always on.
 
@@ -79,4 +79,8 @@ Deploying the package-5 indexer over an older one: the indexer must be stopped b
 removes the running deployment first). Otherwise the old process (no lock, no compare-and-set) runs next to the new one,
 and every page the new process wins is duplicated until the old process exits. Expect the first start to block
 `v4_pools` inserts briefly while it builds `v4_pools_chain_block_idx`.
+
+Schema changes reach production through the indexer: it runs `add_missing_columns` on start and redeploys on every
+`pipeline/bait/db.py` change, so new columns (package 8: `0012_windows.sql`) appear about a minute after a merge. In that
+minute the web can serve empty lists (its `safe()` fallback, not cached) and recovers on its own.
 
