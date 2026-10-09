@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
-import logging
 import sys
 import time
 from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
 
-from . import db
+from . import db, logsetup
 from .config import CHAIN_BY_SLUG
 from .costs import Meter, format_preview, preview
 from .steps import STEP_ORDER, RunContext, log
@@ -47,7 +46,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
+    logsetup.configure()
     args = parse_args(sys.argv[1:] if argv is None else argv)
     engine = db.make_engine(args.database_url)
     if args.cmd == "init-db":
