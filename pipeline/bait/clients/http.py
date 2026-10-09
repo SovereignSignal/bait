@@ -54,3 +54,12 @@ def post_json_paid(c: httpx.Client, url: str, **kw):
     r = c.post(url, **kw)
     r.raise_for_status()
     return r.json()
+
+
+def maybe_billed(exc: BaseException) -> bool:
+    """After a paid POST failed: could the provider have received, and billed, it? A connect or pool failure never
+    left this machine and a 4xx (429 included) was refused; a read/write timeout, dropped connection or 5xx is ambiguous."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, httpx.TransportError) and not isinstance(
+        exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))

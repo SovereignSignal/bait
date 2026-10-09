@@ -51,3 +51,42 @@ def test_parallel_and_exa_use_the_paid_post(monkeypatch):
     assert Parallel("k", http_client=object()).submit("P", "hints") == "r1"
     assert Exa("k", http_client=object()).search_recent("q") == []
     assert sent == ["https://api.parallel.ai/v1/tasks/runs", "https://api.exa.ai/search"]
+
+
+class _Meter:
+    def __init__(self):
+        self.records = []
+
+    def check(self, provider, est_usd):
+        pass
+
+    def record(self, provider, usd, units=1, detail=""):
+        self.records.append((provider, detail))
+
+
+def _read_timeout(req):
+    return httpx.ReadTimeout("x", request=req)
+
+
+def _status(code):
+    return lambda req: httpx.HTTPStatusError("x", request=req, response=httpx.Response(code, request=req))
+
+
+@pytest.mark.parametrize("make,billed", [(_read_timeout, True), (_status(503), True),
+                                         (lambda req: httpx.ConnectError("x", request=req), False),
+                                         (_status(429), False), (_status(400), False)])
+def test_a_lost_response_on_a_paid_post_is_recorded_as_ambiguous_spend(monkeypatch, make, billed):
+    from bait.clients.exa import Exa
+    from bait.clients.parallel import Parallel
+
+    def boom(c, url, **k):
+        raise make(httpx.Request("POST", url))
+    monkeypatch.setattr(http, "post_json_paid", boom)
+    par, exa = Parallel("k", http_client=object()), Exa("k", http_client=object())
+    par.meter, exa.meter = _Meter(), _Meter()
+    with pytest.raises(httpx.HTTPError):
+        par.submit("P", "hints")
+    with pytest.raises(httpx.HTTPError):
+        exa.search_recent("q")
+    for meter, provider in ((par.meter, "parallel"), (exa.meter, "exa")):
+        assert [(p, "ambiguous" in d) for p, d in meter.records] == ([(provider, True)] if billed else [])

@@ -30,7 +30,12 @@ class Exa:
         from ..costs import exa_usd
         price = exa_usd(n, highlights=True)
         self.meter.check("exa", price)
-        d = http.post_json_paid(self.c, "https://api.exa.ai/search", json=body, headers=self.headers)
+        try:
+            d = http.post_json_paid(self.c, "https://api.exa.ai/search", json=body, headers=self.headers)
+        except Exception as e:  # sent but no answer: the search may be billed, so the ledger counts it
+            if http.maybe_billed(e):
+                self.meter.record("exa", price, detail=f"ambiguous {query[:110]}")
+            raise
         self.meter.record("exa", price, detail=query[:120])
         out = []
         for r in d.get("results", []):

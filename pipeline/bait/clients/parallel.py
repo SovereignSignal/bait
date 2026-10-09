@@ -50,11 +50,16 @@ class Parallel:
         from ..costs import parallel_usd
         price = parallel_usd(self.processor)
         self.meter.check("parallel", price)
-        run = http.post_json_paid(self.c, "https://api.parallel.ai/v1/tasks/runs", headers=self.headers, json={
-            "input": f"Uniswap v4 hook project '{project_name}'. Known facts: {hints}",
-            "task_spec": {"output_schema": OUTPUT_SCHEMA},
-            "processor": self.processor,
-        })
+        try:
+            run = http.post_json_paid(self.c, "https://api.parallel.ai/v1/tasks/runs", headers=self.headers, json={
+                "input": f"Uniswap v4 hook project '{project_name}'. Known facts: {hints}",
+                "task_spec": {"output_schema": OUTPUT_SCHEMA},
+                "processor": self.processor,
+            })
+        except Exception as e:  # sent but no answer: the run may exist and be billed, so the ledger counts it
+            if http.maybe_billed(e):
+                self.meter.record("parallel", price, detail=f"{self.processor} ambiguous {project_name[:60]}")
+            raise
         run_id = run["run_id"]
         self.meter.record("parallel", price, detail=f"{self.processor} run={run_id} {project_name[:60]}")
         return run_id
