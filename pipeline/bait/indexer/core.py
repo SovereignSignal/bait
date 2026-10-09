@@ -170,7 +170,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     if n_pools == 0:
         if swap_from < swap_end:
             with engine.begin() as conn:
-                store.set_state(conn, chain.chain_id, swap_block=swap_end, head_block=head)
+                store.advance_swap_cursor(conn, chain.chain_id, swap_from, swap_end, head)
             swap_from = swap_end
     elif n_pools <= settings.topic_filter_max:
         st.mode = "hypersync/topic"
@@ -195,7 +195,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
                         raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={n2})")
                     aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
                     cur = n2
-            _commit_swaps(engine, chain, agg, nb, head, st)
+            _commit_swaps(engine, chain, agg, swap_from, nb, head, st)
             swap_from = nb
     else:
         st.mode = "hypersync/scan"
@@ -214,7 +214,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             with engine.connect() as conn:
                 known = store.pools_by_id(conn, chain.chain_id, ids)
             aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
-            _commit_swaps(engine, chain, agg, nb, head, st)
+            _commit_swaps(engine, chain, agg, swap_from, nb, head, st)
             swap_from = nb
 
     st.init_lag = max(end - init_from, 0)
@@ -226,10 +226,11 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     return st
 
 
-def _commit_swaps(engine: sa.Engine, chain: IndexedChain, agg: SwapAgg, cursor: int, head: int, st: ChainStats) -> None:
+def _commit_swaps(engine: sa.Engine, chain: IndexedChain, agg: SwapAgg, expected: int, cursor: int, head: int,
+                  st: ChainStats) -> None:
     with engine.begin() as conn:
+        store.advance_swap_cursor(conn, chain.chain_id, expected, cursor, head)   # first: a loser fails before writing
         store.apply_swaps(conn, chain.chain_id, agg.daily, agg.wallets)
-        store.set_state(conn, chain.chain_id, swap_block=cursor, head_block=head)
     st.swaps += agg.swaps
     st.unpriced += agg.unpriced
 

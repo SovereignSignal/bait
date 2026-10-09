@@ -103,3 +103,32 @@ def test_runner_skips_a_chain_another_indexer_holds(pg_engine, monkeypatch):
     finally:
         held.close()
     assert seen == ["ethereum"] and out["base"].error == "locked"
+
+
+def test_swap_cursor_cas_loser_waits_on_the_row_lock_then_matches_nothing(pg_engine):
+    import threading
+    from bait.indexer import store
+    with pg_engine.begin() as c:
+        store.set_state(c, 8453, initialize_block=100, swap_block=10, head_block=100)
+    a = pg_engine.connect()
+    a.begin()
+    store.advance_swap_cursor(a, 8453, 10, 20, 100)           # first container: row locked, not committed yet
+    result = {}
+
+    def second():
+        with pg_engine.begin() as b:
+            try:
+                store.advance_swap_cursor(b, 8453, 10, 20, 100)
+                result["b"] = "advanced"
+            except store.CursorMoved:
+                result["b"] = "moved"
+    t = threading.Thread(target=second)
+    t.start()
+    t.join(timeout=1.0)
+    assert t.is_alive()                                        # blocked on A's row lock
+    a.commit()
+    a.close()
+    t.join(timeout=10)
+    assert result == {"b": "moved"}                            # READ COMMITTED re-checks swap_block = 10 after A commits
+    with pg_engine.connect() as c:
+        assert store.get_state(c, 8453).swap_block == 20
