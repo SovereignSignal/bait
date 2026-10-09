@@ -15,7 +15,9 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
    vol_24h / traders_24h from the last complete UTC day. On-chain is exact, so it overrides keyless values for those pools.
    While a chain's on-chain history is shorter than the 14-day window, pools keyless already snapshots keep their
    keyless series (only pool_stats is overridden). Volume the chain cannot measure (custom-accounting hooks, pool-days
-   mostly unpriced) never overrides keyless numbers; pool_stats.vol_source says which source won.
+   mostly unpriced) never overrides keyless numbers; pool_stats.vol_source says which source won. The rule is per day:
+   from the first unknown day on, the series carries NULL volume, or the keyless series is kept when that day is on or
+   before the reference day, and pool_stats keeps keyless volume exactly when the series' reference day is unknown.
 """
 from __future__ import annotations
 
@@ -243,14 +245,14 @@ def _usage(conn, ctx: RunContext, out: dict) -> None:
             _usage_chunk(conn, ctx, cid, pool_ids[i:i + CHUNK], start, full, ref, coverage, extras_stats, out)
 
 
-def _volume_unknown(hook: str | None, days) -> bool:
-    """On-chain USD volume cannot stand in for keyless numbers: a custom-accounting hook, or most swaps had no priced side.
-    days: iterable of (swaps, wallets, volume, unpriced)."""
+def _unknown_from(hook: str | None, days: dict, start: date) -> date | None:
+    """First day whose on-chain USD volume cannot stand in for keyless numbers: `start` for a custom-accounting hook, else
+    the first day with more than half its swaps unpriced. days: {day: (swaps, wallets, volume, unpriced)}. A cumulative
+    series cannot skip a day, so volume stays unknown from that day on."""
     if hook and custom_accounting(hook):
-        return True
-    days = list(days)
-    swaps, unpriced = sum(d[0] for d in days), sum(d[3] for d in days)
-    return swaps > 0 and unpriced * 2 > swaps
+        return start
+    bad = [d for d, (n, _, _, u) in days.items() if n > 0 and u * 2 > n]
+    return min(bad) if bad else None
 
 
 def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date, full: bool, ref: date, coverage: date,
@@ -270,21 +272,24 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
     has_window = {r[0] for r in conn.execute(sa.select(pool_snapshots.c.pool_id).distinct().where(
         pool_snapshots.c.chain_id == cid, pool_snapshots.c.pool_id.in_(chunk),
         pool_snapshots.c.day >= ctx.day - timedelta(days=WINDOW_DAYS + 1), pool_snapshots.c.day <= ctx.day))}
-    unknown = {pid: _volume_unknown(hook_of.get(pid), daily.get(pid, {}).values()) for pid in chunk}
-    # unknown volume never replaces a keyless series; without one, the series carries swap counts and NULL volume
-    replace = [pid for pid in chunk if (full or pid not in has_window) and not (unknown[pid] and pid in has_window)]
+    # Per day: from the first unknown day on, the series carries NULL volume (swap counts kept). If that day is on or before
+    # the reference day, a keyless series is kept instead and pool_stats keeps keyless volume, so the two always agree.
+    bad_from = {pid: _unknown_from(hook_of.get(pid), daily.get(pid, {}), start) for pid in chunk}
+    held_back = {pid for pid, b in bad_from.items() if b is not None and b <= ref}
+    replace = [pid for pid in chunk if (full or pid not in has_window) and not (pid in held_back and pid in has_window)]
     snap_rows = []
     for pid in replace:
         cum_v, cum_n = 0.0, 0
         snap_rows.append({"pool_id": pid, "chain_id": cid, "day": start - timedelta(days=1), "tvl_usd": tvl.get(pid),
-                          "volume_usd_cum": None if unknown[pid] else 0.0, "tx_count_cum": 0})
+                          "volume_usd_cum": 0.0, "tx_count_cum": 0})
         d = start
         while d <= ctx.day:
             n, _, v, _ = daily.get(pid, {}).get(d, (0, 0, 0.0, 0))
             cum_v += v
             cum_n += n
             snap_rows.append({"pool_id": pid, "chain_id": cid, "day": d, "tvl_usd": tvl.get(pid),
-                              "volume_usd_cum": None if unknown[pid] else cum_v, "tx_count_cum": cum_n})
+                              "volume_usd_cum": None if bad_from[pid] is not None and d >= bad_from[pid] else cum_v,
+                              "tx_count_cum": cum_n})
             d += timedelta(days=1)
     if replace:
         conn.execute(sa.delete(pool_snapshots).where(pool_snapshots.c.chain_id == cid, pool_snapshots.c.pool_id.in_(replace),
@@ -297,9 +302,9 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
         return  # no complete on-chain day yet
     stat_rows, held = [], []
     for pid in chunk:
-        n, w, v, u = daily.get(pid, {}).get(ref, (0, 0, 0.0, 0))
+        _, w, v, _ = daily.get(pid, {}).get(ref, (0, 0, 0.0, 0))
         hook = hook_of.get(pid)
-        if _volume_unknown(hook, [(n, w, v, u)]):
+        if pid in held_back:
             held.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": None, "traders_24h": w,
                          "vol_source": "hook" if hook and custom_accounting(hook) else "unpriced"})
             if extras_stats is not None:
