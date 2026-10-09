@@ -1,9 +1,9 @@
-// Right column: the classic Uniswap swap widget, buys vs sells, what it does, hook facts.
+// Right column: pool action card (links out to Uniswap), buys vs sells, what it does, hook facts.
 import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { feeLabel, int, paletteColor, shortAddr } from "@/lib/format";
 import { pace } from "@/lib/present";
+import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
-import { ArrowDown, Chevron } from "./Icons";
 import s from "./Trade.module.css";
 
 function Token({ sym }: { sym: string }) {
@@ -12,17 +12,22 @@ function Token({ sym }: { sym: string }) {
       <span className={s.dot} style={{ background: paletteColor(sym) }}>
         {sym.slice(0, 1)}
       </span>
-      {sym} <Chevron size={10} />
+      {sym}
     </span>
   );
 }
 
 export function TradePanel({ p }: { p: ProjectDetail }) {
   const pool = p.pools.find((x) => knownChain(x.chainId)) ?? null;
+  const hookProps = (addr: string | null | undefined) => p.hooks.find((h) => h.address.toLowerCase() === (addr ?? "").toLowerCase())?.properties ?? {};
   const top = pool
-    ? { poolId: pool.poolId, chainId: pool.chainId, s0: pool.token0Symbol, s1: pool.token1Symbol, fee: feeLabel(pool.fee), hook: pool.hookAddress }
+    ? { poolId: pool.poolId, chainId: pool.chainId, s0: pool.token0Symbol, s1: pool.token1Symbol, fee: feeLabel(pool.fee), hook: pool.hookAddress, eligibility: pool.eligibility, tvlUsd: pool.tvlUsd as number | null }
     : p.topPool && knownChain(p.topPool.chainId)
-      ? { poolId: p.topPool.poolId, chainId: p.topPool.chainId, s0: p.topPool.token0Symbol, s1: p.topPool.token1Symbol, fee: "", hook: p.topPool.hookAddress }
+      ? {
+          poolId: p.topPool.poolId, chainId: p.topPool.chainId, s0: p.topPool.token0Symbol, s1: p.topPool.token1Symbol, fee: "", hook: p.topPool.hookAddress,
+          eligibility: p.topPool.hookAddress ? eligibility(p.topPool.hookAddress, {}, hookProps(p.topPool.hookAddress), null) : p.signals.routable,
+          tvlUsd: p.metrics.tvlUsd as number | null,
+        }
       : null;
   const s0 = top?.s0 ?? "?";
   const s1 = top?.s1 ?? "?";
@@ -41,54 +46,47 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
       <div className={s.swap}>
         <div className={s.swapH}>
           <div className={s.swapT}>
-            <span>Swap</span>
-            <span>Limit</span>
+            <span>Trade</span>
           </div>
-          <span className="mut3" aria-hidden="true">
-            ⚙
-          </span>
         </div>
         <div className={s.well}>
-          <div className={s.lbl}>You pay</div>
+          <div className={s.lbl}>Pool</div>
           <div className={s.ln}>
-            <input inputMode="decimal" placeholder="0" aria-label="Amount to pay" autoComplete="off" />
-            <Token sym={s0} />
+            <Token sym={s0} /> <span className="mut3">/</span> <Token sym={s1} />
           </div>
-          <div className={s.wsub}>{top ? `via ${s0} / ${s1} on ${chainName}` : "No pool indexed yet"}</div>
-        </div>
-        <div className={s.flip}>
-          <span>
-            <ArrowDown />
-          </span>
-        </div>
-        <div className={s.well}>
-          <div className={s.lbl}>You receive</div>
-          <div className={s.ln}>
-            <span className={s.q}>0</span>
-            <Token sym={s1} />
-          </div>
-          <div className={s.wsub}>Quote on Uniswap</div>
+          <div className={s.wsub}>{top ? `${chainName}${top.fee ? ` · ${top.fee} fee` : ""}` : "No pool indexed yet"}</div>
         </div>
         <div className={s.route}>
-          <span>Routes through</span>
-          <b>
-            {p.name}
-            {top?.fee ? ` · ${top.fee} fee` : ""}
-          </b>
+          <span>Through</span>
+          <b>{p.name}</b>
         </div>
         {link &&
-          (p.signals.routable === "eligible" ? (
-            <a className={s.cta} href={link} target="_blank" rel="noopener">
-              Swap on Uniswap
-            </a>
-          ) : (
-            <>
-              <a className={`${s.cta} ${s.alt}`} href={link} target="_blank" rel="noopener">
-                View pool on Uniswap
+          top &&
+          (() => {
+            const elig = top.eligibility;
+            const tvl = top.tvlUsd ?? 0;
+            const ok = elig === "eligible" && tvl >= 1000 && s0 !== "?" && s1 !== "?";
+            const reason =
+              elig === "ineligible"
+                ? "This hook does not route in the Uniswap app; trading happens through the project's own interface."
+                : elig === "unknown"
+                  ? "Routing in the Uniswap app is unknown for this pool."
+                  : tvl < 1000
+                    ? `No liquidity in this pool (${tvl < 1 ? "$0" : "under $1K"} TVL). Volume may not be organic.`
+                    : "One of the tokens could not be identified.";
+            return ok ? (
+              <a className={s.cta} href={link} target="_blank" rel="noopener">
+                Swap on Uniswap
               </a>
-              <div className={s.note}>This hook does not route in the Uniswap app, so trading happens through the project’s own interface.</div>
-            </>
-          ))}
+            ) : (
+              <>
+                <a className={`${s.cta} ${s.alt}`} href={link} target="_blank" rel="noopener">
+                  View pool on Uniswap
+                </a>
+                <div className={s.note}>{reason}</div>
+              </>
+            );
+          })()}
       </div>
 
       {hasBs && (
