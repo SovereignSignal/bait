@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow
 from ..rules import SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, slugify, useful_name
 from . import RunContext, log
-from .names import add_alias, backfill_unlisted_aliases, hook_rows, retire_project, unique_slug
+from .names import add_alias, backfill_unlisted_aliases, detach_project, hook_rows, retire_project, unique_slug
 
 FACTORY_MIN_HOOKS = 21
 
@@ -24,7 +24,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     _refresh_code_facts(conn, ctx, out)
     out["aliases_backfilled"] = backfill_unlisted_aliases(conn, ctx.now)
     generic = _data_generic_norms(conn)
-    out["split"] = _split_generic(conn, ctx, generic) + _split_proxy_families(conn, ctx)
+    splits = _split_generic(conn, ctx, generic) + _split_proxy_families(conn, ctx)
+    out["split"] = len(splits)
     _regroup(conn, ctx, out, generic)
     unassigned = _unassigned(conn)
 
@@ -134,6 +135,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     # Name what is still "Unlisted hook ..." from verified source (free), merging same-named hooks on a chain.
     from . import names
     names.run(conn, ctx, out)
+    for snap in splits:                                  # split projects' slugs and paid facts follow their hooks
+        names.settle_split(conn, snap, ctx.now)
 
     # Factories: > 20 hooks.
     counts = conn.execute(sa.select(hooks.c.project_id, sa.func.count()).where(hooks.c.project_id.is_not(None)).group_by(hooks.c.project_id)).all()
@@ -183,11 +186,13 @@ def _gname(h, generic: set[str] = frozenset()) -> str | None:
 
 
 def _data_generic_norms(conn) -> set[str]:
-    """Hooklist names that unrelated teams share: at least two entries with a known deployer, all of those deployers
-    different, and no non-proxy code_hash shared between entries. Unknown deployers prove nothing either way, and a name
-    on FACTORY_MIN_HOOKS or more hooks is a factory family by design, so neither makes a name generic."""
+    """Hooklist names that unrelated teams share. Deployers only conflict on the same chain (one team often deploys
+    per chain from a different address, and per-chain bytecode always differs because the PoolManager is an
+    immutable), so a name is generic when, counting per chain the distinct known deployers beyond the first, there are
+    at least two such conflicts and no non-proxy code_hash is shared. Unknown deployers prove nothing, and a name on
+    FACTORY_MIN_HOOKS or more hooks is a factory family by design."""
     by: dict[str, list] = {}
-    for r in conn.execute(sa.select(hooks.c.name, hooks.c.deployer, hooks.c.code_hash, hooks.c.is_proxy)
+    for r in conn.execute(sa.select(hooks.c.name, hooks.c.chain_id, hooks.c.deployer, hooks.c.code_hash, hooks.c.is_proxy)
                           .where(hooks.c.name.is_not(None))):
         if norm := normalize_name(useful_name(r.name, max_len=None)):
             by.setdefault(norm, []).append(r)
@@ -195,9 +200,14 @@ def _data_generic_norms(conn) -> set[str]:
     for norm, rows in by.items():
         if not 2 <= len(rows) < FACTORY_MIN_HOOKS:
             continue
-        deps = [r.deployer for r in rows if r.deployer and r.deployer not in SHARED_DEPLOYERS]
         codes = [c for r in rows if (c := code_evidence(r))]
-        if len(deps) >= 2 and len(set(deps)) == len(deps) and len(set(codes)) == len(codes):
+        if len(set(codes)) < len(codes):
+            continue                                     # shared bytecode: one team
+        per_chain: dict[int, set[str]] = {}
+        for r in rows:
+            if r.deployer and r.deployer not in SHARED_DEPLOYERS:
+                per_chain.setdefault(r.chain_id, set()).add(r.deployer)
+        if sum(len(d) - 1 for d in per_chain.values()) >= 2:
             out.add(norm)
     return out
 
@@ -286,10 +296,10 @@ def _refresh_code_facts(conn, ctx, out: dict) -> None:
     log.info("group: code facts for %d of %d hooks, %d without code", out["code_refreshed"], len(todo), out["code_missing"])
 
 
-def _split_proxy_families(conn, ctx) -> int:
+def _split_proxy_families(conn, ctx) -> list[dict]:
     """Auto-named projects (bytecode families, verified-name merges) that joined proxies by shared bytecode before proxy
     status was known. If a proxy hook has no evidence (non-proxy code, a real deployer) tying it to the rest of its
-    project, the whole project goes back through the rules. No alias: its hooks may land in several projects."""
+    project, the whole project goes back through the rules; settle_split hands its slug to where most hooks land."""
     rows = conn.execute(
         sa.select(hooks.c.project_id, hooks.c.code_hash, hooks.c.is_proxy, hooks.c.deployer, hooks.c.name,
                   hooks.c.contract_name, projects.c.name.label("pname"), projects.c.norm_name.label("pnorm"))
@@ -301,28 +311,30 @@ def _split_proxy_families(conn, ctx) -> int:
             by.setdefault(r.project_id, []).append(r)
     bad = [pid for pid, hs in sorted(by.items())
            if len(hs) > 1 and any(h.is_proxy and not merge_evidence([h], [o for o in hs if o is not h]) for h in hs)]
-    for pid in bad:
-        conn.execute(sa.update(hooks).values(project_id=None).where(hooks.c.project_id == pid))
-        retire_project(conn, pid, into=None, reason="split:proxy", now=ctx.now)
+    snaps = [detach_project(conn, pid, "split:proxy", ctx.now) for pid in bad]
     if bad:
         log.info("group: split %d auto-named projects that joined proxies by bytecode", len(bad))
-    return len(bad)
+    return snaps
 
 
-def _split_generic(conn, ctx, generic: set[str]) -> int:
+def _split_generic(conn, ctx, generic: set[str]) -> list[dict]:
     """Projects keyed on a template, proxy or data-generic name ("ERC1967Proxy", "LimitOrderHook") merged unrelated hooks
-    by name alone. Detach their hooks so the rules regroup them on evidence; the project goes with no alias (its hooks
-    now live in several)."""
-    bad = [p.id for p in conn.execute(sa.select(projects.c.id, projects.c.name, projects.c.norm_name)
-                                      .where(projects.c.norm_name.is_not(None)))
-           if not p.norm_name.startswith(("contract:", "code:"))
-           and (not useful_name(p.name, max_len=None) or p.norm_name in generic)]
-    for pid in bad:
-        conn.execute(sa.update(hooks).values(project_id=None).where(hooks.c.project_id == pid))
-        retire_project(conn, pid, into=None, reason="split:generic", now=ctx.now)
-    if bad:
-        log.info("group: split %d projects keyed on a template or proxy name", len(bad))
-    return len(bad)
+    by name alone. Detach their hooks so the rules regroup them on evidence; settle_split later hands the slug and paid
+    facts to wherever most hooks land. A project with enrichment or 3+ hooks is never split automatically (too costly
+    to get wrong): it is logged for a human instead."""
+    cand = [p for p in conn.execute(sa.select(projects).where(projects.c.norm_name.is_not(None)))
+            if not p.norm_name.startswith(("contract:", "code:"))
+            and (not useful_name(p.name, max_len=None) or p.norm_name in generic)]
+    snaps = []
+    for p in cand:
+        n = conn.execute(sa.select(sa.func.count()).select_from(hooks).where(hooks.c.project_id == p.id)).scalar_one()
+        if p.enriched_at is not None or p.website or p.github or n >= 3:
+            log.info("group: would split %s (generic name, %d hooks)", p.slug, n)
+            continue
+        snaps.append(detach_project(conn, p.id, "split:generic", ctx.now))
+    if snaps:
+        log.info("group: split %d projects keyed on a template or proxy name", len(snaps))
+    return snaps
 
 
 def _join_targets(conn) -> tuple[dict, dict]:

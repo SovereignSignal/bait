@@ -234,7 +234,7 @@ def test_proxy_named_project_is_split_and_proxies_never_join_by_bytecode(conn, c
     assert out["split"] == 1 and out["by_code"] == 0 and out["by_name"] == 0
     rows = conn.execute(sa.select(db.projects.c.name, db.projects.c.slug).join(db.hooks)).all()
     assert len({r.slug for r in rows}) == 3 and all(r.name.startswith("Unlisted hook 0x") for r in rows)
-    assert _alias(conn, "erc1967proxy") is None                                       # no single right redirect
+    assert _alias(conn, "erc1967proxy").project_id in {r.project_id for r in conn.execute(sa.select(db.hooks))}
 
 
 def test_template_named_hooks_group_by_deployer_never_by_name(conn, ctx):
@@ -318,18 +318,65 @@ def test_sample_template_names_never_merge_by_name(conn, ctx):
     assert {r.chain_id for r in rows if r.name == "CurveHook"} == {42161, 5042}
 
 
-def test_a_hooklist_name_shared_by_unrelated_deployers_is_generic(conn, ctx):
-    for n, dep in ((71, "0x" + "1" * 40), (72, "0x" + "2" * 40)):                 # two teams, one name
-        insert_hook(conn, A(n), 8453, name="Zephyr")
-        conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(n)).values(deployer=dep))
+def _deploy(conn, n, chain_id, name, dep):
+    insert_hook(conn, A(n), chain_id, name=name)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(n)).values(deployer=dep))
+
+
+def test_a_hooklist_name_shared_by_unrelated_deployers_on_one_chain_is_generic(conn, ctx):
+    for n, d in ((71, "1"), (72, "2"), (70, "4")):                                # three teams, one chain, one name
+        _deploy(conn, n, 8453, "Zephyr", "0x" + d * 40)
     for n in (73, 74):                                                             # one team, two deployments
-        insert_hook(conn, A(n), 8453, name="Mistral")
-        conn.execute(sa.update(db.hooks).where(db.hooks.c.address == A(n)).values(deployer="0x" + "3" * 40))
+        _deploy(conn, n, 8453, "Mistral", "0x" + "3" * 40)
     group.run(conn, ctx)
     pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
     names_ = set(conn.execute(sa.select(db.projects.c.name)).scalars())
-    assert pid[A(71)] != pid[A(72)] and "Zephyr" not in names_
+    assert len({pid[A(70)], pid[A(71)], pid[A(72)]}) == 3 and "Zephyr" not in names_
     assert pid[A(73)] == pid[A(74)] and "Mistral" in names_
+
+
+def test_one_team_with_a_deployer_per_chain_stays_one_project(conn, ctx):
+    for n, cid, d in ((75, 1, "5"), (76, 8453, "6"), (77, 42161, "7")):          # per-chain bytecode differs too
+        _deploy(conn, n, cid, "BunniHook", "0x" + d * 40)
+    group.run(conn, ctx)
+    first = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    group.run(conn, ctx)
+    again = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert len(set(first.values())) == 1 and first == again
+    assert set(conn.execute(sa.select(db.projects.c.slug)).scalars()) == {"bunnihook"}
+
+
+def test_an_enriched_or_large_generic_project_is_logged_not_split(conn, ctx, caplog):
+    import logging
+    fee = insert_project(conn, "FeeHook", NOW, slug="feehook")
+    counter = insert_project(conn, "Counter", NOW, slug="counter")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == fee).values(norm_name="fee", website="https://fee.example"))
+    for n in (111, 112):
+        insert_hook(conn, A(n), 8453, project_id=fee, name="FeeHook")
+    for n in (113, 114, 115):
+        insert_hook(conn, A(n), 8453, project_id=counter, name="Counter")
+    with caplog.at_level(logging.INFO, logger="bait"):
+        out = group.run(conn, ctx)
+    pid = {r.address: r.project_id for r in conn.execute(sa.select(db.hooks))}
+    assert out["split"] == 0 and {pid[A(111)], pid[A(112)]} == {fee} and {pid[A(n)] for n in (113, 114, 115)} == {counter}
+    assert "group: would split feehook (generic name, 2 hooks)" in caplog.text
+    assert "group: would split counter (generic name, 3 hooks)" in caplog.text
+
+
+def test_a_split_carries_its_slug_receipts_and_enrichment_to_where_most_hooks_land(conn, ctx):
+    old = insert_project(conn, "TestHook", NOW, slug="testhook")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == old).values(norm_name="test", x_handle="th_hooks"))
+    conn.execute(sa.insert(db.receipts).values(project_id=old, url="https://news.example/th", title="t", source="news.example"))
+    from bait.steps import names
+    names.add_alias(conn, "testhook-older", old, "renamed", NOW)
+    for n in (121, 122):
+        insert_hook(conn, A(n), 8453, project_id=old, name="TestHook")
+    out = group.run(conn, ctx)
+    holder = conn.execute(sa.select(db.projects.c.id).where(db.projects.c.x_handle == "th_hooks")).scalars().all()
+    assert out["split"] == 1 and len(holder) == 1
+    assert {tuple(_alias(conn, s)) for s in ("testhook", "testhook-older")} == {(holder[0], "split:generic")}
+    assert conn.execute(sa.select(db.receipts.c.project_id)).scalar_one() == holder[0]
+    assert holder[0] in {r.project_id for r in conn.execute(sa.select(db.hooks))}
 
 
 def test_a_generic_claude_answer_is_not_created_split_and_recreated(conn, ctx):
