@@ -192,7 +192,7 @@ export interface ProjectSummary {
   topPool: { poolId: string; chainId: ChainId; token0Symbol: string | null; token1Symbol: string | null; hookAddress: string | null } | null;
   usage: Usage;
   isNew: boolean;
-  /** DESIGN.md spam filter: no pools, or all pools under $100 TVL and < 10 txs lifetime. Hidden everywhere (404). */
+  /** DESIGN.md spam filter: no pools, or all pools under $100 TVL and < 10 txs lifetime, unless $1M+ moved. Hidden everywhere (404). */
   isSpam: boolean;
   /** wash-like volume: listed in All and on its page with a badge, never in Trending, New, movers or Leaders */
   isWash: boolean;

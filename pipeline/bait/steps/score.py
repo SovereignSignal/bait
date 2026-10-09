@@ -61,6 +61,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         a["tvl"] += cur.tvl_usd or 0.0
         a["max_tvl"] = max(a["max_tvl"], cur.tvl_usd or 0.0)
         a["stats"].append((cur.tvl_usd or 0.0, cur.tx_count_cum or 0))
+        if cur.volume_usd_cum is not None:
+            a["life"] += cur.volume_usd_cum   # legacy cumulative: a lower bound of lifetime volume, enough for the spam exemption
         pool_tvl[key] = cur.tvl_usd
         quiet: dict[str, bool] = {}
         if cur.volume_usd_cum is None:
@@ -102,7 +104,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"], a["vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
             "is_new": not wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
-            "is_spam": is_spam(a["stats"]),           # true spam only: no pools, or every pool tiny and idle
+            "is_spam": is_spam(a["stats"], max(a["life"], a["vol7"])),   # true spam only: no pools, or tiny, idle and < $1M
             "is_wash": wash, "wash_reason": ",".join(reasons.get(pid, [])) or None,
         })
     for i in range(0, len(rows), 500):
@@ -117,7 +119,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
 def _empty() -> dict:
     return {"tvl": 0.0, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
-            "tx24_known": True, "tx7_known": True, "stats": []}
+            "tx24_known": True, "tx7_known": True, "stats": [], "life": 0.0}
 
 
 def _vol(rows: dict, w: tuple[date, date]) -> float:
