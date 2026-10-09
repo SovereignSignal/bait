@@ -225,6 +225,7 @@ def test_onchain_series_carries_daily_values_and_keeps_older_days(conn, ctx):
     onchain.run(conn, ctx)
     d = _snapd(conn, PA)
     assert d[REF] == (500.0, 9, False) and d[REF - timedelta(days=1)] == (100.0, 2, False)
+    assert d[DAY][2] is True                                    # the running day is partial: estimated
     assert d[DAY - timedelta(days=15)] == (777.0, 3, None)      # the seed day resets the cumulative only
     assert d[old] == (5.0, 1, None)                             # days before the series stay, for re-scoring past days
     c = _snapd(conn, PC)

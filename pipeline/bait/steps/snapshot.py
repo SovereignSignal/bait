@@ -126,8 +126,9 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
 
 def _candle_rows(pid: str, cid: int, candles, tvl: float | None, day: date) -> list[dict]:
     """Daily candles (UTC days) -> one row per day from the first candle (at most SERIES_DAYS back) through `day`, the
-    running day: that day's candle volume, $0 on a day with no candle (no trades). Days before the first candle are never
-    written. volume_usd_cum (legacy) is the running sum from the first row."""
+    running day: that day's candle volume, $0 on a day with no candle (no trades). The running day's row is partial, so it
+    is estimated (a capped night replaces it). Days before the first candle are never written. volume_usd_cum (legacy) is
+    the running sum from the first row."""
     vols = {datetime.fromtimestamp(t, tz=timezone.utc).date(): float(v) for t, v in candles}
     d = max(min(vols), day - timedelta(days=SERIES_DAYS - 1))
     rows, cum = [], 0.0
@@ -135,7 +136,7 @@ def _candle_rows(pid: str, cid: int, candles, tvl: float | None, day: date) -> l
         v = vols.get(d, 0.0)
         cum += v
         rows.append({"pool_id": pid, "chain_id": cid, "day": d, "tvl_usd": tvl, "volume_usd_cum": cum, "volume_usd_day": v,
-                     "estimated": False})
+                     "estimated": d >= day})   # the running day's candle is partial: replaceable tomorrow
         d += timedelta(days=1)
     return rows
 
