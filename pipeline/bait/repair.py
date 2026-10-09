@@ -243,6 +243,15 @@ def backup_day(conn, day: date) -> int:
     return conn.execute(sa.select(sa.func.count()).select_from(b).where(b.c.day == day)).scalar_one()
 
 
+def backup_days(conn, day: date | None = None) -> list[date]:
+    """The days project_daily_p9_backup holds (or just `day`): what --restore puts back, whatever today's date is."""
+    b = db.project_daily_p9_backup
+    q = sa.select(b.c.day).distinct()
+    if day is not None:
+        q = q.where(b.c.day == day)
+    return sorted(r[0] for r in conn.execute(q))
+
+
 def restore_day(conn, day: date) -> int | None:
     """Put the backed-up rows of `day` back (projects merged away since are skipped). None when there is no backup."""
     b = db.project_daily_p9_backup
@@ -611,7 +620,8 @@ def add_parsers(sub) -> None:
     r = sub.add_parser("rescore", help="free: score.run for stored run days, oldest first, after a backup")
     r.add_argument("--since", type=int, default=14, help=f"run days today-N .. today that have rows (1..{MAX_SINCE})")
     r.add_argument("--day", type=date.fromisoformat, default=None, help="one run day instead of --since")
-    r.add_argument("--restore", action="store_true", help="put the pre-repair rows of those days back instead")
+    r.add_argument("--restore", action="store_true",
+                   help="put back every day project_daily_p9_backup holds (only --day when given); ignores --since")
     r.add_argument("--stop-at", default="05:30", help="UTC HH:MM before 06:00: stop between days here")
     r.add_argument("--dry-run", action="store_true")
     common(r)
@@ -757,12 +767,13 @@ def main(args: argparse.Namespace, engine) -> int:
             log.error("%s UTC and no nightly receipt for %s yet: the nightly comes first; run the repair after it",
                       now.strftime("%H:%M"), today)
             return EXIT_PRECONDITION
-        bad = _failed_nightly(engine)
+        restore = cmd == "rescore" and args.restore     # undoing a re-score is always allowed
+        bad = None if restore else _failed_nightly(engine)
         if bad is not None:
             log.error("the last nightly receipt (day %s) exited %s; fix or rerun the nightly first, so a repair receipt "
                       "never hides it from /api/health", bad.day, bad.exit_code)
             return EXIT_PRECONDITION
-        if cmd in ("backfill-days", "all") or (cmd == "rescore" and not args.restore):
+        if cmd in ("backfill-days", "all") or (cmd == "rescore" and not restore):
             with engine.connect() as conn:
                 if not p8_rows_present(conn, today):
                     log.error("no per-day snapshot rows from the last day: run after a package 8 nightly (before it, every "
@@ -798,7 +809,7 @@ def _run(cmd: str, args, engine, now: datetime) -> int:
         return finish(*_step(engine, "backfill-days", lambda: backfill(engine, _ctx(now), args.since, args.pools, deadline, clock)))
     if cmd == "rescore":
         with engine.connect() as conn:
-            days = rescore_days(conn, today, args.since, args.day)
+            days = backup_days(conn, args.day) if args.restore else rescore_days(conn, today, args.since, args.day)
         if args.restore:
             def go():
                 done = {}
@@ -856,6 +867,10 @@ def _dry_run(cmd: str, args, engine, now: datetime) -> int:
     with engine.connect() as conn:
         if cmd in ("backfill-days", "all"):
             lines += backfill_plan(conn, today, args.since, args.pools, _spacing())[0]
+        if cmd == "rescore" and args.restore:
+            days = backup_days(conn, args.day)
+            print(f"restore: {len(days)} backed-up day(s) {days[0]} .. {days[-1]}" if days else "restore: no backed-up days")
+            return 0
         if cmd in ("rescore", "all"):
             days = rescore_days(conn, today, args.since, getattr(args, "day", None))
             lines.append(f"rescore: {len(days)} stored run day(s) {', '.join(map(str, days)) or '-'}; free, seconds per day; "
