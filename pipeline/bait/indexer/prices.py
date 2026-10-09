@@ -27,6 +27,35 @@ MAX_PRICE = 10_000_000.0        # no token is worth more than $10M; above that t
 MAX_SWAP_USD = 500_000_000.0    # a single swap above $500M is a broken quote, not a trade
 MISMATCH = 20.0                 # sides disagree by more than 20x: trust the smaller one
 
+# Fallback when DefiLlama has no reliable quote (new chain keys, low confidence): the wrapped native coin (priced as the
+# chain's native coin id) and major stablecoins ($1). OP-stack chains share the WETH predeploy. Unichain, World, Soneium,
+# Ink, Celo, Robinhood and MegaETH entries were checked on each chain's Blockscout token page 2026-10-09; the rest are the
+# canonical deployments. Monad, Zora and Robinhood/MegaETH stables stay out until checked the same way.
+OP_WETH = "0x4200000000000000000000000000000000000006"
+WRAPPED_NATIVE: dict[int, str] = {
+    1: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", 10: OP_WETH, 56: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
+    130: OP_WETH, 137: "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270", 480: OP_WETH, 1868: OP_WETH, 4326: OP_WETH,
+    4663: "0x0bd7d308f8e1639fab988df18a8011f41eacad73", 8453: OP_WETH, 42161: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+    42220: "0x471ece3750da237f93b8e339c536989b8978a438", 43114: "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+    57073: OP_WETH, 7777777: OP_WETH,
+}
+STABLES: dict[int, dict[str, int]] = {
+    1: {"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 6, "0xdac17f958d2ee523a2206206994597c13d831ec7": 6,
+        "0x6b175474e89094c44da98b954eedeac495271d0f": 18},
+    10: {"0x0b2c639c533813f4aa9d7837caf62653d097ff85": 6, "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58": 6},
+    56: {"0x55d398326f99059ff775485246999027b3197955": 18, "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": 18},
+    130: {"0x078d782b760474a361dda0af3839290b0ef57ad6": 6},
+    137: {"0x3c499c542cef5e3811e1192ce70d8cc03d5c3359": 6, "0x2791bca1f2de4661ed88a30c99a7a9449aa84174": 6,
+          "0xc2132d05d31c914a87c6611c10748aeb04b58e8f": 6},
+    480: {"0x79a02482a880bce3f13e09da970dc34db4cd24d1": 6},
+    1868: {"0xba9986d2381edf1da03b0b9c1f8b00dc4aacc369": 6},
+    8453: {"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 6},
+    42161: {"0xaf88d065e77c8cc2239327c5edb3a432268e5831": 6, "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": 6},
+    42220: {"0xceba9300f2b948710d2653dd7b07f33a8b32118c": 6},
+    43114: {"0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e": 6, "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7": 6},
+    57073: {"0x0200c29006150606b650577bbe7b6248f58470c1": 6},
+}
+
 
 class PricesUnavailable(RuntimeError):
     """DefiLlama did not answer for a batch. The caller must not commit the page: a swap stored at $0 is never revalued."""
@@ -46,7 +75,9 @@ class PriceBook:
     def get(self, chain: IndexedChain, addrs) -> dict[str, tuple[float, int]]:
         """-> {address: (usd price, decimals)} for addresses with a reliable price. Misses are cached too."""
         now = self.clock()
-        ids = {a.lower(): self.coin_id(chain, a) for a in addrs}
+        want = {a.lower() for a in addrs}
+        wrapped = WRAPPED_NATIVE.get(chain.chain_id)
+        ids = {a: self.coin_id(chain, a) for a in want | ({ZERO} if wrapped in want else set())}
         missing = sorted({cid for cid in ids.values() if cid not in self._cache or now - self._cache[cid][0] > self.ttl})
         failed = 0
         for i in range(0, len(missing), BATCH):
@@ -59,11 +90,16 @@ class PriceBook:
                 self._cache[cid] = (now, got.get(cid))
         if failed:
             raise PricesUnavailable(f"{chain.slug}: DefiLlama unavailable for {failed} coins")
+        found = {a: hit[1] for a, cid in ids.items() if (hit := self._cache.get(cid)) and hit[1] is not None}
+        stables = STABLES.get(chain.chain_id, {})
         out = {}
-        for a, cid in ids.items():
-            hit = self._cache.get(cid)
-            if hit and hit[1] is not None:
-                out[a] = hit[1]
+        for a in want:
+            if a in found:
+                out[a] = found[a]
+            elif a == wrapped and ZERO in found:
+                out[a] = (found[ZERO][0], 18)
+            elif a in stables:
+                out[a] = (1.0, stables[a])
         return out
 
     def _fetch(self, ids: list[str]) -> dict[str, tuple[float, int]] | None:
