@@ -68,7 +68,11 @@ def main(argv: list[str] | None = None) -> int:
         db.add_missing_columns(engine)  # create_all never alters existing tables; additive columns go here
         db.add_missing_indexes(engine)
     except db.SchemaLocked:  # already logged; the indexer (or the next run) applies it once the lock is free
-        pass
+        missing = db.missing_columns(engine)
+        if missing:  # steps would fail mid-way on these; a missing index only costs speed
+            log.error("schema: required columns still missing (%s) after a lock timeout; not running. Retry when the "
+                      "table lock is free (the indexer applies them on its next loop).", ", ".join(missing))
+            return 4
     meter = Meter(engine)
     if args.cmd == "cost-preview":
         with engine.connect() as conn:
