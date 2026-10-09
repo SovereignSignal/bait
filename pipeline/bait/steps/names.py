@@ -20,7 +20,7 @@ import sqlalchemy as sa
 from ..clients.contract_names import useful_name
 from ..config import CHAIN_BY_ID
 from ..indexer.chains import CHAIN_BY_ID as INDEXED_BY_ID
-from ..db import hooks, project_daily, projects, receipts, signals
+from ..db import hooks, project_aliases, project_daily, projects, receipts, signals, upsert
 from ..rules import normalize_name, slugify
 from . import RunContext, log
 
@@ -43,7 +43,7 @@ def run(conn: sa.Connection, ctx: RunContext, out: dict) -> None:
     client = ctx.client("names")
     if client is not None:
         _lookup(conn, ctx, client, out)
-    _rename(conn, out)
+    _rename(conn, out, ctx.now)
 
 
 def _lookup(conn, ctx: RunContext, client, out: dict) -> None:
@@ -76,7 +76,7 @@ def _lookup(conn, ctx: RunContext, client, out: dict) -> None:
     log.info("names: checked %d unlisted hooks, %d have verified source names", len(todo), out["names_found"])
 
 
-def _rename(conn, out: dict) -> None:
+def _rename(conn, out: dict, now) -> None:
     unlisted = conn.execute(sa.select(projects.c.id).where(projects.c.name.like(UNLISTED))).scalars().all()
     if not unlisted:
         return
@@ -102,15 +102,17 @@ def _rename(conn, out: dict) -> None:
         key = f"contract:{chain_id}:{norm}"
         target = by_key.get(key)
         if target is not None and target != pid:
-            conn.execute(sa.update(hooks).values(project_id=target).where(hooks.c.project_id == pid))
-            _delete_project(conn, pid)
+            retire_project(conn, pid, into=target, reason="names:merge", now=now)
             out["projects_merged"] += 1
             continue
         display = cname
         if display.lower() in taken_names or norm in curated_norms:
             display = f"{cname} ({chain_label(chain_id)})"
-        conn.execute(sa.update(projects).values(name=display, norm_name=key, slug=_unique_slug(conn, display, pid))
-                     .where(projects.c.id == pid))
+        old = conn.execute(sa.select(projects.c.slug).where(projects.c.id == pid)).scalar_one()
+        slug = unique_slug(conn, display, pid)
+        conn.execute(sa.update(projects).values(name=display, norm_name=key, slug=slug).where(projects.c.id == pid))
+        if slug != old:
+            add_alias(conn, old, pid, "renamed", now)
         by_key[key] = pid
         taken_names.add(display.lower())
         out["projects_renamed"] += 1
@@ -129,7 +131,7 @@ def chain_label(chain_id: int) -> str:
     return LABELS.get(ch.slug, ch.slug.replace("-", " ").title())
 
 
-def _unique_slug(conn, name: str, pid: int) -> str:
+def unique_slug(conn, name: str, pid: int) -> str:
     base = slugify(name)
     taken = {r for r in conn.execute(sa.select(projects.c.slug).where(projects.c.slug.like(base + "%"), projects.c.id != pid)).scalars()}
     slug, i = base, 2
@@ -138,7 +140,46 @@ def _unique_slug(conn, name: str, pid: int) -> str:
     return slug
 
 
-def _delete_project(conn, pid: int) -> None:
+def add_alias(conn, old_slug: str, pid: int, reason: str, now) -> None:
+    """/p/<old_slug> redirects to project pid. The latest write wins."""
+    upsert(conn, project_aliases, [{"old_slug": old_slug, "project_id": pid, "reason": reason, "created_at": now}],
+           keys=["old_slug"])
+
+
+def retire_project(conn, pid: int, into: int | None, reason: str, now) -> None:
+    """Delete a project. With `into`, its hooks move there and its slug, plus every alias that pointed at it, redirects
+    there. Without (a split; hooks already detached), aliases to it are dropped: no single project is the right target."""
+    if into is not None:
+        conn.execute(sa.update(hooks).values(project_id=into).where(hooks.c.project_id == pid))
+        conn.execute(sa.update(project_aliases).values(project_id=into).where(project_aliases.c.project_id == pid))
+        add_alias(conn, conn.execute(sa.select(projects.c.slug).where(projects.c.id == pid)).scalar_one(), into, reason, now)
+    else:
+        conn.execute(sa.delete(project_aliases).where(project_aliases.c.project_id == pid))
     for t in (project_daily, signals, receipts):
         conn.execute(sa.delete(t).where(t.c.project_id == pid))
     conn.execute(sa.delete(projects).where(projects.c.id == pid))
+
+
+def hook_rows(conn, pid: int):
+    return conn.execute(sa.select(hooks.c.code_hash, hooks.c.deployer, hooks.c.name, hooks.c.contract_name)
+                        .where(hooks.c.project_id == pid)).all()
+
+
+def backfill_unlisted_aliases(conn, now) -> int:
+    """Bounded migration (delete 30 days after deploy): links shared before project_aliases existed point at
+    "unlisted-hook-0x7bc2-2aec". Recreate that slug for each on-chain hook whose project slug differs now, unless two hooks
+    would share it (ambiguous) or a live project or alias already holds it. Family slugs are not recreated: their 16-bit
+    prefix is too ambiguous to redirect safely. Idempotent."""
+    rows = conn.execute(sa.select(hooks.c.address, hooks.c.project_id)
+                        .where(hooks.c.project_id.is_not(None), hooks.c.hooklisted.is_(False))).all()
+    want: dict[str, set[int]] = {}
+    for r in rows:
+        want.setdefault(slugify(f"Unlisted hook {r.address[:6]}…{r.address[-4:]}"), set()).add(r.project_id)
+    taken = (set(conn.execute(sa.select(projects.c.slug)).scalars())
+             | set(conn.execute(sa.select(project_aliases.c.old_slug)).scalars()))
+    n = 0
+    for old, pids in sorted(want.items()):
+        if len(pids) == 1 and old not in taken:
+            add_alias(conn, old, pids.pop(), "backfill", now)
+            n += 1
+    return n
