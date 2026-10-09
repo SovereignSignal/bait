@@ -23,7 +23,7 @@
 .gl { stroke: var(--line); stroke-width: 1; }
 .chartEmpty { padding: 20px 0; color: var(--fg2); }
 
-.two { display: grid; grid-template-columns: minmax(0,1.2fr) minmax(0,1fr); gap: 12px; }
+.two { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; }
 .blk { padding: 14px 16px; min-width: 0; }
 .tw { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 380px; }
@@ -50,8 +50,8 @@
 .trade { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-top: 1px solid var(--line); border-radius: 0; font-size: 13px; }
 .tradeList li:first-child .trade { border-top: 0; }
 a.trade:hover { background: var(--hover); }
-.tWho { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
-.tAddr { font-size: 12px; }
+.tWho { min-width: 96px; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.tAddr { font-size: 12px; white-space: nowrap; }
 .tTags { display: flex; gap: 4px; flex-wrap: wrap; }
 .tTags:empty { display: none; }
 .tUsd { font-weight: 600; min-width: 64px; text-align: right; }
@@ -77,6 +77,5 @@ a.trade:hover { background: var(--hover); }
   .stats { grid-template-columns: repeat(3, minmax(0,1fr)); }
 }
 @media (max-width: 820px) {
-  .two { grid-template-columns: minmax(0,1fr); }
   .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
