@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from .. import db
+from .. import db, logsetup
 from ..config import env
 from .chains import select_chains
 from .core import ChainStats, Rpc, Settings, plan, rpc_endpoint, sync_hypersync, sync_rpc
@@ -86,8 +86,7 @@ def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
-    logging.getLogger("httpx").setLevel(logging.WARNING)   # one INFO line per request would bury the heartbeat
+    logsetup.configure()
     ap = argparse.ArgumentParser(prog="bait.indexer")
     ap.add_argument("--once", action="store_true", help="one loop, then exit")
     ap.add_argument("--chains", default=os.environ.get("INDEXER_CHAINS"), help="comma slugs or chain ids (default all)")
