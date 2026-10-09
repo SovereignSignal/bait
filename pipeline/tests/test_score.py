@@ -162,8 +162,8 @@ def test_wash_7d_ignores_a_chain_whose_swaps_are_not_caught_up(conn, ctx):
     wash = _onchain_project(conn, "Desk", "0xdp", wallets=1, vol_per_day=60_000_000)
     _optimism_ready(conn, swap_time=NOW - timedelta(days=2))
     out = score.run(conn, ctx)
-    # the 7-day rule does not judge it; its 14 swaps (an upper bound of its wallets) still let vol_tvl see 8,400x its TVL
-    assert out["wash_7d"] == 0 and daily(conn, wash).wash_reason == "vol_tvl"
+    # a chain that is not caught up has no exact counts either: neither the 7-day rule nor the swap bound judges it
+    assert out["wash_7d"] == 0 and not daily(conn, wash).is_wash
 
 
 def test_held_back_pool_with_null_volume_is_left_out_of_both_weeks(conn, ctx):
@@ -366,9 +366,10 @@ def test_a_quiet_day_is_not_a_seven_day_wallet_count(conn, ctx):
     assert not daily(conn, p).is_wash
 
 
-def test_a_whale_with_no_wallet_data_is_judged_on_its_swap_count(conn, ctx):
+def test_a_whale_off_ready_chains_with_only_rolling_swap_counts_is_unverified_not_a_free_pass(conn, ctx):
     """$436M over 4 days through a pool whose TVL is known to be $0, 8 swaps, no pool_stats row, on a chain the indexer
-    does not cover: 8 swaps prove fewer than 50 wallets, so no_liquidity fires instead of a free pass to Trending."""
+    does not cover. Keyless swap counts are rolling 06:00-to-06:00 estimates filed under the day before, so they prove
+    nothing; with no other evidence the project is unverified wash-like volume, never ranked."""
     p = insert_project(conn, "Whale", first_seen=NOW - timedelta(days=60), slug="whale")
     insert_hook(conn, "0xwh", 4663, project_id=p, name="Whale")
     insert_pool(conn, "0xwhp", 4663, "0xwh", created=NOW - timedelta(days=60))
@@ -377,7 +378,7 @@ def test_a_whale_with_no_wallet_data_is_judged_on_its_swap_count(conn, ctx):
     insert_snap(conn, "0xwhp", 4663, END - timedelta(days=13), 0.0, 0.0, 0, vol_day=0.0)     # last week: nothing
     out = score.run(conn, ctx)
     d = daily(conn, p)
-    assert d.is_wash and "no_liquidity" in d.wash_reason.split(",") and d.score_trending == 0.0 and not d.is_spam
+    assert d.is_wash and d.wash_reason == "unverified" and d.score_trending == 0.0 and not d.is_spam
     assert out["trending"] == 0
 
 
@@ -475,25 +476,27 @@ def test_an_rfq_hook_with_several_real_counterparties_is_not_concentrated(conn, 
 
 
 def test_a_whale_with_unknown_tvl_and_eight_swaps_is_judged_by_its_swaps(conn, ctx):
-    """Re-review 1: TVL unknown, 8 known swaps carrying $436M, no pool_stats row, a chain the indexer does not cover. No
-    TVL rule can judge it, but 8 swaps prove at most 8 wallets: the 7-day rule applies through the swap bound."""
+    """TVL unknown, 8 exact swaps (on-chain UTC days, a ready chain) carrying $436M, no pool_stats row and no wallet rows.
+    No TVL rule can judge it, but 8 swaps prove at most 8 wallets: the 7-day rule applies through the swap bound."""
     p = insert_project(conn, "Blind", first_seen=NOW - timedelta(days=60), slug="blind")
-    insert_hook(conn, "0xbl", 4663, project_id=p, name="Blind")
-    insert_pool(conn, "0xblp", 4663, "0xbl", created=NOW - timedelta(days=60))
+    insert_hook(conn, "0xbl", 10, project_id=p, name="Blind")
+    insert_pool(conn, "0xblp", 10, "0xbl", created=NOW - timedelta(days=60))
     days = [END - timedelta(days=i) for i in range(4)]
-    series(conn, "0xblp", 4663, {d: 109_000_000.0 for d in days}, tvl=None, tx={d: 2 for d in days})
-    insert_snap(conn, "0xblp", 4663, END - timedelta(days=13), None, 0.0, 0, vol_day=1_000_000.0)    # a prior week
+    series(conn, "0xblp", 10, {d: 109_000_000.0 for d in days}, tvl=None, tx={d: 2 for d in days})
+    insert_snap(conn, "0xblp", 10, END - timedelta(days=13), None, 0.0, 0, vol_day=1_000_000.0)    # a prior week
+    _optimism_ready(conn)
     out = score.run(conn, ctx)
     d = daily(conn, p)
     assert d.is_wash and "7d" in d.wash_reason.split(",") and d.score_trending == 0.0 and not d.is_spam
     assert out["trending"] == 0
 
 
-def test_two_swaps_carrying_a_million_prove_concentration_anywhere(conn, ctx):
+def test_two_exact_swaps_carrying_a_million_prove_concentration(conn, ctx):
     p = insert_project(conn, "Pair", first_seen=NOW - timedelta(days=60), slug="pair")
-    insert_hook(conn, "0xpa", 4663, project_id=p, name="Pair")
-    insert_pool(conn, "0xpap", 4663, "0xpa", created=NOW - timedelta(days=60))
-    series(conn, "0xpap", 4663, {END: 3_000_000.0}, tvl=None, tx={END: 2})
+    insert_hook(conn, "0xpa", 10, project_id=p, name="Pair")
+    insert_pool(conn, "0xpap", 10, "0xpa", created=NOW - timedelta(days=60))
+    series(conn, "0xpap", 10, {END: 3_000_000.0}, tvl=None, tx={END: 2})
+    _optimism_ready(conn)
     score.run(conn, ctx)
     assert "concentrated" in daily(conn, p).wash_reason.split(",")
 
@@ -538,3 +541,31 @@ def test_a_quiet_days_zero_wallets_is_unknown_for_a_pool_with_volume(conn, ctx):
     score.run(conn, ctx)
     reasons = (daily(conn, p).wash_reason or "").split(",")
     assert "vol_tvl" not in reasons and "no_liquidity" not in reasons
+
+
+def test_a_burst_launch_is_not_judged_on_the_next_nights_rolling_swap_count(conn, ctx):
+    """Born 01:00 UTC yesterday, $1.2M before 06:00 through hundreds of wallets (yesterday's run: 400 buyers / 350
+    sellers), quiet since. Tonight's rolling count (4 swaps, filed under yesterday) is not that day's count, and a known
+    lower bound of 400 wallets already rules out "at most 10" or "at most 2"."""
+    p = insert_project(conn, "Burst", first_seen=NOW - timedelta(days=1), slug="burst")
+    insert_hook(conn, "0xbu", 8453, project_id=p, name="Burst")
+    insert_pool(conn, "0xbup", 8453, "0xbu", created=datetime(2026, 10, 5, 1, tzinfo=timezone.utc))
+    insert_snap(conn, "0xbup", 8453, END, 300_000, 1_200_000.0, 4, vol_day=1_200_000.0, tx_day=4)
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xbup", chain_id=8453, day=END, vol_24h=1_200_000.0, traders_24h=750,
+                                                 buyers_24h=400, sellers_24h=350))
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xbup", chain_id=8453, day=DAY, vol_24h=900.0, traders_24h=4,
+                                                 buyers_24h=2, sellers_24h=2))
+    score.run(conn, ctx)
+    assert not daily(conn, p).is_wash
+
+
+def test_a_known_wallet_bound_overrides_the_swap_bound_on_ready_chains_too(conn, ctx):
+    p = insert_project(conn, "Many", first_seen=NOW - timedelta(days=60), slug="many")
+    insert_hook(conn, "0xma", 10, project_id=p, name="Many")
+    insert_pool(conn, "0xmap", 10, "0xma", created=NOW - timedelta(days=60))
+    series(conn, "0xmap", 10, {END: 3_000_000.0}, tvl=None, tx={END: 2})
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xmap", chain_id=10, day=DAY, vol_24h=3_000_000.0, traders_24h=60,
+                                                 buyers_24h=30, sellers_24h=30))
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    assert not daily(conn, p).is_wash

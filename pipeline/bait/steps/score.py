@@ -20,7 +20,7 @@ import sqlalchemy as sa
 
 from ..db import (as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
-from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
+from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
                      is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
@@ -225,7 +225,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers. Every few-wallet
     rule also needs rules.corroborated (volume far above a known TVL, no liquidity, or symmetric traders).
     vol7 / tvl: the pool's closed 7-day volume and latest TVL from the snapshots. swaps7: the swaps behind that volume, an
-    upper bound of its wallets, used for the 7-day wallet rules when no wallet count is known (8 swaps prove < 50).
+    upper bound of its wallets when exact (ready chains only), used when no wallet count is known (8 swaps prove < 50)
+    and never against a known wallet lower bound above the rule's threshold.
     Returns the reasons and the projects with any wallet data (for the "unverified" fallback in run)."""
     stats = {(r.pool_id, r.chain_id): r for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day))}
     lb = {k: wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h) for k, r in stats.items()}
@@ -239,21 +240,32 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     distinct7 = {k: wallets_7d.get(k) for k in vol7}
     distinct7.update(_distinct_week(conn, {k: vol_days.get(k, []) for k, v in vol7.items()
                                            if k not in wallets_7d and v >= WASH_MIN_VOL_7D}))
-    # wallets behind a pool's 7-day volume: on-chain distinct count, else the week's lower bound, else its swap count
-    w7 = {k: wallets_7d.get(k, lb7.get(k, swaps7.get(k))) for k in vol7}
-    # "unverified" needs that no rule could judge the project: no wallet count, no non-zero bound, no swap count
-    wallet_known = {pool_project[k][0] for k in (set(wallets_7d) | set(lb7) | set(swaps7) | {k for k, n in lb.items() if n})
+    # Swap counts are exact only on ready chains (the indexer's UTC days). Keyless counts are GeckoTerminal's rolling
+    # 06:00-to-06:00 buys + sells filed under the day before: a launch's first hours fall into a day the pool has no row
+    # for, so the next night's count can be 4 for a pool that traded with hundreds. Those never bound wallets.
+    exact_swaps = {k: n for k, n in swaps7.items() if k[1] in ready}
+
+    def swap_bound(k, limit):
+        """The exact swap count as a wallet bound for an "at most `limit` wallets" rule; None (cannot judge) when it is not
+        exact or a known wallet lower bound already exceeds `limit`."""
+        n = exact_swaps.get(k)
+        return None if n is None or lb7.get(k, 0) > limit else n
+    # wallets behind a pool's 7-day volume: on-chain distinct count, else the week's lower bound, else its exact swaps
+    w7 = {k: wallets_7d.get(k, lb7.get(k, exact_swaps.get(k))) for k in vol7}
+    # "unverified" needs that no rule could judge the project: no wallet count, no non-zero bound, no exact swap count
+    wallet_known = {pool_project[k][0] for k in (set(wallets_7d) | set(lb7) | set(exact_swaps) | {k for k, n in lb.items() if n})
                     if k in pool_project}
     judged = {
         "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k], k in custom))
                 for k, r in stats.items()},
         # on ready chains from the indexer; anywhere through the swap bound (<= 10 swaps for >= $1M)
         "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k), tvl.get(k), sym.get(k, False), k in custom)
-                   or is_wash_7d_by_swaps(vol7.get(k, v), swaps7.get(k)))
+                   or is_wash_7d_by_swaps(vol7.get(k, v), swap_bound(k, WASH_MAX_WALLETS_7D)))
                for k, v in {**vol7, **vol_on}.items()},
         # a real distinct count only: pool_wallet_day on ready chains, else exact counts on every volume day joined through
         # pool_top_wallets; or <= 2 swaps, which prove <= 2 wallets
-        "concentrated": {k: (v, is_wash_concentrated(v, distinct7[k]) or is_wash_concentrated(v, swaps7.get(k)))
+        "concentrated": {k: (v, is_wash_concentrated(v, distinct7[k])
+                             or is_wash_concentrated(v, swap_bound(k, WASH_CONCENTRATED_WALLETS)))
                          for k, v in vol7.items()},
         "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
         "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k], k in custom)) for k, v in vol7.items()},
