@@ -1,18 +1,14 @@
-import Link from "next/link";
 import { Footer } from "@/components/Footer";
+import { MissingPage } from "@/components/MissingPage";
+import { getRows } from "@/db/queries";
+import { trendingOrder } from "@/lib/feed";
 
-export default function NotFound() {
+export default async function NotFound() {
+  const top = trendingOrder(await getRows()).slice(0, 3).map((r) => ({ slug: r.slug, name: r.name }));
   return (
-    <>
-      <main className="col" id="main" tabIndex={-1}>
-        <div className="lead">
-          <h1>Not found</h1>
-          <p>
-            No such page. <Link href="/">Back to the feed</Link>.
-          </p>
-        </div>
-        <Footer />
-      </main>
-    </>
+    <main className="col" id="main" tabIndex={-1}>
+      <MissingPage top={top} />
+      <Footer />
+    </main>
   );
 }

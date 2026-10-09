@@ -1,7 +1,7 @@
 // Tab / filter / ranking rules shared by the server (which project "/" selects)
 // and the client list (search, watchlist). Pure: no server-only imports.
 import { CHAINS, parseChainParam } from "./chains";
-import { CATEGORIES, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type RowView, type Tab } from "./types";
+import { CATEGORIES, CATEGORY_LABEL, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type RowView, type Tab } from "./types";
 
 export const TRENDING_TOP_N = 20;
 export const TRENDING_MIN_VOL = 10_000;
@@ -114,4 +114,11 @@ export function searchRows<T extends Pick<RowView, "name" | "hooks">>(rows: T[],
 /** Movers for the strip: filtered by chain when one is selected, capped. `rows` is already in mover order. */
 export function moversFor<T extends { chains: ChainId[] }>(rows: T[], chain?: ChainId, n = 10): T[] {
   return (chain ? rows.filter((r) => r.chains.includes(chain)) : rows).slice(0, n);
+}
+
+/** "No new Launchpad hooks on Base." for a filter that matched nothing. */
+export function emptyCopy(q: FeedQuery): string {
+  const adj = q.tab === "new" ? "new " : q.tab === "trending" ? "trending " : q.tab === "verified" ? "in-app " : "";
+  const cat = q.category ? `${CATEGORY_LABEL[q.category]} ` : "";
+  return `No ${adj}${cat}hooks${q.chain && CHAINS[q.chain] ? ` on ${CHAINS[q.chain].name}` : ""}.`;
 }

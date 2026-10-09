@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clip, fmtDelta, NONE, usd } from "./format";
 import { rowLabel, rowMetric } from "./present";
-import { moversFor } from "./feed";
+import { emptyCopy, moversFor } from "./feed";
+import { tradesNote } from "./trades";
 
 test("usd: trimmed .0, B to one decimal, one missing glyph", () => {
   assert.deepEqual([usd(1000), usd(1040), usd(22_800), usd(10_000_000), usd(10_600_000), usd(1_210_000_000), usd(812), usd(-2500)],
@@ -33,4 +34,15 @@ test("rowLabel reads rank, name, category, chain, window, direction", () => {
   const r = { name: "StablePairHook", category: "dynamic-fee" as const, chains: [1 as const], isNew: false, vol7d: 10_600_000, vol7dPrev: 1_000_000 };
   assert.equal(rowLabel(r, 1, { v: r.vol7d, win: "7d" }), "#1 StablePairHook, Dynamic fee on Ethereum, $10.6M 7-day volume, up 960 percent");
   assert.equal(rowLabel({ ...r, isNew: true, category: "other" }, undefined, { v: 5000, win: "24h" }), "StablePairHook, Ethereum, $5K 24-hour volume, new");
+});
+test("emptyCopy names the filter that matched nothing", () => {
+  assert.equal(emptyCopy({ tab: "new", category: "launchpad", chain: 8453 }), "No new Launchpad hooks on Base.");
+  assert.equal(emptyCopy({ tab: "all", chain: 8453 }), "No hooks on Base.");
+  assert.equal(emptyCopy({ tab: "verified", category: "oracle" }), "No in-app Oracle hooks.");
+});
+test("tradesNote separates nothing-traded from feed-unavailable", () => {
+  assert.equal(tradesNote("empty", 0), "No trades over $10 right now.");
+  assert.equal(tradesNote("rate_limited", 0), "Trade feed unavailable, retrying in 60s.");
+  assert.equal(tradesNote("unknown_pool", 0), "No live trade data for this pool.");
+  assert.equal(tradesNote("upstream_error", 3), null);
 });
