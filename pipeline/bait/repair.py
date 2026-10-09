@@ -46,6 +46,7 @@ MORNING = (dtime(5, 30), dtime(8, 0))   # from the stop time before the 06:00 ni
 NIGHTLY_AT = dtime(6, 0)                 # the pipeline cron; a repair stops before it (--stop-at) and never starts near it
 NIGHTLY_GRACE = timedelta(minutes=30)    # a nightly that started less than this ago is still "the next one"
 EXIT_INCOMPLETE = 6                      # stopped at --stop-at: what is done is kept, a rerun resumes
+BACKFILL_FAIL_STREAK = 10                # failed GeckoTerminal calls in a row before backfill-days gives up (resumable)
 
 _D = timedelta(days=1)
 _COLS = [c.name for c in project_daily.c]
@@ -172,6 +173,7 @@ def backfill(engine, ctx: RunContext, since: int, max_pools: int | None = None, 
            "rows_updated": 0, "rows_inserted": 0, "calls": 0}
     http = keyless_http(ctx)
     log.info("repair backfill-days: %d pools need candles for %s..%s; pulling %d", len(targets), start, end, len(take))
+    streak = 0                              # failed calls in a row: a rate-limit storm is not worth the night
     for i, (pid, cid, _v) in enumerate(take):
         if deadline is not None and clock() >= deadline:
             out["left_at_deadline"] = len(take) - i
@@ -181,18 +183,25 @@ def backfill(engine, ctx: RunContext, since: int, max_pools: int | None = None, 
         out["calls"] += 1
         if candles is None:
             out["failed"] += 1
-            continue
-        if not candles:
+            streak += 1
+            if streak >= BACKFILL_FAIL_STREAK:
+                out["left_at_failures"] = len(take) - i - 1
+                log.warning("repair backfill-days: %d GeckoTerminal calls failed in a row, stopping with %d pools left; "
+                            "rerun to resume", streak, len(take) - i - 1)
+                break
+        elif not candles:
             out["no_candles"] += 1          # GeckoTerminal has no volume for it: leave the rows alone
-            continue
-        with engine.begin() as conn:
-            u, n = fill_pool(conn, pid, cid, candles, start, end)
-        out["done"] += 1
-        out["rows_updated"] += u
-        out["rows_inserted"] += n
-        if (i + 1) % 50 == 0:
-            log.info("repair backfill-days: %d/%d pools, %d rows updated, %d inserted, %d failed",
-                     i + 1, len(take), out["rows_updated"], out["rows_inserted"], out["failed"])
+            streak = 0
+        else:
+            streak = 0
+            with engine.begin() as conn:
+                u, n = fill_pool(conn, pid, cid, candles, start, end)
+            out["done"] += 1
+            out["rows_updated"] += u
+            out["rows_inserted"] += n
+        if (i + 1) % 50 == 0:               # every outcome counts: a silent run is a run nobody can judge
+            log.info("repair backfill-days: %d/%d pools, %d filled, %d no candles, %d failed, %d rows updated, %d inserted",
+                     i + 1, len(take), out["done"], out["no_candles"], out["failed"], out["rows_updated"], out["rows_inserted"])
     return out
 
 
@@ -806,7 +815,11 @@ def _ctx(now: datetime, meter=None) -> RunContext:
 
 def _incomplete(out: dict) -> bool:
     """A step that stopped at the deadline: say so and let the caller exit EXIT_INCOMPLETE."""
-    left = out.get("left_at_deadline") or any(isinstance(v, dict) and v.get("left_at_deadline") for v in out.values())
+    outs = [out] + [v for v in out.values() if isinstance(v, dict)]
+    if any(o.get("left_at_failures") for o in outs):
+        print("INCOMPLETE: rerun to resume (stopped after %d failed GeckoTerminal calls in a row)" % BACKFILL_FAIL_STREAK)
+        return True
+    left = any(o.get("left_at_deadline") for o in outs)
     if left:
         print("INCOMPLETE: rerun to resume (stopped at --stop-at before the 06:00 UTC nightly)")
     return bool(left)
