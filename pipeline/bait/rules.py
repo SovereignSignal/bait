@@ -110,22 +110,32 @@ EIP1167_PREFIX = "363d3d373d3d3d363d73"
 
 
 ERC1967_MAX_BYTES = 2048
+FORWARDER_MAX_BYTES = 1024
+DELEGATECALL = "f4"
 
 
 def proxy_kind(code_hex: str | None) -> str | None:
     """The proxy shape of a runtime, or None. "eip1167": the whole runtime is a 45-byte minimal clone (a hook that only
     embeds the clone code, like OpenZeppelin Clones, is not). "eip1967": reads the implementation slot and is small
-    (< 2,048 bytes); a UUPS implementation also carries the slot constant but is a full contract."""
+    (< 2,048 bytes); a UUPS implementation also carries the slot constant but is a full contract. "unknown": a runtime
+    under 1,024 bytes with a DELEGATECALL byte that fits neither shape, likely a hand-rolled forwarder."""
     s = (code_hex or "").lower().removeprefix("0x")
     if s.startswith(EIP1167_PREFIX) and len(s) == 90:
         return "eip1167"
     if EIP1967_IMPL_SLOT in s and len(s) < 2 * ERC1967_MAX_BYTES:
         return "eip1967"
+    if len(s) < 2 * FORWARDER_MAX_BYTES and any(s[i:i + 2] == DELEGATECALL for i in range(0, len(s), 2)):
+        return "unknown"
     return None
 
 
+def proxy_flag(kind: str | None) -> bool | None:
+    """hooks.is_proxy for a proxy_kind: None ("unknown") keeps its hash out of evidence without calling it a proxy."""
+    return None if kind == "unknown" else kind is not None
+
+
 def is_proxy_code(code_hex: str | None) -> bool:
-    return proxy_kind(code_hex) is not None
+    return proxy_kind(code_hex) in ("eip1167", "eip1967")
 
 
 def code_evidence(r) -> str | None:
