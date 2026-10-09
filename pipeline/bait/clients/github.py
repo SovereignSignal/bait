@@ -85,7 +85,8 @@ class GitHub:
             return self._activity(*parsed, days=days, now=now)
         except httpx.HTTPStatusError as e:
             r = e.response
-            limited = r.headers.get("x-ratelimit-remaining") == "0" or "retry-after" in r.headers
+            limited = (r.headers.get("x-ratelimit-remaining") == "0" or "retry-after" in r.headers
+                       or "rate limit" in (r.text or "").lower())
             if r.status_code in (404, 451) or (r.status_code == 403 and not limited):
                 return None
             raise
