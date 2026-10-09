@@ -361,11 +361,14 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
     latest ? db.select().from(t.projectDaily).where(and(eq(t.projectDaily.day, latest), inArray(t.projectDaily.projectId, ids))) : [],
     db.select().from(t.hooks).where(inArray(t.hooks.projectId, ids)),
     db.select().from(t.signals).where(inArray(t.signals.projectId, ids)),
-    db
-      .select()
-      .from(t.receipts)
-      .where(inArray(t.receipts.projectId, ids))
-      .orderBy(sql`${t.receipts.publishedAt} desc nulls last`),
+    // Receipts only render on the project page; the list load skips them.
+    opts.full
+      ? db
+          .select()
+          .from(t.receipts)
+          .where(inArray(t.receipts.projectId, ids))
+          .orderBy(sql`${t.receipts.publishedAt} desc nulls last`)
+      : [],
     latest
       ? db.execute<TopPoolRow>(sql`
           select distinct on (h.project_id) h.project_id, p.pool_id, p.chain_id, p.hook_address,
