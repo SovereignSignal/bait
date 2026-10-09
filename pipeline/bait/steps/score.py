@@ -245,7 +245,8 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,
           tvl: dict, swaps7: dict, custom: set[tuple], vol_days: dict) -> tuple[dict[int, list[str]], set[int]]:
     """Wash reasons per project (DESIGN.md "Wash rules"). Each rule judges pools; a project gets the reason when the
-    pools it flags carry >= WASH_SHARE of the project's volume in that rule's window. Pools with unknown volume are never
+    pools it flags carry >= WASH_SHARE of the project's volume in that rule's window, leaving out a capped hook's aggregate
+    pool ('hook:<address>', folded swaps no rule can judge) on both sides of the share. Pools with unknown volume are never
     judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers. Every few-wallet
     rule also needs rules.corroborated (volume far above a known TVL, no liquidity, or symmetric traders).
     vol7 / tvl: the pool's closed 7-day volume and latest TVL from the snapshots. swaps7: the swaps behind that volume, an
@@ -299,7 +300,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     for reason in (r for r in WASH_REASONS if r in judged):
         share: dict[int, list[float]] = {}
         for key, (v, hit) in judged[reason].items():
-            if key not in pool_project or key in unknown or not v:
+            # a hook's aggregate pool is never judged, nor counted in the share: shares use the unfolded volume, as ranking does
+            if key not in pool_project or key in unknown or not v or key[0].startswith(HOOK_POOL_PREFIX):
                 continue
             t = share.setdefault(pool_project[key][0], [0.0, 0.0])
             t[0] += v
