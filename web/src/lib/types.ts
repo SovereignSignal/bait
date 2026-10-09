@@ -15,6 +15,9 @@ export type Category =
   | "gaming-nft"
   | "other";
 
+/** Routing eligibility (rules in lib/routable.ts): the app will route / will not route / not enough data to say. */
+export type Eligibility = "eligible" | "ineligible" | "unknown";
+
 export type Tab = "trending" | "new" | "verified" | "all";
 
 export const TABS: Array<[Tab, string]> = [

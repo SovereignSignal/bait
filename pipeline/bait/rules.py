@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 
 from .config import DYNAMIC_FEE_FLAG
 
-# DESIGN.md: address not starting 0x91 AND none of these flags AND not dynamicFee.
+# DESIGN.md: address not starting 0x91 AND none of these address bits AND not dynamicFee.
 # Stricter than the published Labs rule, which lists only the two swap deltas; see README.
 NON_ROUTABLE_FLAGS = (
     "beforeSwapReturnsDelta",
@@ -17,18 +17,43 @@ NON_ROUTABLE_FLAGS = (
 )
 
 
-def routable(hook: dict) -> bool:
-    """hook = one hooklist entry: {"hook": {"address": ...}, "flags": {...}, "properties": {...}}."""
+PERMISSION_BITS: tuple[tuple[str, int], ...] = (
+    ("beforeInitialize", 13), ("afterInitialize", 12),
+    ("beforeAddLiquidity", 11), ("afterAddLiquidity", 10),
+    ("beforeRemoveLiquidity", 9), ("afterRemoveLiquidity", 8),
+    ("beforeSwap", 7), ("afterSwap", 6),
+    ("beforeDonate", 5), ("afterDonate", 4),
+    ("beforeSwapReturnsDelta", 3), ("afterSwapReturnsDelta", 2),
+    ("afterAddLiquidityReturnsDelta", 1), ("afterRemoveLiquidityReturnsDelta", 0),
+)
+
+
+def flags_from_address(address: str) -> dict[str, bool]:
+    """Hook permissions live in the low 14 bits of the address (v4 Hooks.sol); the chain enforces them."""
+    bits = int(address, 16) & 0x3FFF
+    return {name: bool(bits >> bit & 1) for name, bit in PERMISSION_BITS}
+
+
+def eligibility(hook: dict, pool_fee: int | None = None) -> str:
+    """Routing eligibility by Bait's rule: 'eligible' | 'ineligible' | 'unknown'. Permissions come from the address;
+    dynamic fee from the pool fee when given, else properties.dynamicFee when present, else unknown."""
     address = (hook.get("hook") or {}).get("address") or hook.get("address") or ""
-    flags = hook.get("flags") or {}
     props = hook.get("properties") or {}
     if address.lower().startswith("0x91"):
-        return False
-    if any(bool(flags.get(f)) for f in NON_ROUTABLE_FLAGS):
-        return False
-    if bool(props.get("dynamicFee")):
-        return False
-    return True
+        return "ineligible"
+    flags = flags_from_address(address)
+    if any(flags[f] for f in NON_ROUTABLE_FLAGS):
+        return "ineligible"
+    if pool_fee is not None:
+        return "ineligible" if is_dynamic_fee(pool_fee) else "eligible"
+    if "dynamicFee" in props:
+        return "ineligible" if bool(props.get("dynamicFee")) else "eligible"
+    return "unknown"
+
+
+def routable(hook: dict) -> bool:
+    """hook = one hooklist entry: {"hook": {"address": ...}, "flags": {...}, "properties": {...}}."""
+    return eligibility(hook) == "eligible"
 
 
 def is_dynamic_fee(fee: int | None) -> bool:
