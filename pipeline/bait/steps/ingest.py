@@ -7,11 +7,11 @@ from ..clients import hooklist
 from ..db import hooks, upsert
 from . import RunContext, log
 
-UPDATE_COLS = ["name", "description", "flags", "properties", "verified_source", "audit_url", "deployer"]
+UPDATE_COLS = ["name", "description", "flags", "properties", "verified_source", "audit_url", "deployer", "hooklisted"]
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
-    out = {"hooks": 0, "new": 0, "updated": 0, "invalid": 0, "errors": 0}
+    out = {"hooks": 0, "new": 0, "updated": 0, "invalid": 0, "errors": 0, "delisted": 0}
     try:
         entries, out["invalid"] = hooklist.load_entries(path=ctx.hooklist_file)
     except Exception as e:  # registry unreachable: keep last night's hooks, let the other steps run
@@ -29,10 +29,16 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "address": key[0], "chain_id": key[1], "name": e.hook.name or None,
             "description": e.hook.description or None, "flags": e.flags, "properties": e.properties,
             "verified_source": e.hook.verifiedSource, "audit_url": e.hook.auditUrl or None,
-            "deployer": (e.hook.deployer or "").lower() or None, "first_seen_at": ctx.now,
+            "deployer": (e.hook.deployer or "").lower() or None, "first_seen_at": ctx.now, "hooklisted": True,
         })
     for i in range(0, len(rows), 500):
         upsert(conn, hooks, rows[i:i + 500], keys=["address", "chain_id"], update=UPDATE_COLS)
+    listed = {(r["address"], r["chain_id"]) for r in rows}
+    stale = [(a, c) for (a, c) in existing if (a, c) not in listed]        # discovered on-chain, or dropped from the registry
+    for i in range(0, len(stale), 500):
+        conn.execute(sa.update(hooks).values(hooklisted=False)
+                     .where(sa.tuple_(hooks.c.address, hooks.c.chain_id).in_(stale[i:i + 500])))
+    out["delisted"] = len(stale)
     new = [r for r in rows if (r["address"], r["chain_id"]) not in existing]
     out.update(hooks=len(rows), new=len(new), updated=len(rows) - len(new))
     if new:

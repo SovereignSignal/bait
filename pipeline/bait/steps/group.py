@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from ..db import hooks, projects, utcnow
+from ..db import backfill_address_flags, hooks, projects, utcnow
 from ..rules import normalize_name, slugify
 from . import RunContext, log
 
@@ -13,6 +13,7 @@ FACTORY_MIN_HOOKS = 21
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"by_name": 0, "by_code": 0, "by_claude": 0, "created": 0, "unassigned": 0, "code_fetched": 0, "factories": 0}
+    out["flags_backfilled"] = backfill_address_flags(conn)
     unassigned = _unassigned(conn)
 
     # Rule 1: normalized name -> existing project, or new project per distinct name.
