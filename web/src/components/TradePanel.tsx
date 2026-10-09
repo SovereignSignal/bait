@@ -1,6 +1,6 @@
 // Right column: pool action card (links out to Uniswap), buys vs sells, what it does, hook facts.
 import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
-import { feeLabel, int, paletteColor, shortAddr } from "@/lib/format";
+import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
 import { pace } from "@/lib/present";
 import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
@@ -126,7 +126,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
                 shortAddr(hook)
               )
             ) : (
-              "–"
+              NONE
             )}
           </b>
           <span>Flags</span>
@@ -134,7 +134,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           <span>Hooks in project</span>
           <b className="num">{int(p.metrics.hooksN)}</b>
           <span>Today vs 7d pace</span>
-          <b className="num">{p.usage.vol24h == null ? "–" : `${share}%`}</b>
+          <b className="num">{p.usage.vol24h == null ? NONE : `${share}%`}</b>
         </div>
         <div className={s.bar}>
           <i style={{ width: `${share}%` }} />

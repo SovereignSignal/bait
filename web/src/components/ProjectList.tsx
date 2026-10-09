@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
 import { applyTab, availableCategories, feedHref, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
-import { ago, usd } from "@/lib/format";
+import { ago, NONE, usd } from "@/lib/format";
 import { categoryShort, chainNames, deltaText } from "@/lib/present";
 import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
@@ -23,7 +23,7 @@ export function useFeedQuery(): FeedQuery {
 function Delta({ r }: { r: RowView }) {
   if (r.isNew) return <span className="b b-p">New</span>;
   const d = deltaText(r);
-  if (!d) return <span className="mut3">—</span>;
+  if (!d) return <span className="mut3">{NONE}</span>;
   return <span className={d.up ? "up" : "down"}>{d.text}</span>;
 }
 

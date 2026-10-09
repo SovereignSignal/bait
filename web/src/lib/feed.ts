@@ -110,3 +110,8 @@ export function searchRows<T extends Pick<RowView, "name" | "hooks">>(rows: T[],
   if (!s) return rows;
   return rows.filter((p) => p.name.toLowerCase().includes(s) || (s.startsWith("0x") && p.hooks.some((h) => h.startsWith(s))));
 }
+
+/** Movers for the strip: filtered by chain when one is selected, capped. `rows` is already in mover order. */
+export function moversFor<T extends { chains: ChainId[] }>(rows: T[], chain?: ChainId, n = 10): T[] {
+  return (chain ? rows.filter((r) => r.chains.includes(chain)) : rows).slice(0, n);
+}
