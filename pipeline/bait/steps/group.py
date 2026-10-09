@@ -22,6 +22,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out["flags_backfilled"] = backfill_address_flags(conn)
     out["hashes_rehashed"] = _backfill_code_hashes(conn, ctx)
     out["aliases_backfilled"] = backfill_unlisted_aliases(conn, ctx.now)
+    out["split"] = _split_generic(conn, ctx)
     _regroup(conn, ctx, out)
     unassigned = _unassigned(conn)
 
@@ -47,23 +48,24 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     if unassigned:
         out["code_fetched"] = _fetch_code_hashes(conn, ctx, unassigned)
         unassigned = _unassigned(conn)
-        hash_to_pid = dict(conn.execute(
-            sa.select(hooks.c.code_hash, sa.func.min(hooks.c.project_id))
-            .where(hooks.c.project_id.is_not(None), hooks.c.code_hash.is_not(None)).group_by(hooks.c.code_hash)).all())
+        hash_to_pid, dep_to_pid = _join_targets(conn)
         still = []
         for h in unassigned:
-            pid = hash_to_pid.get(h.code_hash) if h.code_hash else None
+            pid = hash_to_pid.get(h.code_hash) if h.code_hash and not _proxy(h) else None
             if pid:
                 _assign(conn, h, pid)
                 out["by_code"] += 1
+            elif h.deployer and (pid := dep_to_pid.get((h.chain_id, h.deployer))):
+                _assign(conn, h, pid)
+                out["by_deployer"] += 1
             else:
                 still.append(h)
-        # Unassigned hooks that share bytecode with each other (one launchpad, many clones) become one project.
+        # Unassigned hooks that share non-proxy bytecode with each other (one launchpad, many clones) become one project.
         fam: dict[str, list] = {}
         for h in still:
-            if h.code_hash:
+            if h.code_hash and not _proxy(h):
                 fam.setdefault(h.code_hash, []).append(h)
-        still = [h for h in still if not h.code_hash or len(fam[h.code_hash]) == 1]
+        still = [h for h in still if _proxy(h) or len(fam.get(h.code_hash, ())) < 2]
         for members in fam.values():
             if len(members) < 2:
                 continue
@@ -81,16 +83,17 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if claude is None:
             # No key: every unnamed hook becomes its own project keyed by address so the feed still renders.
             for h in unassigned:
-                pid = _create_project(conn, ctx, h.name or f"Unlisted hook {h.address[:6]}…{h.address[-4:]}", None, h.description, category=None)
+                pid = _create_project(conn, ctx, _gname(h) or f"Unlisted hook {h.address[:6]}…{h.address[-4:]}", None, h.description, category=None)
                 _assign(conn, h, pid)
                 out["created"] += 1
             unassigned = []
         else:
             from ..costs import BudgetExceeded
             names = {r.id: r.name for r in conn.execute(sa.select(projects.c.id, projects.c.name))}
-            # A hook with no name and no description is only an address: Claude would be guessing, so it is never
-            # paid for. Those get an address-named project (bytecode families were already merged above for free).
-            bare = [h for h in unassigned if not (h.name or "").strip() and not (h.description or "").strip()]
+            # Only an address (Claude would be guessing), or a template/proxy name (a free contract-name lookup comes
+            # first): never paid for. Every unassigned hook here has no useful name, so a non-empty name is a generic one.
+            # Those get an address-named project (bytecode families were already merged above for free).
+            bare = [h for h in unassigned if (h.name or "").strip() or not (h.description or "").strip()]
             for h in bare:
                 pid = _create_project(conn, ctx, f"Unlisted hook {h.address[:6]}…{h.address[-4:]}", None, None, category=None)
                 _assign(conn, h, pid)
@@ -194,6 +197,35 @@ def _backfill_code_hashes(conn, ctx) -> int:
         conn.execute(sa.update(hooks).values(code_hash=h, regroup=True).where(hooks.c.address == addr, hooks.c.chain_id == cid))
     log.info("group: re-hashed %d of %d legacy code_hash rows", len(got), len(legacy))
     return len(got)
+
+
+def _split_generic(conn, ctx) -> int:
+    """Projects keyed on a template or proxy name ("ERC1967Proxy") merged unrelated hooks by name alone. Detach their
+    hooks so the rules regroup them on evidence; the project goes with no alias (its hooks now live in several)."""
+    bad = [p.id for p in conn.execute(sa.select(projects.c.id, projects.c.name, projects.c.norm_name)
+                                      .where(projects.c.norm_name.is_not(None)))
+           if not p.norm_name.startswith(("contract:", "code:")) and not useful_name(p.name, max_len=None)]
+    for pid in bad:
+        conn.execute(sa.update(hooks).values(project_id=None).where(hooks.c.project_id == pid))
+        retire_project(conn, pid, into=None, reason="split:generic", now=ctx.now)
+    if bad:
+        log.info("group: split %d projects keyed on a template or proxy name", len(bad))
+    return len(bad)
+
+
+def _join_targets(conn) -> tuple[dict, dict]:
+    """code_hash -> project and (chain, deployer) -> project from assigned hooks. Proxy bytecode is shared by unrelated
+    deployments and CREATE2 factories deploy for everyone, so neither is evidence."""
+    by_hash: dict[str, int] = {}
+    by_dep: dict[tuple[int, str], int] = {}
+    for r in conn.execute(sa.select(hooks.c.code_hash, hooks.c.deployer, hooks.c.chain_id, hooks.c.name,
+                                    hooks.c.contract_name, hooks.c.project_id)
+                          .where(hooks.c.project_id.is_not(None)).order_by(hooks.c.project_id)):
+        if r.code_hash and not _proxy(r):
+            by_hash.setdefault(r.code_hash, r.project_id)
+        if r.deployer and r.deployer not in SHARED_DEPLOYERS:
+            by_dep.setdefault((r.chain_id, r.deployer), r.project_id)
+    return by_hash, by_dep
 
 
 def _move(conn, ctx, h, src: int, target: int, reason: str, out: dict) -> None:
