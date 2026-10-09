@@ -25,3 +25,15 @@ def test_categorize_keywords_then_dynamic_fee_then_other():
     assert categorize("Executes limit orders on-chain", {}, {}) == "orders"
     assert categorize("plain hook", {}, {"dynamicFee": True}) == "dynamic-fee"
     assert categorize("plain hook", {}, {}) == "other"
+
+
+def test_keyless_progress_goes_through_the_bait_logger_not_stderr(caplog, capsys):
+    import logging
+    from bait import keyless as K
+    with caplog.at_level(logging.INFO, logger="bait"):
+        K.log("base: 12 v4 pools from GeckoTerminal (uniswap_v4_base)")
+        K.warn("GT 500 /networks/base/dexes?page=1")
+    assert capsys.readouterr().err == ""
+    recs = [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert ("bait", "INFO", "[keyless] base: 12 v4 pools from GeckoTerminal (uniswap_v4_base)") in recs
+    assert ("bait", "WARNING", "[keyless] GT 500 /networks/base/dexes?page=1") in recs

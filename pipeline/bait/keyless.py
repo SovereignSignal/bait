@@ -15,14 +15,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
-import sys
 import time
 import urllib.error
 import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+from .logsetup import configure
 from .rules import flags_from_address, normalize_name, routable, score_trending, slugify
 
 GT = "https://api.geckoterminal.com/api/v2"
@@ -80,8 +81,17 @@ CATEGORY_KEYWORDS = [
 ]
 
 
+_log = logging.getLogger("bait")
+
+
 def log(msg: str) -> None:
-    print(f"[keyless] {msg}", file=sys.stderr, flush=True)
+    """Progress line. Through the "bait" logger, so Railway gets package 4's JSON line at level info (plain text on stderr
+    was tagged as an error)."""
+    _log.info("[keyless] %s", msg)
+
+
+def warn(msg: str) -> None:
+    _log.warning("[keyless] %s", msg)
 
 
 class Http:
@@ -130,10 +140,10 @@ class Http:
                     continue
                 if e.code == 404:
                     return None
-                log(f"GT {e.code} {path}")
+                warn(f"GT {e.code} {path}")
                 return None
             except Exception as e:  # network blip
-                log(f"GT error {e!r} {path}")
+                warn(f"GT error {e!r} {path}")
                 time.sleep(5)
         return None
 
@@ -147,12 +157,12 @@ class Http:
                     out.extend(res if isinstance(res, list) else [res])
                     break
                 except urllib.error.HTTPError as e:
-                    log(f"RPC {url} HTTP {e.code}")
+                    warn(f"RPC {url} HTTP {e.code}")
                     if e.code in (400, 403, 413):
                         break  # request-shape or plan limit: retrying will not help
                     time.sleep(2)
                 except Exception as e:
-                    log(f"RPC {url} error {e!r}")
+                    warn(f"RPC {url} error {e!r}")
                     time.sleep(2)
         return out
 
@@ -322,10 +332,10 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
                         if e.code == 429:
                             time.sleep(4 * (attempt + 1))
                             continue
-                        log(f"Blockscout {bs} HTTP {e.code}")
+                        warn(f"Blockscout {bs} HTTP {e.code}")
                         break
                     except Exception as e:
-                        log(f"Blockscout {bs} error {e!r}")
+                        warn(f"Blockscout {bs} error {e!r}")
                         break
             if not logs:
                 ts = int(datetime.fromisoformat(pools[key]["attrs"]["pool_created_at"].replace("Z", "+00:00")).timestamp())
@@ -514,6 +524,7 @@ def main(argv=None) -> int:
     ap.add_argument("--cache-dir", help="cache GeckoTerminal responses here; reruns are instant")
     ap.add_argument("--spacing", type=float, default=6.5, help="seconds between GeckoTerminal calls")
     args = ap.parse_args(argv)
+    configure()
     now = datetime.now(timezone.utc)
     http = Http(gt_spacing=args.spacing, cache_dir=args.cache_dir)
     if args.hooklist_file:
