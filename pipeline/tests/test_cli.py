@@ -6,7 +6,7 @@ from tests.conftest import FIXTURE
 
 
 def test_cli_end_to_end_sqlite_idempotent(tmp_path, monkeypatch):
-    for k in ("GRAPH_API_KEY", "ANTHROPIC_API_KEY", "EXA_API_KEY", "PARALLEL_API_KEY", "NANSEN_API_KEY", "GITHUB_TOKEN"):
+    for k in ("GRAPH_API_KEY", "ANTHROPIC_API_KEY", "EXA_API_KEY", "PARALLEL_API_KEY", "GITHUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     url = f"sqlite:///{tmp_path}/t.sqlite"
     argv = ["run", "--day", "2026-10-06", "--hooklist-file", FIXTURE, "--database-url", url, "--force-digest", "--max-code-fetch", "0"]
@@ -24,3 +24,11 @@ def test_cli_rejects_unknown_step_and_chain(tmp_path):
     url = f"sqlite:///{tmp_path}/t.sqlite"
     assert main(["run", "--steps", "nope", "--database-url", url]) == 2
     assert main(["run", "--chains", "mars", "--database-url", url]) == 2
+
+
+def test_run_exits_3_when_lock_is_held(monkeypatch, tmp_path):
+    from bait import db
+    monkeypatch.setattr(db, "try_run_lock", lambda engine: None)
+    rc = main(["run", "--database-url", f"sqlite:///{tmp_path}/x.sqlite", "--steps", "ingest",
+               "--hooklist-file", FIXTURE, "--day", "2026-10-06"])
+    assert rc == 3

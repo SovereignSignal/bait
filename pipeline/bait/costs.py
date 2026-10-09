@@ -9,7 +9,6 @@ Budgets (USD, all providers together; per-provider caps optional):
   SPEND_DAILY_USD    default 3.00   (UTC day)
   SPEND_MONTHLY_USD  default 40.00  (rolling 30 days)
   SPEND_DAILY_USD_<PROVIDER> / SPEND_MONTHLY_USD_<PROVIDER>  e.g. SPEND_DAILY_USD_PARALLEL=1
-Nansen is metered in credits by clients/nansen.py (NANSEN_MONTHLY_CREDITS); it is logged here with usd=0.
 
 Prices checked 2026-10-08 from the providers' published pricing:
   Anthropic per million tokens (input / output): Sonnet 5.5 2/10, Haiku 4.5 1/5, Haiku 5.5 0.10/0.50
@@ -182,13 +181,12 @@ class NullMeter(Meter):
 # Preview: what a full run would call and cost right now, without calling anything paid.
 # ------------------------------------------------------------------------------------------------
 def preview(conn: sa.Connection, ctx, meter: Meter) -> list[dict]:
-    from .clients import nansen as N
     from .config import CLAUDE_BLURB_MODEL, CLAUDE_CLASSIFY_MODEL, env
     from .steps import enrich, group, radar, signals
 
     rows: list[dict] = []
     have = {k: bool(env(v)) for k, v in (("anthropic", "ANTHROPIC_API_KEY"), ("parallel", "PARALLEL_API_KEY"),
-                                         ("exa", "EXA_API_KEY"), ("nansen", "NANSEN_API_KEY"))}
+                                         ("exa", "EXA_API_KEY"))}
     sonnet_call = anthropic_estimate(CLAUDE_BLURB_MODEL, 6000, 600)       # what_line / why_blurb worst case
     haiku_group = anthropic_estimate(CLAUDE_CLASSIFY_MODEL, group.PROMPT_CHARS_MAX, 400)
     haiku_radar = anthropic_estimate(CLAUDE_CLASSIFY_MODEL, 4000, 300)
@@ -219,11 +217,6 @@ def preview(conn: sa.Connection, ctx, meter: Meter) -> list[dict]:
     rows.append({"step": "radar", "provider": "anthropic", "what": f"{CLAUDE_CLASSIFY_MODEL} radar classify",
                  "calls": radar.classify_cap() if have["exa"] and have["anthropic"] else 0, "unit_usd": haiku_radar, "note": ""})
 
-    n_nansen = 0
-    if have["nansen"]:
-        n_nansen = min(N.max_addresses(), max(0, N.budget_left(conn, ctx.now)) // N.cost_per_hit())
-    rows.append({"step": "activity", "provider": "nansen", "what": "Nansen wallet labels (credits, not USD)",
-                 "calls": n_nansen, "unit_usd": 0.0, "note": f"~{N.cost_per_hit()} credits each, budget left {N.budget_left(conn, ctx.now)}"})
     for r in rows:
         r["worst_usd"] = r["calls"] * r["unit_usd"]   # full precision; formatting rounds for display only
     return rows

@@ -62,6 +62,9 @@ is unset.
    (cd pipeline && .venv/bin/python -m pytest -q)
    ```
 
+   Postgres-only tests (savepoints, the run lock) skip unless `TEST_DATABASE_URL` is set:
+   `eval "$(pipeline/scripts/pg-test-cluster.sh start)"` starts a throwaway cluster and prints the export.
+
    `fixtures/routable_cases.json` is the shared routable-rule fixture; `pipeline/tests/test_routable_shared.py`
    and `web/src/lib/routable.test.ts` (`npm test`) both assert it so the two implementations cannot drift.
 

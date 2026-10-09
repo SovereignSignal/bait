@@ -1,7 +1,7 @@
 # Bait pipeline
 
 Nightly Python job: ingest Uniswap v4 hooks, snapshot hooked pools per chain, record who trades the
-busiest hooked pools (with Nansen wallet labels), fold in the on-chain indexer's exact usage, group hooks into projects, enrich, score, pull
+busiest hooked pools (top wallets per pool), fold in the on-chain indexer's exact usage, group hooks into projects, enrich, score, pull
 signals, scan the dev radar (registry submissions, repos, audits, launches), write the Monday digest. Spec: `../DESIGN.md`
 ("Pipeline", "Postgres schema", "Grouping", "Scoring", "Data sources").
 
@@ -19,7 +19,7 @@ cp .env.example .env            # fill in keys; never commit .env
 .venv/bin/python -m bait run --day 2026-10-06 --hooklist-file fixtures/hooklist.sample.json \
     --database-url sqlite:///./bait.sqlite --force-digest
 
-.venv/bin/python -m pytest -q -p no:cacheprovider   # 93 tests, SQLite in memory, HTTP mocked, KEYLESS=0
+.venv/bin/python -m pytest -q -p no:cacheprovider   # SQLite in memory, HTTP mocked, KEYLESS=0; Postgres-only tests need TEST_DATABASE_URL (scripts/pg-test-cluster.sh)
 ```
 
 `--day` defaults to today's UTC date (what the Docker CMD relies on). Runs are idempotent per day:
@@ -37,12 +37,12 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 |---|---|---|---|---|
 | 1 | ingest | hooklist.json (GitHub raw or `--hooklist-file`) | hooks (first_seen_at set once) | nothing |
 | 2 | snapshot | v4 subgraph per chain, `pools(where hooks != 0x0, id_gt)` paginated by 1000; keyless GeckoTerminal for the rest | pools, pool_snapshots(day), pool_stats(day) incl. buys/sells/buyers/sellers_24h | GRAPH_API_KEY, else keyless |
-| 3 | activity | pool_stats(day) ⨝ pools, wash excluded, top `ACTIVITY_POOLS` by 24h vol; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept), wallet_labels | keyless; optional NANSEN_API_KEY |
+| 3 | activity | pool_stats(day) ⨝ pools, wash excluded, top `ACTIVITY_POOLS` by 24h vol; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept) | keyless |
 | 3b | onchain | v4_pools, pool_daily_onchain, indexer_state (from `python -m bait.indexer`) | hooks (unlisted, capped), pools, pool_snapshots, pool_stats(day) overriding keyless usage | nothing; no-op when the indexer tables are empty |
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
 | 5 | enrich | projects with enriched_at null | what_line, category, website/github/x_handle, enrichment | ANTHROPIC_API_KEY; optional PARALLEL_API_KEY, Blockscout |
 | 6 | score | pool_snapshots (day-14..day), pool_stats(day) | project_daily(day) | nothing |
-| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | receipts, signals, why_blurb, wallet_labels | optional EXA_API_KEY, GITHUB_TOKEN, NANSEN_API_KEY (+GRAPH_API_KEY), ANTHROPIC_API_KEY |
+| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | receipts, signals, why_blurb | optional EXA_API_KEY, GITHUB_TOKEN, ANTHROPIC_API_KEY |
 | 8 | radar | Uniswap/hooklist issues + PRs (30d), GitHub repo/code search (30d), Exa (60d) classified by Claude Haiku | radar_items (one row per URL, 90 days kept) | optional GITHUB_TOKEN (else anonymous unless KEYLESS=0), EXA_API_KEY + ANTHROPIC_API_KEY |
 | 9 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
 
@@ -53,20 +53,14 @@ returns `None` and the step logs `client=<name> skipped: no key in env` and does
 `db.ADDITIVE_COLUMNS` that an existing table lacks (Postgres `ADD COLUMN IF NOT EXISTS`, SQLite
 `PRAGMA table_info`), so production picks up new columns with no manual migration.
 
-### Activity and wallet labels (step 3)
+### Activity (step 3)
 Trades come from GeckoTerminal through the same `keyless.Http` the snapshot uses (one client per run,
 `KEYLESS_SPACING` / `KEYLESS_CACHE_DIR`), one call per selected pool. Per wallet (`tx_from_address`,
 lowercased): USD volume, trades, buys, sells, last trade; the top 20 per pool are written for the day
 (the day's rows for a pool are replaced on re-run). Rows older than 14 days are deleted.
 
-Nansen (only with `NANSEN_API_KEY`): the day's wallets across the selected pools, highest volume
-first, skipping chains Nansen does not cover (Unichain, Ink) and wallets whose `wallet_labels.as_of`
-is newer than `NANSEN_RELABEL_DAYS`. At most `NANSEN_MAX_ADDRESSES` calls per run, which is the credit
-cap (100 credits per labels call, 500 with `NANSEN_PREMIUM_LABELS=1`). Empty answers are stored as
-`[]` so the wallet is not paid for again inside the window. `smart_money` = any label containing
-"smart money", "fund", "smart trader", "smart lp" or "smart dex". A 401/402/403 stops labeling for
-the run. Step 7 (signals) reads the same table before calling Nansen and writes what it pays for.
-Logged: `nansen queried= labeled= smart_money=`. With `KEYLESS=0` and no keys the step only prunes.
+Wallet labels (`wallet_labels`) are a frozen cache from the retired Nansen lane; the web reads them, nothing writes them.
+With `KEYLESS=0` and no keys the step only prunes.
 
 ### On-chain indexer + step `onchain` (step 3b)
 `python -m bait.indexer` (package `bait/indexer/`) is a separate long-running process (Railway service `indexer`, see
@@ -178,16 +172,14 @@ for the nightly ~50 blurbs and is the obvious next step.
 ## Env vars
 See `.env.example`. `DATABASE_URL` (Railway injects; `postgres://` is rewritten to
 `postgresql+psycopg://`; unset falls back to `sqlite:///./bait.sqlite`), `GRAPH_API_KEY`,
-`ANTHROPIC_API_KEY`, `EXA_API_KEY`, `PARALLEL_API_KEY`, `NANSEN_API_KEY` (+ `NANSEN_PREMIUM_LABELS=1`
-for Smart Money tags), `GITHUB_TOKEN`, `BLOCKSCOUT_API_KEY` (optional). `BLOCKWORKS_API_KEY` is
+`ANTHROPIC_API_KEY`, `EXA_API_KEY`, `PARALLEL_API_KEY`, `GITHUB_TOKEN`, `BLOCKSCOUT_API_KEY` (optional). `BLOCKWORKS_API_KEY` is
 unused by the pipeline.
 
 Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_QUERIES` (6),
 `RADAR_CLASSIFY_MAX` (30); see "Dev radar" above.
 
 Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30),
-`ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 40), `NANSEN_MAX_ADDRESSES` (Nansen label calls per run, default 10), `NANSEN_MONTHLY_CREDITS` (rolling 30-day budget in estimated credits, default 10000; enforced before every call), `NANSEN_RELABEL_DAYS` (days before a
-labeled wallet is queried again, default 14; signals uses the same window). Keyless source:
+`ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 40), Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP`.
 
@@ -200,7 +192,7 @@ Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the
 `bait/config.py` `CHAINS`. Subgraph IDs are the community deployments DefiLlama uses; health is
 unverified until the first run with a key (watch the `_meta hasIndexingErrors` warning). Robinhood
 (4663) and Ink (57073) have no public v4 subgraph and are skipped by the subgraph path (keyless covers them, and the
-on-chain indexer covers every chain it serves, see step 3b). Nansen is skipped on Unichain and Ink. BNB and
+on-chain indexer covers every chain it serves, see step 3b). BNB and
 Avalanche have no Blockscout instance, so code_hash lookups there return None.
 
 ## Docker
@@ -220,7 +212,6 @@ written on its own connection so it survives a rolled-back step), and hard budge
 | `ENRICH_MAX` | 40 | Projects enriched (Parallel core + Sonnet) per run; live-pool projects only. |
 | `GROUP_CLAUDE_MAX` | 100 | Haiku classifications per run; bare-address hooks are never sent. |
 | `RADAR_EXA_QUERIES` / `RADAR_CLASSIFY_MAX` | 6 / 30 | Radar Exa searches and Haiku classifications per run. |
-| `NANSEN_MONTHLY_CREDITS` / `NANSEN_MAX_ADDRESSES` | 10000 / 10 | Nansen credit budget (separate, in credits). |
 
 `python -m bait cost-preview` prints, without calling anything paid, how many paid calls each step would make against
 the current database and the worst-case USD for one full run, plus spend today and in the last 30 days.
