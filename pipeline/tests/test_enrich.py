@@ -133,3 +133,90 @@ def test_parallel_timeouts_are_not_failures_and_paid_runs_are_collected_not_repa
     assert h2.posts == 0 and out2["parallel"] == 1 and row.enriched_at is not None
     assert row.enrichment["parallel"]["team"] == "Slow Labs" and len(claude.calls) == 1
     assert meter.run_usd == pytest.approx(0.025)               # paid exactly once across both runs
+
+
+def _seed_one(conn, name="Gone", slug="gone", enrichment=None):
+    pid = insert_project(conn, name, first_seen=NOW - timedelta(days=30), slug=slug)
+    addr = "0x" + "6" * 40
+    insert_hook(conn, addr, 8453, project_id=pid, name=name)
+    insert_pool(conn, "0xp" + slug, 8453, addr, NOW - timedelta(days=30))
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xp" + slug, chain_id=8453, day=DAY, vol_24h=5000.0, traders_24h=50))
+    if enrichment is not None:
+        conn.execute(sa.update(db.projects).values(enrichment=enrichment).where(db.projects.c.id == pid))
+    return pid
+
+
+class _Resp:
+    def __init__(self, status, data=None):
+        self.status_code, self._d = status, data or {}
+
+    def json(self):
+        return self._d
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+
+def test_parallel_404_is_terminal_project_still_gets_claude_and_is_never_resubmitted(conn, ctx, monkeypatch):
+    from bait.clients.parallel import Parallel
+    from bait.costs import Budgets, Meter
+    monkeypatch.setenv("ENRICH_MAX", "1")
+    pid = _seed_one(conn, enrichment={"parallel_run_id": "trun_dead", "parallel_run_at": NOW.isoformat()})
+
+    class Http:
+        def __init__(self):
+            self.posts, self.gets = 0, 0
+
+        def post(self, url, **kw):
+            self.posts += 1
+            return _Resp(200, {"run_id": "trun_new"})
+
+        def get(self, url, **kw):
+            self.gets += 1
+            return _Resp(404, {"error": "run not found"})
+
+    h = Http()
+    par = Parallel("k", http_client=h, poll_s=0, max_wait_s=5); par.meter = Meter(None, budgets=Budgets(5.0, 50.0, {}))
+    claude = FakeClaude()
+    ctx.clients.update(claude=claude, parallel=par, blockscout=None)
+    out = enrich.run(conn, ctx)
+    row = conn.execute(sa.select(db.projects).where(db.projects.c.id == pid)).one()
+    assert h.posts == 0 and h.gets == 1                        # no resubmit, one lookup
+    assert out["parallel_failed"] == 1 and out["errors"] == 0
+    assert row.enrichment["parallel"] == {"_failed": "trun_dead", "reason": "404"}
+    assert "parallel_run_id" not in row.enrichment
+    assert claude.calls == ["Gone"] and row.enriched_at is not None   # Claude ran without Parallel facts
+    # a second run must not touch Parallel at all
+    out2 = enrich.run(conn, ctx)
+    assert h.posts == 0 and h.gets == 1 and out2["candidates"] == 0
+
+
+def test_parallel_pending_run_older_than_max_age_is_expired_not_polled(conn, ctx, monkeypatch):
+    from bait.clients.parallel import Parallel
+    from bait.costs import Budgets, Meter
+    monkeypatch.setenv("ENRICH_MAX", "1")
+    monkeypatch.setenv("PARALLEL_RUN_MAX_AGE_H", "48")
+    old = (NOW - timedelta(hours=49)).isoformat()
+    pid = _seed_one(conn, name="Old", slug="old", enrichment={"parallel_run_id": "trun_old", "parallel_run_at": old})
+
+    class Http:
+        def __init__(self):
+            self.posts, self.gets = 0, 0
+
+        def post(self, url, **kw):
+            self.posts += 1
+            return _Resp(200, {"run_id": "x"})
+
+        def get(self, url, **kw):
+            self.gets += 1
+            return _Resp(200, {"output": {"content": {"team": "late"}}})
+
+    h = Http()
+    par = Parallel("k", http_client=h, poll_s=0, max_wait_s=5); par.meter = Meter(None, budgets=Budgets(5.0, 50.0, {}))
+    ctx.clients.update(claude=FakeClaude(), parallel=par, blockscout=None)
+    out = enrich.run(conn, ctx)
+    row = conn.execute(sa.select(db.projects).where(db.projects.c.id == pid)).one()
+    assert h.posts == 0 and h.gets == 0                        # neither resubmitted nor polled
+    assert out["parallel_failed"] == 1
+    assert row.enrichment["parallel"] == {"_failed": "trun_old", "reason": "expired"} and row.enriched_at is not None
