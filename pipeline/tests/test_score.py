@@ -594,3 +594,30 @@ def test_a_hooks_aggregate_pool_adds_volume_but_is_not_a_pool(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, pad)
     assert (d.vol_24h, d.swaps_24h, d.pools_n) == (1500.0, 45, 1)
+
+
+def test_a_launchpad_whose_only_usage_is_an_unpriced_aggregate_has_unknown_volume_not_zero(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    insert_pool(conn, "0xidle", 8453, "0xpad", created=NOW - timedelta(days=30))       # stored, never snapshotted
+    agg = db.hook_pool_id("0xpad")
+    insert_pool(conn, agg, 8453, "0xpad", created=None)
+    insert_snap(conn, agg, 8453, END, None, None, None, vol_day=None, tx_day=3)        # folded swaps, all unpriced
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert (d.vol_24h, d.vol_7d, d.pools_n) == (None, None, 0)
+
+
+def test_folded_usage_shows_in_the_totals_but_never_ranks_trending(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    insert_pool(conn, "0xpp1", 8453, "0xpad", created=NOW - timedelta(days=60))
+    agg = db.hook_pool_id("0xpad")
+    insert_pool(conn, agg, 8453, "0xpad", created=None)
+    days = [END - timedelta(days=i) for i in range(14)]
+    series(conn, "0xpp1", 8453, {d: 1_000.0 for d in days}, tvl=50_000.0, tx={d: 10 for d in days})
+    series(conn, agg, 8453, {d: (1_000_000.0 if d > END - timedelta(days=7) else 0.0) for d in days}, tx={d: 10 for d in days})
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert d.vol_7d == 7_000.0 + 7_000_000.0                                            # displayed totals include it
+    assert d.score_trending == pytest.approx(score.score_trending(7_000.0, 7_000.0))     # ranking does not
