@@ -1,6 +1,6 @@
 // Live recent trades for one pool, from GeckoTerminal (keyless), with wallet_labels joined.
 // Never throws: any upstream error, 429 or bad input is an empty list with an explicit status. Only pools Bait knows are proxied.
-import { getWalletLabels, knownPoolKeys } from "@/db/queries";
+import { getWalletLabels, isKnownPool } from "@/db/queries";
 import { createSwrCache } from "@/lib/swr-cache";
 import { createTokenBucket } from "@/lib/token-bucket";
 import { CHAINS, parseChainParam } from "@/lib/chains";
@@ -40,7 +40,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ chain: 
   if (!chainId || !CHAINS[chainId] || !/^0x[0-9a-f]{40,64}$/.test(poolId)) return json({ trades: [], status: "unknown_pool" }, 404, NO_STORE);
 
   const key = `${chainId}:${poolId}`;
-  if (!(await knownPoolKeys()).has(key)) return json({ trades: [], status: "unknown_pool" }, 404, NO_STORE);
+  if (!(await isKnownPool(chainId, poolId))) return json({ trades: [], status: "unknown_pool" }, 404, NO_STORE);
 
   try {
     const value = await cache.get(key, () => load(chainId, poolId), (v) => (v.status === "ok" ? TTL_MS : ERROR_TTL_MS));
