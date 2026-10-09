@@ -111,16 +111,99 @@ def is_spam(pool_stats: list[tuple[float, int]]) -> bool:
     return all((tvl or 0) < 100 and (txs or 0) < 10 for tvl, txs in pool_stats)
 
 
-# 7-day wash from the on-chain indexer (pool_daily_onchain + pool_wallet_day). The 24h rule (keyless.is_wash) only
-# sees pools GeckoTerminal tracks; the indexer sees every swap. A pool moving >= $1M in 7 days through <= 10 distinct
-# wallets is one desk trading with itself, not usage (10/8: Optimism 0x69af...7fff, $436M from 1 wallet in 8 swaps).
-# Private/RFQ hooks with few counterparties also trip this; they are hidden from rankings, not deleted.
+# --- wash rules (DESIGN.md "Wash rules"). A project is wash-like for a reason when the pools that rule flags carry
+# >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
+WASH_REASONS = ("24h", "7d", "vol_tvl", "no_liquidity", "symmetric")
+WASH_SHARE = 0.5
+WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
+
+
+def wallets_lower_bound(distinct: int | None, buyers: int | None, sellers: int | None, traders: int | None) -> int | None:
+    """GeckoTerminal counts unique buyers and unique sellers, not unique wallets: buyers + sellers (traders_24h) counts a
+    wallet that bought and sold twice, an upper bound. The "at most N wallets" rules need a lower bound: the distinct count
+    when one is known, else max(buyers, sellers), else half of buyers + sellers. None = nothing known."""
+    if distinct is not None:
+        return distinct
+    if buyers is not None or sellers is not None:
+        return max(buyers or 0, sellers or 0)
+    if traders is not None:
+        return (traders + 1) // 2
+    return None
+
+
+# 24h (GeckoTerminal pool_stats; on ready chains the onchain step's closed day): big volume from a handful of wallets.
+WASH_MIN_VOL_24H = 250_000
+WASH_MAX_WALLETS_24H = 25
+
+
+def is_wash_24h(vol_24h: float | None, wallets: int | None) -> bool:
+    return vol_24h is not None and wallets is not None and vol_24h >= WASH_MIN_VOL_24H and wallets <= WASH_MAX_WALLETS_24H
+
+
+def vol_tvl(vol: float | None, tvl: float | None) -> float | None:
+    """Volume over liquidity. None when TVL is unknown or not positive: a ratio over $0 says nothing (see no_liquidity)."""
+    if vol is None or tvl is None or tvl <= 0:
+        return None
+    return vol / tvl
+
+
+WASH_MIN_VOL_TVL = 50               # 7-day volume over TVL that corroborates a few-wallet pool
+NO_LIQUIDITY_MAX_TVL = 1_000        # a KNOWN TVL at or under this, with >= WASH_MIN_VOL_7D in 7 days, is no liquidity
+
+
+def no_liquidity(vol_7d: float | None, tvl: float | None) -> bool:
+    """>= $1M in 7 days through a pool whose known TVL is <= $1,000 (Optimism 0x69af: $436M at $0). Unknown TVL is never
+    "no liquidity"."""
+    return vol_7d is not None and tvl is not None and vol_7d >= WASH_MIN_VOL_7D and tvl <= NO_LIQUIDITY_MAX_TVL
+
+
+def corroborated(vol_7d: float | None, tvl: float | None, symmetric: bool) -> bool:
+    """Few wallets alone also describes private / RFQ hooks (Arrakis private hook) that move real volume against real
+    liquidity. A wash flag needs one more sign: 7-day volume > 50x a known TVL, no liquidity at all, or symmetric traders."""
+    r = vol_tvl(vol_7d, tvl)
+    return (r is not None and r > WASH_MIN_VOL_TVL) or no_liquidity(vol_7d, tvl) or symmetric
+
+
+# 7 days (indexer: pool_daily_onchain + pool_wallet_day, ready chains only). 10/8: Optimism 0x69af...7fff moved $436M
+# in 7 days from 1 wallet in 8 swaps.
 WASH_MIN_VOL_7D = 1_000_000
 WASH_MAX_WALLETS_7D = 10
 
 
-def is_wash_7d(vol_7d: float, wallets_7d: int) -> bool:
-    return vol_7d >= WASH_MIN_VOL_7D and wallets_7d <= WASH_MAX_WALLETS_7D
+def is_wash_7d(vol_7d: float, wallets_7d: int, tvl: float | None, symmetric: bool) -> bool:
+    return vol_7d >= WASH_MIN_VOL_7D and wallets_7d <= WASH_MAX_WALLETS_7D and corroborated(vol_7d, tvl, symmetric)
+
+
+# Volume far above liquidity from few wallets. Launchpads churn many times their liquidity too (Base 0x0f48 family:
+# 345x) but through thousands of wallets; OUROBOROS/CRCL on Robinhood: 866x through 13 buyers and 13 sellers.
+WASH_VOL_TVL = 300
+WASH_VOL_TVL_WALLETS = 50           # fewer than this
+
+
+def is_wash_vol_tvl(vol_7d: float, tvl: float | None, wallets: int | None) -> bool:
+    r = vol_tvl(vol_7d, tvl)
+    return (r is not None and r > WASH_VOL_TVL and vol_7d >= WASH_SIGNAL_MIN_VOL
+            and wallets is not None and wallets < WASH_VOL_TVL_WALLETS)
+
+
+def is_wash_no_liquidity(vol_7d: float, tvl: float | None, wallets: int | None) -> bool:
+    """The volume/TVL rule where the ratio is undefined: >= $1M in 7 days, a known TVL <= $1,000, fewer than 50 wallets."""
+    return no_liquidity(vol_7d, tvl) and wallets is not None and wallets < WASH_VOL_TVL_WALLETS
+
+
+# Bots trading with themselves: the pool's top wallets that day (activity step, pool_top_wallets) each buy and sell the
+# same number of times and carry more than half its volume.
+SYMMETRIC_TOP = 10
+SYMMETRIC_SHARE = 0.5
+
+
+def is_symmetric(top: list[tuple[float, int, int]], vol_24h: float | None) -> bool:
+    """top: (volume_usd, buys, sells) per wallet, any order. The top 10 by volume (at least 2) are judged; vol_24h is the
+    pool's rolling 24h volume, the window the trades come from."""
+    if not vol_24h or vol_24h < WASH_SIGNAL_MIN_VOL:
+        return False
+    t = sorted(top, key=lambda x: -x[0])[:SYMMETRIC_TOP]
+    return len(t) >= 2 and all(b == s and b > 0 for _, b, s in t) and sum(v for v, _, _ in t) > SYMMETRIC_SHARE * vol_24h
 
 
 def is_alive(last_commit_at: datetime | None, latest_exa_hit: datetime | None, now: datetime) -> bool:

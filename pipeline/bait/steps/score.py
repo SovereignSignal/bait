@@ -42,6 +42,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
     agg: dict[int, dict] = {}
     unknown_vol: set[tuple] = set()   # pools whose current cumulative volume is NULL (onchain held it back): not $0
+    pool_tvl: dict[tuple, float | None] = {}
     for key, series in by_pool.items():
         if key not in pool_project:
             continue
@@ -55,6 +56,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         a["pools"] += 1
         a["tvl"] += cur.tvl_usd or 0.0
         a["max_tvl"] = max(a["max_tvl"], cur.tvl_usd or 0.0)
+        pool_tvl[key] = cur.tvl_usd
         if cur.volume_usd_cum is None:
             # left out of both weeks, so the trending ratio compares like with like, and out of the wash inputs
             unknown_vol.add(key)
@@ -81,7 +83,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 if is_wash(vol24, traders):
                     t[1] += vol24
         wash = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
-    wash7 = _wash_7d(conn, day, pool_project, set(ready_chains(conn, ctx)), unknown_vol)
+    wash7 = _wash_7d(conn, day, pool_project, set(ready_chains(conn, ctx)), unknown_vol, pool_tvl)
     wash |= wash7
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
@@ -109,10 +111,11 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(wash), "wash_7d": len(wash7)}
 
 
-def _wash_7d(conn, day: date, pool_project: dict, chains: set[int], skip: set[tuple] | frozenset = frozenset()) -> set[int]:
+def _wash_7d(conn, day: date, pool_project: dict, chains: set[int], skip: set[tuple] | frozenset, tvl: dict) -> set[int]:
     """Projects whose 7-day on-chain volume is mostly in wash pools (rules.is_wash_7d), judged per pool. Only chains whose
     swap cursor is caught up (onchain.ready_chains): a stuck cursor would judge on partial volume. skip: pools whose
-    current volume is unknown (NULL), left out rather than judged on understated volume."""
+    current volume is unknown (NULL), left out rather than judged on understated volume. tvl: latest TVL per pool, for
+    the corroboration."""
     if not chains:
         return set()
     start = day - timedelta(days=6)
@@ -132,11 +135,11 @@ def _wash_7d(conn, day: date, pool_project: dict, chains: set[int], skip: set[tu
             continue
         t = per.setdefault(pool_project[key][0], [0.0, 0.0])
         t[0] += v
-        if is_wash_7d(v, wallets.get(key, 0)):
+        if is_wash_7d(v, wallets.get(key, 0), tvl.get(key), False):
             t[1] += v
     out = {pid for pid, (total, washed) in per.items() if total > 0 and washed / total >= 0.5}
     if out:
-        log.info("score: %d projects flagged as 7-day wash (>= $%d through <= %d wallets)", len(out), 1_000_000, 10)
+        log.info("score: %d projects flagged as 7-day wash (>= $1M through <= 10 wallets, corroborated)", len(out))
     return out
 
 

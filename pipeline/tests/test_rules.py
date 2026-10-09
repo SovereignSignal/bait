@@ -3,6 +3,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from bait.rules import (corroborated, is_symmetric, is_wash_24h, is_wash_7d, is_wash_no_liquidity, is_wash_vol_tvl, vol_tvl,
+                        wallets_lower_bound)
 from bait.rules import eligibility, flags_from_address, is_dynamic_fee, is_new, is_spam, normalize_name, routable, score_trending, slugify
 
 
@@ -100,3 +102,56 @@ def test_flags_from_address_decodes_all_fourteen_bits():
 def test_eligibility_unknown_without_pool_fee_or_dynamic_key():
     h = {"hook": {"address": "0x5555000000000000000000000000000000000080"}, "properties": {}}
     assert eligibility(h) == "unknown" and eligibility(h, 3000) == "eligible" and eligibility(h, 0x800000) == "ineligible"
+
+
+def test_wallets_lower_bound_never_uses_buyers_plus_sellers():
+    assert wallets_lower_bound(7, 534, 511, 1045) == 7            # a distinct count wins
+    assert wallets_lower_bound(None, 13, 13, 26) == 13            # OUROBOROS/CRCL: at least 13 wallets, not 26
+    assert wallets_lower_bound(None, 5, None, None) == 5
+    assert wallets_lower_bound(None, None, None, 27) == 14        # rows with buyers + sellers only: at least half
+    assert wallets_lower_bound(None, None, None, None) is None
+
+
+def test_wash_24h_counts_a_wallet_that_bought_and_sold_once():
+    assert is_wash_24h(300_000, wallets_lower_bound(None, 13, 13, 26))      # 26 "traders" used to pass the <= 25 test
+    assert not is_wash_24h(249_999, 1) and not is_wash_24h(300_000, 26) and not is_wash_24h(300_000, None)
+    assert not is_wash_24h(None, 1)
+
+
+def test_wash_7d_needs_corroboration_not_few_wallets_alone():
+    assert vol_tvl(100.0, 2.0) == 50.0 and vol_tvl(1.0, 0.0) is None and vol_tvl(1.0, None) is None
+    assert is_wash_7d(436_000_000, 1, tvl=50_000, symmetric=False)            # 8,720x its TVL
+    assert not is_wash_7d(5_000_000, 4, tvl=2_000_000, symmetric=False)       # private / RFQ hook: real liquidity
+    assert is_wash_7d(5_000_000, 4, tvl=2_000_000, symmetric=True)
+    assert not is_wash_7d(5_000_000, 4, tvl=None, symmetric=False)            # TVL unknown: no ratio
+    assert not is_wash_7d(999_999, 1, tvl=1, symmetric=True) and not is_wash_7d(5_000_000, 11, tvl=1, symmetric=True)
+    assert corroborated(5_100, 100, False) and not corroborated(5_000, 100, False) and corroborated(None, None, True)
+
+
+def test_no_liquidity_corroborates_and_flags_the_0x69af_shape():
+    """Optimism 0x69af: $436M through 8 swaps from one wallet at a known $0 TVL. The ratio is undefined at $0."""
+    assert corroborated(436_000_000, 0.0, False) and corroborated(1_000_000, 1_000.0, False)
+    assert not corroborated(999_999, 0.0, False) and not corroborated(436_000_000, None, False)   # unknown TVL never
+    assert is_wash_7d(436_000_000, 1, tvl=0.0, symmetric=False)
+    assert is_wash_no_liquidity(436_000_000, 0.0, 1)
+    assert not is_wash_no_liquidity(436_000_000, None, 1) and not is_wash_no_liquidity(436_000_000, 1_001.0, 1)
+    assert not is_wash_no_liquidity(999_999, 0.0, 1) and not is_wash_no_liquidity(436_000_000, 0.0, 50)
+    assert not is_wash_no_liquidity(436_000_000, 0.0, None)
+
+
+def test_vol_tvl_flags_robinhood_bots_not_base_launchpads():
+    assert is_wash_vol_tvl(866 * 10_000, 10_000, wallets_lower_bound(None, 13, 13, 26))     # OUROBOROS/CRCL
+    assert not is_wash_vol_tvl(345 * 200_000, 200_000, 30_000)                                  # Base 0x0f48 family
+    assert not is_wash_vol_tvl(301 * 10, 10, 3)                                                 # under $10K: ranks nowhere
+    assert not is_wash_vol_tvl(1e9, 0.0, 1) and not is_wash_vol_tvl(1e9, None, 1) and not is_wash_vol_tvl(1e9, 1, None)
+    assert not is_wash_vol_tvl(1e9, 1, 50)                                                      # "fewer than 50"
+
+
+def test_symmetric_traders():
+    bots = [(50_000.0, 5, 5)] * 10
+    assert is_symmetric(bots, 900_000)                       # $500K of $900K from 10 wallets, each 5 buys / 5 sells
+    assert not is_symmetric(bots, 1_000_000)                 # exactly half is not more than half
+    assert not is_symmetric(bots[:9] + [(50_000.0, 6, 5)], 900_000)
+    assert not is_symmetric([(50_000.0, 5, 5)], 60_000)      # one wallet is not a pattern
+    assert not is_symmetric(bots, None) and not is_symmetric([(5_000.0, 1, 1)] * 2, 9_000)    # under $10K
+    assert is_symmetric(bots + [(1.0, 1, 0)], 900_000)       # only the top 10 by volume are judged
