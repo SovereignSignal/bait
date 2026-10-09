@@ -24,7 +24,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .logsetup import configure
-from .rules import flags_from_address, normalize_name, routable, score_trending, slugify
+from .rules import flags_from_address, is_wash_24h, normalize_name, routable, score_trending, slugify, wallets_lower_bound
 
 GT = "https://api.geckoterminal.com/api/v2"
 HOOKLIST = "https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json"
@@ -64,10 +64,6 @@ INITIALIZE = "0xdd466e674ea557f56295e2d0218a125ea4b4f0f6f3307b95f85e6110838d6438
 # Blockscout instances that answer a full-range topic lookup keylessly from a server (others bot-challenge).
 BLOCKSCOUT_LOGS = {"eth": "https://eth.blockscout.com", "unichain": "https://unichain.blockscout.com",
                    "ink": "https://explorer.inkonchain.com"}
-
-# Wash heuristic: big volume from a handful of wallets. Excluded from Trending, flagged on the card.
-WASH_MIN_VOL_24H = 250_000
-WASH_MAX_TRADERS_24H = 25
 
 CATEGORY_KEYWORDS = [
     ("launchpad", ("launch", "memecoin", "bonding", "creator", "fair launch", "token launch")),
@@ -175,10 +171,6 @@ def decode_pool_key(result: str | None) -> dict | None:
     if int(c1, 16) == 0:  # pool never touched by PositionManager
         return None
     return {"currency0": c0, "currency1": c1, "fee": int(w[2], 16), "tickSpacing": int(w[3], 16), "hooks": "0x" + w[4][24:]}
-
-
-def is_wash(vol24h: float, traders24h: int) -> bool:
-    return vol24h >= WASH_MIN_VOL_24H and traders24h <= WASH_MAX_TRADERS_24H
 
 
 def categorize(text: str, flags: dict, props: dict) -> str:
@@ -444,6 +436,7 @@ def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None =
             "tvl": float(a.get("reserve_in_usd") or 0),
             "txs24h": int(tx.get("buys", 0)) + int(tx.get("sells", 0)),
             "traders24h": int(tx.get("buyers", 0)) + int(tx.get("sellers", 0)),
+            "walletsMin24h": wallets_lower_bound(None, int(tx.get("buyers", 0)), int(tx.get("sellers", 0)), None),
             "createdAt": a.get("pool_created_at"),
             "dynamicFee": bool(pk["fee"] & 0x800000), "feeBps": None if pk["fee"] & 0x800000 else pk["fee"] / 100,
             "token0": pk["currency0"], "token1": pk["currency1"], "hook": hook_addr,
@@ -467,7 +460,7 @@ def build(pools: dict, hooklist: list[dict], now: datetime, codes: dict | None =
         has_series = any(x["vol7d"] is not None for x in pools_)
         tvl = sum(x["tvl"] for x in pools_)
         traders = sum(x["traders24h"] for x in pools_)
-        washed = sum(x["vol24h"] for x in pools_ if is_wash(x["vol24h"], x["traders24h"]))
+        washed = sum(x["vol24h"] for x in pools_ if is_wash_24h(x["vol24h"], x["walletsMin24h"]))
         wash = vol24 > 0 and washed / vol24 >= 0.5
         created = [datetime.fromisoformat(x["createdAt"].replace("Z", "+00:00")) for x in pools_ if x.get("createdAt")]
         first_seen = min(created) if created else None

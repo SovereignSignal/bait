@@ -1,8 +1,11 @@
 """Step 3 (activity): who trades each hooked pool.
 
-1. Pools: today's pool_stats joined to pools, wash pools excluded (keyless.is_wash), top ACTIVITY_POOLS by 24h volume.
+1. Pools: today's pool_stats joined to pools, 24h-wash pools excluded (rules.is_wash_24h on a wallet lower bound), top
+   ACTIVITY_POOLS by 24h volume.
 2. Trades: GeckoTerminal /pools/{id}/trades (last ~300 trades in 24h, keyless) through the run's shared keyless.Http.
    Aggregated per wallet (tx_from_address); top 20 by volume -> pool_top_wallets(day). Rows older than 14 days deleted.
+   When the call returned fewer than 300 trades it holds every trade of the last 24 h, so pool_stats.wallets_24h gets the
+   exact distinct count.
 """
 from __future__ import annotations
 
@@ -12,10 +15,12 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 
 from ..db import as_utc, pool_stats, pool_top_wallets, pools, savepoint, upsert
+from ..rules import is_wash_24h, wallets_lower_bound
 from . import RunContext, log
 
 TOP_WALLETS = 20
 RETAIN_DAYS = 14
+TRADES_PER_CALL = 300   # GeckoTerminal /trades returns at most this many, all from the last 24 h
 
 
 def _env_int(name: str, default: int) -> int:
@@ -27,7 +32,7 @@ def _env_int(name: str, default: int) -> int:
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"pools": 0, "pools_fetched": 0, "pools_no_trades": 0, "trades": 0, "wallets": 0, "pruned": 0,
-           "errors": 0}
+           "wallets_distinct": 0, "errors": 0}
     from .. import keyless as K
     from .snapshot import keyless_http
 
@@ -55,6 +60,10 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 conn.execute(sa.delete(pool_top_wallets).where(pool_top_wallets.c.pool_id == pid, pool_top_wallets.c.chain_id == cid,
                                                                pool_top_wallets.c.day == ctx.day))
                 upsert(conn, pool_top_wallets, rows, keys=["pool_id", "chain_id", "day", "address"])
+                if len(trades) < TRADES_PER_CALL:   # every trade of the last 24 h: an exact distinct count for this pool
+                    conn.execute(sa.update(pool_stats).where(pool_stats.c.pool_id == pid, pool_stats.c.chain_id == cid,
+                                                             pool_stats.c.day == ctx.day).values(wallets_24h=distinct_wallets(trades)))
+                    out["wallets_distinct"] += 1
                 out["pools_fetched"] += 1
                 out["trades"] += len(trades)
                 out["wallets"] += len(rows)
@@ -65,15 +74,19 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
 
 def select_pools(conn, ctx: RunContext, limit: int) -> list[tuple[str, int]]:
-    from ..keyless import is_wash
-    q = (sa.select(pool_stats.c.pool_id, pool_stats.c.chain_id, pool_stats.c.vol_24h, pool_stats.c.traders_24h)
+    q = (sa.select(pool_stats)
          .join(pools, (pools.c.pool_id == pool_stats.c.pool_id) & (pools.c.chain_id == pool_stats.c.chain_id))
          .where(pool_stats.c.day == ctx.day))
     if ctx.chains:
         q = q.where(pool_stats.c.chain_id.in_(ctx.chains))
-    rows = [r for r in conn.execute(q) if not is_wash(r.vol_24h or 0.0, r.traders_24h or 0)]
+    rows = [r for r in conn.execute(q)
+            if not is_wash_24h(r.vol_24h, wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h))]
     rows.sort(key=lambda r: -(r.vol_24h or 0.0))
     return [(r.pool_id, r.chain_id) for r in rows[:max(limit, 0)]]
+
+
+def distinct_wallets(trades: list[dict]) -> int:
+    return len({str(t.get("tx_from_address") or "").strip().lower() for t in trades} - {""})
 
 
 def aggregate(trades: list[dict], pool_id: str, chain_id: int, day) -> list[dict]:
