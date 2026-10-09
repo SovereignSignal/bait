@@ -116,7 +116,7 @@ def test_useful_name_and_proxy_bytecode():
     from bait.rules import is_proxy_code, useful_name
     assert useful_name("FoundationHookV2") == "FoundationHookV2"
     assert useful_name("x" * 61) is None and useful_name("Long " + "x" * 70, max_len=None) == "Long " + "x" * 70
-    for g in ("ERC1967Proxy", "FeeHook", "Counter", " BaseHook ", "", None):
+    for g in ("ERC1967Proxy", "FeeHook", "Counter", " UniswapV4Hook ", "", None):
         assert useful_name(g, max_len=None) is None
     slot = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
     assert is_proxy_code("0x6080604052" + slot.upper() + "5490")                    # EIP-1967 implementation slot
@@ -144,11 +144,11 @@ def test_merge_evidence_reads_the_proxy_flag_not_the_name():
 
 def test_generic_names_match_after_normalising():
     from bait.rules import useful_name
-    for g in ("Limit Order Hook", "LimitOrderHookV2", "Black List Hook", "CurveHook", "VaultHook", "OrderHook", "TWAMM",
-              "FullRange", "GeomeanOracle", "PointsHook", "Arbitrage Hook", "Example", "My New Hook", "Hook", "Hooks",
-              "Transparent Upgradeable Proxy", "Dynamic-Fee Hook"):
+    for g in ("Limit Order Hook", "LimitOrderHookV2", "Black List Hook", "TWAMM", "FullRange", "GeomeanOracle",
+              "Arbitrage Hook", "Example", "My New Hook", "Hook", "Hooks", "Transparent Upgradeable Proxy", "Dynamic-Fee Hook"):
         assert useful_name(g, max_len=None) is None, g
-    for ok in ("OrderBookHook", "Arbitrum Hook", "Testudo", "FoundationHookV2", "Limit Order Hook (Arbitrum)", "Bunni"):
+    for ok in ("OrderBookHook", "Arbitrum Hook", "Testudo", "FoundationHookV2", "Limit Order Hook (Arbitrum)", "Bunni",
+               "CurveHook", "VaultHook", "OrderHook", "PointsHook", "BaseHook", "ArbHook"):    # bare words: real names too
         assert useful_name(ok, max_len=None) == ok, ok
 
 

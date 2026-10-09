@@ -78,11 +78,13 @@ def normalize_name(name: str | None) -> str:
 
 # Names that say nothing about the project: proxies, template defaults, and the OpenZeppelin uniswap-hooks and v4 example
 # names many unrelated teams deploy unchanged. Matched on the lowercased alphanumerics, with an optional "hook(s)" and
-# version suffix ("Limit Order Hook V2" -> "limitorderhookv2"). Applies to hooklist and verified-source names.
+# version suffix ("Limit Order Hook V2" -> "limitorderhookv2"). Applies to hooklist and verified-source names. Bare
+# words that real projects use as names (Curve, Vault, Order, Base, Points, Arb) are deliberately not here; their
+# multi-word template forms (LimitOrder, DynamicFee, ...) are.
 GENERIC_STEMS = (
-    "base", "v4", "uniswapv4", "uniswap", "any", "custom", "my", "mynew", "test", "counter", "swapfee", "fee", "platform",
-    "limitorder", "dynamicfee", "antisandwich", "liquiditypenalty", "fullrange", "twamm", "geomeanoracle", "points",
-    "blacklist", "whitelist", "arb", "arbitrage", "grid", "curve", "vault", "order", "example", "demo", "sample")
+    "v4", "uniswapv4", "uniswap", "any", "custom", "my", "mynew", "test", "counter", "swapfee", "fee", "platform",
+    "limitorder", "dynamicfee", "antisandwich", "liquiditypenalty", "fullrange", "twamm", "geomeanoracle",
+    "blacklist", "whitelist", "arbitrage", "grid", "example", "demo", "sample")
 GENERIC = re.compile(r"^(?:(?:" + "|".join(GENERIC_STEMS) + r")(?:hooks?)?|hooks?)(?:v?\d+)?$"
                      r"|^.*proxy.*$|^(?:implementation|main|contract)$")
 
