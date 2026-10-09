@@ -208,10 +208,13 @@ def hook_rows(conn, pid: int):
 
 def backfill_unlisted_aliases(conn, now) -> int:
     """Bounded migration (delete 30 days after deploy): links shared before project_aliases existed point at
-    "unlisted-hook-0x7bc2-2aec". Recreate that slug for each hook whose project slug differs now (listed hooks too: many
-    were found on-chain before their PR merged), unless two hooks would share it (ambiguous) or a live project or alias
-    already holds it. Family slugs are not recreated: their 16-bit prefix is too ambiguous to redirect safely. Idempotent."""
-    rows = conn.execute(sa.select(hooks.c.address, hooks.c.project_id).where(hooks.c.project_id.is_not(None))).all()
+    "unlisted-hook-0x7bc2-2aec". Recreate that slug only for hooks that once had it: still unlisted (hooklisted false),
+    or looked up for a contract name (name_checked_at set). The lookup only ever runs for hooks sitting in an
+    "Unlisted hook" project, so it is a reliable marker from stored data; hooks listed from the start never had such a
+    slug. Skipped when the project slug already matches, when two hooks would share the slug (ambiguous), or when a live
+    project or alias holds it. Family slugs are not recreated: their 16-bit prefix is too ambiguous. Idempotent."""
+    rows = conn.execute(sa.select(hooks.c.address, hooks.c.project_id).where(
+        hooks.c.project_id.is_not(None), sa.or_(hooks.c.hooklisted.is_(False), hooks.c.name_checked_at.is_not(None)))).all()
     want: dict[str, set[int]] = {}
     for r in rows:
         want.setdefault(slugify(f"Unlisted hook {r.address[:6]}…{r.address[-4:]}"), set()).add(r.project_id)
