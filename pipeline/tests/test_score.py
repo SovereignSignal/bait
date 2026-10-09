@@ -1,5 +1,5 @@
 import math
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
@@ -39,7 +39,7 @@ def test_score_hand_computed(conn, ctx):
     insert_pool(conn, "0xpool1", 8453, "0xp", created=NOW - timedelta(days=60))
     vols = {END - timedelta(days=i): (10_000.0 if i < 7 else 5_000.0) for i in range(14)}
     series(conn, "0xpool1", 8453, vols, tvl=5000, tx={d: 100 for d in vols})
-    insert_snap(conn, "0xpool1", 8453, DAY, 1, 999_999_999, None, vol_day=1_234_567.0, tx_day=9_999)    # still running
+    insert_snap(conn, "0xpool1", 8453, DAY, 5000, 999_999_999, None, vol_day=1_234_567.0, tx_day=9_999)  # running: TVL only
     out = score.run(conn, ctx)
     d = daily(conn, p)
     assert (d.window_end, d.vol_24h, d.vol_7d, d.vol_7d_prev) == (END, 10_000, 70_000, 35_000)
@@ -412,3 +412,15 @@ def test_no_liquidity_never_corroborates_a_custom_accounting_hook(conn, ctx):
     _optimism_ready(conn)
     score.run(conn, ctx)
     assert not daily(conn, rfq).is_wash
+
+
+def test_a_pool_born_this_morning_makes_its_project_new_not_spam(conn, ctx):
+    """Created at 03:00 UTC on the run day with $500K TVL: its only row is the running day's, which carries TVL ("now");
+    volume windows still end yesterday."""
+    p = insert_project(conn, "Fresh", first_seen=NOW - timedelta(hours=2), slug="fresh")
+    insert_hook(conn, "0xfr", 8453, project_id=p, name="Fresh")
+    insert_pool(conn, "0xfrp", 8453, "0xfr", created=datetime(2026, 10, 6, 3, tzinfo=timezone.utc))
+    insert_snap(conn, "0xfrp", 8453, DAY, 500_000, 20_000.0, None, vol_day=20_000.0)
+    score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_new and not d.is_spam and (d.pools_n, d.tvl_usd, d.vol_7d) == (1, 500_000, 0)

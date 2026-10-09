@@ -2,8 +2,8 @@
 
 One window convention (DESIGN.md "Windows"). The run on `day` reports the UTC days that are over: window_end = day - 1;
 "24h" = the day window_end; "7d" = window_end-6 .. window_end; "prev 7d" = window_end-13 .. window_end-7. Windows sum the
-per-day columns of pool_snapshots (volume_usd_day, tx_count_day); the row for `day` itself is still running and is
-never read.
+per-day columns of pool_snapshots (volume_usd_day, tx_count_day); the row for `day` itself is still running: its volume is
+never read, but it carries the pool's TVL "now", so a pool created this morning counts.
 - Volume: a day without a row adds $0 (the pool was not listed, or did not trade). A pool whose cumulative volume at
   window_end is NULL (the onchain step could not measure it) is left out of every volume window, not read as $0; when
   that is every pool of a project, its vol_24h / vol_7d / vol_7d_prev are NULL.
@@ -47,7 +47,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             if _custom(p.hook_address):
                 custom.add((p.pool_id, p.chain_id))
     by_pool: dict[tuple, dict] = {}
-    for s in conn.execute(sa.select(pool_snapshots).where(pool_snapshots.c.day >= wp[0], pool_snapshots.c.day <= end)):
+    # rows up to and including the running day: a pool's existence and TVL are "now"; volume windows still end at `end`
+    for s in conn.execute(sa.select(pool_snapshots).where(pool_snapshots.c.day >= wp[0], pool_snapshots.c.day <= day)):
         by_pool.setdefault((s.pool_id, s.chain_id), {})[s.day] = s
 
     agg: dict[int, dict] = {}
@@ -60,14 +61,16 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             continue
         pid, created = pool_project[key]
         a = agg.setdefault(pid, _empty())
-        cur = rows[max(rows)]          # latest row on/before window_end
+        now = rows[max(rows)]          # latest row up to the running day: existence and TVL (a pool born this morning counts)
+        closed = [d for d in rows if d <= end]
+        cur = rows[max(closed)] if closed else now   # latest closed row: the volume-unknown marker and lifetime volume
         a["pools"] += 1
-        a["tvl"] += cur.tvl_usd or 0.0
-        a["max_tvl"] = max(a["max_tvl"], cur.tvl_usd or 0.0)
-        a["stats"].append((cur.tvl_usd or 0.0, cur.tx_count_cum or 0))
+        a["tvl"] += now.tvl_usd or 0.0
+        a["max_tvl"] = max(a["max_tvl"], now.tvl_usd or 0.0)
+        a["stats"].append((now.tvl_usd or 0.0, max(now.tx_count_cum or 0, cur.tx_count_cum or 0)))
         if cur.volume_usd_cum is not None:
             a["life"] += cur.volume_usd_cum   # legacy cumulative: a lower bound of lifetime volume, enough for the spam exemption
-        pool_tvl[key] = cur.tvl_usd
+        pool_tvl[key] = now.tvl_usd
         quiet: dict[str, bool] = {}
         if cur.volume_usd_cum is None:
             unknown_vol.add(key)
