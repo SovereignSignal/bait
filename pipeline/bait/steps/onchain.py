@@ -6,7 +6,11 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
    keyless.code_hashes where a public RPC exists for the chain (KEYLESS != 0), else None.
 2. Pools: every v4_pools row whose hook is in `hooks` is upserted into `pools` (any chain; the web filters unknown chains),
    incrementally (per-chain `onchain_watermarks` on `block_number` as the fast path, plus a nightly pool-level anti-join
-   for known hooks' pools with no pools row); a row is rewritten only when a value changed. A Postgres size line (pg_database_size vs DISK_LIMIT_GB) is logged every night.
+   for known hooks' pools with no pools row); a row is rewritten only when a value changed.
+   hooks.pools_total = every pool initialized through the hook (v4_pools rows, or hook_pool_counts.pools_total once the
+   indexer capped it), written only when it changed; score reports pools_n as at least that.
+   A capped hook whose pools past both caps swapped gets a pools row for its aggregate pool 'hook:<address>' (the
+   indexer folds those swaps there per day), so step 3 treats it like a pool and pool_stats.vol_source says 'hook_total'. A Postgres size line (pg_database_size vs DISK_LIMIT_GB) is logged every night.
    token0/token1 are only set on insert, so GeckoTerminal/subgraph symbols survive; created_at = Initialize block time.
 3. Usage (chains whose indexer_state is backfilled and updated within ONCHAIN_MAX_STALE_HOURS): for each pool with
    pool_daily_onchain rows in day-14..day, pool_snapshots gets one row per day from `start` (volume_usd_day, tx_count_day;
@@ -15,7 +19,7 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
    vol_24h / traders_24h / wallets_24h (distinct) from the last complete UTC day, window_end = its end. On-chain is exact, so it overrides keyless values for those pools.
    While a chain's on-chain history is shorter than the 14-day window, pools keyless already snapshots keep their
    keyless series (only pool_stats is overridden). Volume the chain cannot measure (custom-accounting hooks, pool-days
-   mostly unpriced) never overrides keyless numbers; pool_stats.vol_source says which source won. The rule is per day:
+   mostly unpriced) never overrides keyless numbers; pool_stats.vol_source says which source won ('hook_total' for a hook's aggregate pool). The rule is per day:
    from the first unknown day on, the series carries NULL volume, or the keyless series is kept when that day is on or
    before the reference day, and pool_stats keeps keyless volume exactly when the series' reference day is unknown.
    Pools whose keyless series is kept still get exact tx_count_day from the indexer.
@@ -28,7 +32,7 @@ from datetime import date, datetime, time as dtime, timedelta, timezone
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 
-from ..db import (as_utc, hooks, indexer_state, onchain_watermarks, pool_daily_onchain, pool_snapshots, pool_stats, pools,
+from ..db import (HOOK_POOL_PREFIX, as_utc, hook_pool_counts, hook_pool_id, hooks, indexer_state, onchain_watermarks, pool_daily_onchain, pool_snapshots, pool_stats, pools,
                   upsert, v4_pools)
 from ..indexer.chains import CHAINS
 from ..rules import custom_accounting, flags_from_address
@@ -49,7 +53,7 @@ def _env_int(name: str, default: int) -> int:
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"v4_pools": 0, "hooks_added": 0, "hooks_deferred": 0, "code_hashes": 0, "pools": 0,
            "pools_usage": 0, "series_replaced": 0, "stats": 0, "chains_usage": 0, "chains_stale": 0, "vol_unknown": 0, "errors": 0,
-           "pools_written": 0, "db_gb": None, "disk_warn": 0}
+           "pools_written": 0, "db_gb": None, "disk_warn": 0, "hook_totals": 0, "hook_pools": 0}
     _disk_check(conn, out)
     where = [v4_pools.c.chain_id.in_(ctx.chains)] if ctx.chains else []
     out["v4_pools"] = conn.execute(sa.select(sa.func.count()).select_from(v4_pools).where(*where)).scalar() or 0
@@ -58,10 +62,12 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         return out
     known = _add_hooks(conn, ctx, where, out)
     _upsert_pools(conn, ctx, known, out)
+    _pool_totals(conn, ctx, out)
+    _hook_pools(conn, ctx, known, out)
     _usage(conn, ctx, out)
-    log.info("onchain v4_pools=%d hooks_added=%d deferred=%d pools=%d pools_written=%d usage_pools=%d series=%d stats=%d",
-             out["v4_pools"], out["hooks_added"], out["hooks_deferred"], out["pools"], out["pools_written"], out["pools_usage"],
-             out["series_replaced"], out["stats"])
+    log.info("onchain v4_pools=%d hooks_added=%d deferred=%d pools=%d pools_written=%d hook_totals=%d usage_pools=%d series=%d "
+             "stats=%d", out["v4_pools"], out["hooks_added"], out["hooks_deferred"], out["pools"], out["pools_written"],
+             out["hook_totals"], out["pools_usage"], out["series_replaced"], out["stats"])
     return out
 
 
@@ -179,6 +185,41 @@ def _copy_pools(conn, batch, out: dict) -> None:
         # RETURNING, not rowcount: a multi-row VALUES insert reports rowcount -1 on psycopg
         out["pools_written"] += len(conn.execute(stmt.returning(pools.c.pool_id)).all())
     out["pools"] += len(rows)
+
+
+def _pool_totals(conn, ctx: RunContext, out: dict) -> None:
+    """hooks.pools_total = every pool initialized through the hook: its v4_pools rows, or hook_pool_counts.pools_total
+    once the indexer capped it (that counts the pools it never stored). Only changed values are written."""
+    where = [v4_pools.c.chain_id.in_(ctx.chains)] if ctx.chains else []
+    totals = {(r.chain_id, r.hook_address): r.n for r in conn.execute(
+        sa.select(v4_pools.c.chain_id, v4_pools.c.hook_address, sa.func.count().label("n")).where(*where)
+        .group_by(v4_pools.c.chain_id, v4_pools.c.hook_address))}
+    cwhere = [hook_pool_counts.c.chain_id.in_(ctx.chains)] if ctx.chains else []
+    for r in conn.execute(sa.select(hook_pool_counts).where(*cwhere)):
+        k = (r.chain_id, r.hook_address)
+        totals[k] = max(totals.get(k, 0), r.pools_total or 0)
+    have = {(r.chain_id, r.address): r.pools_total for r in conn.execute(sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.pools_total))}
+    changed = [{"c": c, "a": a, "n": n} for (c, a), n in totals.items() if (c, a) in have and have[(c, a)] != n]
+    for i in range(0, len(changed), CHUNK):
+        conn.execute(sa.update(hooks).where(hooks.c.chain_id == sa.bindparam("c"), hooks.c.address == sa.bindparam("a"))
+                     .values(pools_total=sa.bindparam("n")), changed[i:i + CHUNK])
+    out["hook_totals"] = len(changed)
+
+
+def _hook_pools(conn, ctx: RunContext, known: set[tuple[str, int]], out: dict) -> None:
+    """A pools row for each known hook's aggregate pool (db.hook_pool_id): the swaps of its pools past both indexer caps
+    are in pool_daily_onchain under that id, so step 3 gives it a series and pool_stats (vol_source 'hook_total') and its
+    project's windows include them. Inserted once; token columns stay empty."""
+    where = [hook_pool_counts.c.swaps_total > 0]
+    if ctx.chains:
+        where.append(hook_pool_counts.c.chain_id.in_(ctx.chains))
+    want = [(r.chain_id, r.hook_address) for r in conn.execute(sa.select(hook_pool_counts.c.chain_id, hook_pool_counts.c.hook_address)
+                                                                 .where(*where)) if (r.hook_address, r.chain_id) in known]
+    for cid, h in want:
+        pid = hook_pool_id(h)
+        if conn.execute(sa.select(pools.c.pool_id).where(pools.c.pool_id == pid, pools.c.chain_id == cid)).first() is None:
+            conn.execute(sa.insert(pools).values(pool_id=pid, chain_id=cid, hook_address=h))
+            out["hook_pools"] += 1
 
 
 def _disk_check(conn, out: dict) -> None:
@@ -319,7 +360,8 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
                          "wallets_24h": w, "window_end": window_end, "vol_source": "hook" if hook and custom_accounting(hook) else "unpriced"})
         else:
             stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": w,
-                              "wallets_24h": w, "window_end": window_end, "vol_source": "onchain"})
+                              "wallets_24h": w, "window_end": window_end,
+                              "vol_source": "hook_total" if pid.startswith(HOOK_POOL_PREFIX) else "onchain"})
     keys = ["pool_id", "chain_id", "day"]
     for i in range(0, len(stat_rows), CHUNK):
         upsert(conn, pool_stats, stat_rows[i:i + CHUNK], keys=keys, update=["vol_24h", "traders_24h", "wallets_24h", "window_end", "vol_source"])

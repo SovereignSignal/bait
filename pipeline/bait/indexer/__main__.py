@@ -1,8 +1,12 @@
 """python -m bait.indexer: loop every INDEXER_INTERVAL seconds (default 60) over all chains.
+`python -m bait.indexer prune-pools --dry-run|--yes [--keep N]`: one-time trim of v4_pools, see indexer/prune.py.
 
 Env: DATABASE_URL, HYPERSYNC_API_TOKEN (without it: RPC fallback, Initialize only, new blocks only, 10 chains),
 INDEXER_INTERVAL, INDEXER_CHAINS (comma slugs or ids), INDEXER_MAX_PAGES, INDEXER_TOPIC_FILTER_MAX,
-INDEXER_TOPIC_CHUNK, INDEXER_RPC_MAX_WINDOWS.
+INDEXER_TOPIC_CHUNK, INDEXER_RPC_MAX_WINDOWS, INDEXER_POOLS_PER_HOOK (v4_pools rows per hook; past it pools are counted),
+INDEXER_POOL_LOOKUPS (HyperSync calls per chain per loop to find pools past the cap that swap; times
+INDEXER_POOL_LOOKUPS_CATCHUP, 3, while the swap cursor is more than 100K blocks behind),
+INDEXER_LATE_INSERT_MIN_USD (smallest priced swap that makes such a pool a row), INDEXER_SAMPLED_POOLS_PER_HOOK (second cap).
 """
 from __future__ import annotations
 
@@ -20,7 +24,7 @@ import sqlalchemy as sa
 from .. import db, logsetup
 from ..config import env
 from .chains import select_chains
-from .core import ChainStats, Rpc, Settings, plan, rpc_endpoint, sync_hypersync, sync_rpc
+from .core import ChainStats, PoolResolver, Rpc, Settings, plan, rpc_endpoint, sync_hypersync, sync_rpc
 from .hypersync import HyperSync, HyperSyncAuthError
 from .prices import PriceBook, PricesUnavailable
 from . import store
@@ -46,6 +50,7 @@ class Runner:
         self._pruned_on = None
         self._hs = {}
         self._rpc = {}
+        self._resolvers: dict[int, PoolResolver] = {}   # per chain, across loops: pools past the cap that may swap
 
     def run_once(self) -> dict[str, ChainStats]:
         self.loops += 1
@@ -78,7 +83,8 @@ class Runner:
             try:
                 if self.mode == "hypersync":
                     hs = self._hs.setdefault(ch.chain_id, HyperSync(ch.hypersync, self.token, self.client))
-                    out[ch.slug] = sync_hypersync(self.engine, ch, hs, self.prices, self.settings, should_stop=self.should_stop)
+                    out[ch.slug] = sync_hypersync(self.engine, ch, hs, self.prices, self.settings, should_stop=self.should_stop,
+                                                  resolver=self._resolvers.setdefault(ch.chain_id, PoolResolver()))
                 else:
                     _, url, window = rpc_endpoint(ch)
                     rpc = self._rpc.setdefault(ch.chain_id, Rpc(url, self.client))
@@ -121,7 +127,9 @@ def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats], schema_locked:
             continue
         lag = f"{s.init_lag}" if s.swap_lag is None else f"{s.init_lag}/{s.swap_lag}"
         extra = f",swaps={s.swaps}" + (f",unpriced={s.unpriced}" if s.unpriced else "") if s.swaps else ""
-        parts.append(f"{slug}:lag={lag},new={s.new_pools}{extra}")
+        cap = "".join(f",{k}={v}" for k, v in (("capped", s.capped), ("late", s.late), ("folded", s.folded), ("lookups", s.lookups),
+                                                          ("unknown", s.unknown), ("chunk_calls", s.chunk_calls)) if v)
+        parts.append(f"{slug}:lag={lag},new={s.new_pools}{cap}{extra}")
     total_new = sum(s.new_pools for s in stats.values())
     locked = f"schema_locked={schema_locked} " if schema_locked else ""
     return f"heartbeat loop={loop} mode={mode} new_pools={total_new} {locked}" + " ".join(parts)
@@ -129,11 +137,15 @@ def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats], schema_locked:
 
 def main(argv: list[str] | None = None) -> int:
     logsetup.configure()
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["prune-pools"]:
+        from .prune import main as prune_main
+        return prune_main(argv[1:])
     ap = argparse.ArgumentParser(prog="bait.indexer")
     ap.add_argument("--once", action="store_true", help="one loop, then exit")
     ap.add_argument("--chains", default=os.environ.get("INDEXER_CHAINS"), help="comma slugs or chain ids (default all)")
     ap.add_argument("--database-url", default=None)
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    args = ap.parse_args(argv)
     try:
         chains = select_chains(args.chains)
     except ValueError as e:

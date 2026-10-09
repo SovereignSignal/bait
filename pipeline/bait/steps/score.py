@@ -9,6 +9,11 @@ never read, but it carries the pool's TVL "now", so a pool created this morning 
   that is every pool of a project, its vol_24h / vol_7d / vol_7d_prev are NULL.
 - Swaps: a pool's count is known when every day of the window is (days before the pool was created count as 0; a pool
   with no volume in the window adds 0). Otherwise swaps_7d / swaps_24h are NULL, never a 7-day number built from one day.
+- A capped hook's aggregate pool (pool id 'hook:<address>', swaps of pools the indexer does not store) adds to the project's
+  volume and swaps and to whether its volume is known, never to pools_n or score_trending: its per-pool concentration is
+  lost in the aggregate, so no wash rule can judge it.
+- pools_n: per hook, its pools with a snapshot in the window, or hooks.pools_total (every pool initialized through it, from
+  the indexer) when larger.
 Wash (rules.WASH_REASONS) is its own flag: listed in All with a badge, never ranked; is_spam is only rules.is_spam.
 Reads stored rows only, so `python -m bait run --steps score --day <d>` writes the same rows however often it runs.
 """
@@ -18,7 +23,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from ..db import (as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
+from ..db import (HOOK_POOL_PREFIX, as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
 from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
@@ -38,13 +43,16 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     day = ctx.day
     end = window_end(day)
     w24, w7, wp = (end, end), (end - 6 * _D, end), (end - 13 * _D, end - 7 * _D)
-    hook_to_project = {(r.chain_id, r.address): r.project_id for r in conn.execute(
-        sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id).where(hooks.c.project_id.is_not(None)))}
+    hook_rows = conn.execute(sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id, hooks.c.pools_total)
+                             .where(hooks.c.project_id.is_not(None))).all()
+    hook_to_project = {(r.chain_id, r.address): r.project_id for r in hook_rows}
     pool_project, custom = {}, set()   # custom: pools of custom-accounting hooks (liquidity lives in the hook)
+    pool_hook: dict[tuple, tuple] = {}
     for p in conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id, pools.c.hook_address, pools.c.created_at)):
         pid = hook_to_project.get((p.chain_id, p.hook_address))
         if pid:
             pool_project[(p.pool_id, p.chain_id)] = (pid, as_utc(p.created_at).date() if p.created_at else None)
+            pool_hook[(p.pool_id, p.chain_id)] = (p.chain_id, p.hook_address)
             if _custom(p.hook_address):
                 custom.add((p.pool_id, p.chain_id))
     by_pool: dict[tuple, dict] = {}
@@ -53,6 +61,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         by_pool.setdefault((s.pool_id, s.chain_id), {})[s.day] = s
 
     agg: dict[int, dict] = {}
+    active: dict[tuple, int] = {}     # (chain, hook) -> its pools with a snapshot in the window
     unknown_vol: set[tuple] = set()   # cumulative volume NULL at window_end (onchain held it back): not $0
     pool_tvl: dict[tuple, float | None] = {}
     pool_vol7: dict[tuple, float] = {}
@@ -66,7 +75,11 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         now = rows[max(rows)]          # latest row up to the running day: existence and TVL (a pool born this morning counts)
         closed = [d for d in rows if d <= end]
         cur = rows[max(closed)] if closed else now   # latest closed row: the volume-unknown marker and lifetime volume
-        a["pools"] += 1
+        folded = key[0].startswith(HOOK_POOL_PREFIX)
+        a["usage_rows"] += 1
+        if not folded:                                 # a hook's aggregate pool adds usage, never a pool
+            a["pools"] += 1
+            active[pool_hook[key]] = active.get(pool_hook[key], 0) + 1
         a["tvl"] += now.tvl_usd or 0.0
         a["max_tvl"] = max(a["max_tvl"], now.tvl_usd or 0.0)
         a["stats"].append((now.tvl_usd or 0.0, max(now.tx_count_cum or 0, cur.tx_count_cum or 0)))
@@ -81,6 +94,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             for name, w in (("vol24", w24), ("vol7", w7), ("vol7p", wp)):
                 v = _vol(rows, w)
                 a[name] += v
+                if folded:
+                    a["fold_" + name] += v
                 if name == "vol7":
                     pool_vol7[key] = v
                 quiet[name] = v == 0
@@ -93,6 +108,14 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             a[name] += n
             if not known and not quiet.get(vol_name, False):
                 a[name + "_known"] = False
+
+    # pools_n: per hook, its pools with a snapshot, or every pool initialized through it (hooks.pools_total) when larger, so a
+    # launchpad past the indexer's per-hook cap is not reported as its few traded pools
+    extra: dict[int, int] = {}
+    for r in hook_rows:
+        more = (r.pools_total or 0) - active.get((r.chain_id, r.address), 0)
+        if more > 0:
+            extra[r.project_id] = extra.get(r.project_id, 0) + more
 
     ready = _ready(conn, ctx, end)
     reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom,
@@ -115,15 +138,16 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             reasons[pid] = ["unverified"]
         wash = pid in reasons
         # every pool's volume unknown (p5 held it back): the project's volume is unknown, never $0
-        known = a["vol_known"] or not a["pools"]
+        known = a["vol_known"] or not a["usage_rows"]
         young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
         rows.append({
-            "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"],
+            "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"] + extra.get(pid, 0),
             "vol_24h": a["vol24"] if known else None, "vol_7d": a["vol7"] if known else None,
             "vol_7d_prev": a["vol7p"] if known else None,
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
             "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
-            "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"], a["vol7p"]),
+            # folded usage (a capped hook's aggregate pool) is displayed, never ranked: no wash rule can judge it
+            "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"] - a["fold_vol7"], a["vol7p"] - a["fold_vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
             "is_new": not wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
             "is_spam": spam,           # true spam only: no pools, or tiny, idle and < $1M
@@ -162,7 +186,7 @@ def _custom(hook: str | None) -> bool:
 def _empty() -> dict:
     return {"tvl": 0.0, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
             "tx24_known": True, "tx7_known": True, "stats": [], "life": 0.0,
-            "vol_known": False}
+            "vol_known": False, "usage_rows": 0, "fold_vol24": 0.0, "fold_vol7": 0.0, "fold_vol7p": 0.0}
 
 
 def _vol(rows: dict, w: tuple[date, date]) -> float:
@@ -221,7 +245,8 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,
           tvl: dict, swaps7: dict, custom: set[tuple], vol_days: dict) -> tuple[dict[int, list[str]], set[int]]:
     """Wash reasons per project (DESIGN.md "Wash rules"). Each rule judges pools; a project gets the reason when the
-    pools it flags carry >= WASH_SHARE of the project's volume in that rule's window. Pools with unknown volume are never
+    pools it flags carry >= WASH_SHARE of the project's volume in that rule's window, leaving out a capped hook's aggregate
+    pool ('hook:<address>', folded swaps no rule can judge) on both sides of the share. Pools with unknown volume are never
     judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers. Every few-wallet
     rule also needs rules.corroborated (volume far above a known TVL, no liquidity, or symmetric traders).
     vol7 / tvl: the pool's closed 7-day volume and latest TVL from the snapshots. swaps7: the swaps behind that volume, an
@@ -275,7 +300,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     for reason in (r for r in WASH_REASONS if r in judged):
         share: dict[int, list[float]] = {}
         for key, (v, hit) in judged[reason].items():
-            if key not in pool_project or key in unknown or not v:
+            # a hook's aggregate pool is never judged, nor counted in the share: shares use the unfolded volume, as ranking does
+            if key not in pool_project or key in unknown or not v or key[0].startswith(HOOK_POOL_PREFIX):
                 continue
             t = share.setdefault(pool_project[key][0], [0.0, 0.0])
             t[0] += v

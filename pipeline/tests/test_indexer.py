@@ -645,3 +645,324 @@ def test_runner_escalates_repeated_schema_locks_and_reports_them_in_the_heartbea
         beats.append([rec.getMessage() for rec in caplog.records if rec.getMessage().startswith("heartbeat")])
     assert levels == [["WARNING"], ["WARNING"], ["ERROR"]]
     assert [b[0].split("schema_locked=")[1].split()[0] for b in beats] == ["1", "2", "3"]
+
+
+def test_pool_cap_schema_is_additive_on_an_existing_database():
+    e = db.make_engine("sqlite://")
+    with e.begin() as c:
+        c.execute(sa.text("CREATE TABLE v4_pools (chain_id integer, pool_id text, hook_address text NOT NULL, currency0 text NOT NULL, "
+                          "currency1 text NOT NULL, fee integer, tick_spacing integer, sqrt_price_x96 text, tick integer, "
+                          "block_number bigint, block_time timestamp, tx_hash text, PRIMARY KEY (chain_id, pool_id))"))
+        c.execute(sa.text("INSERT INTO v4_pools (chain_id, pool_id, hook_address, currency0, currency1) VALUES (1, '0xp', '0xh', '0x0', '0x1')"))
+    db.create_all(e)
+    assert "v4_pools.sampled" in db.add_missing_columns(e)
+    with e.connect() as c:
+        assert c.execute(sa.text("SELECT sampled FROM v4_pools")).scalar_one() == 0
+    assert {c["name"] for c in sa.inspect(e).get_columns("hook_pool_counts")} == {
+        "chain_id", "hook_address", "pools_total", "first_block", "last_block", "last_seen", "sampled_total", "swaps_total",
+        "volume_usd_total"}
+    assert "pools_total" in {c["name"] for c in sa.inspect(e).get_columns("hooks")}
+
+
+# ------------------------------------------------------------------ per-hook pool cap (package 5b)
+
+def _row(pool, hook, block):
+    return core.hooked_pools_from_page(BASE.chain_id, [init_log(pool, ZERO, USDC, hook, block)], {block: T0 + block * BT})[0]
+
+
+def _counter(engine, hook=HOOK):
+    with engine.connect() as c:
+        return c.execute(sa.select(db.hook_pool_counts).where(db.hook_pool_counts.c.hook_address == hook)).first()
+
+
+def test_cap_stores_the_first_pools_of_a_hook_and_counts_the_rest(engine):
+    page = [_row(pid(n), HOOK, 100 + n) for n in (1, 2, 3)] + [_row(PC, HOOK2, 50)]
+    with engine.begin() as c:
+        stored, over = store.store_pools(c, BASE.chain_id, page, cap=2)
+    assert [r["pool_id"] for r in stored] == [pid(1), pid(2), PC] and [r["pool_id"] for r in over] == [pid(3)]
+    k = _counter(engine)
+    assert (k.pools_total, k.first_block, k.last_block) == (3, 103, 103)
+    with engine.begin() as c:                          # the same page again (a re-backfill from block 0): counted once
+        assert store.store_pools(c, BASE.chain_id, page, cap=2)[1] == []
+    assert _counter(engine).pools_total == 3
+    with engine.begin() as c:
+        store.store_pools(c, BASE.chain_id, [_row(pid(9), HOOK, 900)], cap=2)
+    k = _counter(engine)
+    assert (k.pools_total, k.first_block, k.last_block) == (4, 103, 900) and db.as_utc(k.last_seen) == core.utc(T0 + 900 * BT)
+    with engine.connect() as c:
+        assert store.pool_count(c, BASE.chain_id) == 3 and store.capped_floor(c, BASE.chain_id) == 103
+
+
+def test_cap_crossing_never_counts_a_stored_row_twice_and_rolls_back_with_its_page(engine):
+    with pytest.raises(RuntimeError):
+        with engine.begin() as c:
+            store.store_pools(c, BASE.chain_id, [_row(pid(n), HOOK, 100 + n) for n in (1, 2, 3)], cap=1)
+            raise RuntimeError("the page failed after the cap check")
+    assert _counter(engine) is None
+    with engine.begin() as c:
+        store.store_pools(c, BASE.chain_id, [_row(pid(1), HOOK, 101)], cap=2)
+        stored, over = store.store_pools(c, BASE.chain_id, [_row(pid(n), HOOK, 100 + n) for n in (1, 2, 3)], cap=2)
+    assert [r["pool_id"] for r in stored] == [pid(2)] and [r["pool_id"] for r in over] == [pid(3)]
+    assert _counter(engine).pools_total == 3
+
+
+def test_sync_caps_a_launchpad_hook_and_the_heartbeat_says_so(engine):
+    fake = FakeHyperSync()
+    fake.inits += [init_log(pid(0xD), ZERO, USDC, HOOK, 1600), init_log(pid(0xE), ZERO, USDC, HOOK, 3000)]
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    pools, _, _, state = _tables(engine)
+    assert state.initialize_block == HEAD - BASE.lag + 1 and set(pools) == {PA, PC}
+    assert (st.new_pools, st.capped) == (2, 2) and _counter(engine).pools_total == 3
+    assert "base:lag=0/20991,new=2,capped=2" in heartbeat(1, "hypersync", {"base": st})
+
+
+LAUNCH = pid(0xD)
+
+
+def _launchpad_fake():
+    """HOOK holds PA; LAUNCH (block 1600) is past a cap of 1 and swaps at block 2000 (2026-09-22) for $200."""
+    fake = FakeHyperSync()
+    fake.inits.append(init_log(LAUNCH, ZERO, USDC, HOOK, 1600))
+    fake.swaps.append((swap_log(LAUNCH, 2000, -(10 ** 17), 200 * 10 ** 6), W2))
+    return fake
+
+
+def _lookups(fake):
+    """Pool id lists of the Initialize-by-id queries the fake served."""
+    out = []
+    for r in fake.requests:
+        sel = (json.loads(r.content).get("logs") or [{}])[0] if r.content else {}
+        if sel.get("topics", [[None]])[0] == [INITIALIZE_TOPIC] and len(sel["topics"]) > 1:
+            out.append(sel["topics"][1])
+    return out
+
+
+def test_capped_pool_that_swaps_becomes_a_sampled_row_with_its_swaps(engine):
+    fake = _launchpad_fake()
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1), now=NOW)
+    pools, daily, _, _ = _tables(engine)
+    assert pools[LAUNCH].sampled and not pools[PA].sampled and (st.mode, st.late) == ("hypersync/scan", 1)
+    assert daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0) and daily[(PA, date(2026, 9, 22))] == (3, 2, 6000.0)
+    assert _lookups(fake) == [[PB]]                  # LAUNCH came from this process's Initialize pages; unhooked PB was asked once
+    assert _counter(engine).pools_total == 2         # still the true total: a late row is not counted again
+    assert ",late=1" in heartbeat(1, "hypersync", {"base": st})
+
+
+def test_capped_pool_from_before_this_process_is_looked_up_by_pool_id(engine):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    resolver = core.PoolResolver()                   # a restarted process: nothing in memory
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pools_per_hook=1), now=NOW,
+                             resolver=resolver)
+    pools, daily, _, _ = _tables(engine)
+    assert pools[LAUNCH].sampled and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+    asked = _lookups(fake)
+    assert asked.count([PB]) == 1 and [LAUNCH] in asked and PB in resolver.absent and st.lookups == resolver.calls >= 2
+
+
+def test_lookup_budget_holds_the_swap_page_for_the_next_loop(engine):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    resolver = core.PoolResolver()
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1, pool_lookups=0), now=NOW,
+                             resolver=resolver)
+    _, daily, _, state = _tables(engine)
+    assert (state.swap_block, daily, st.error) == (1000, {}, None)       # page not committed, swaps not skipped
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pools_per_hook=1), now=NOW,
+                        resolver=resolver)
+    _, daily, _, state = _tables(engine)
+    assert state.swap_block == 3100 and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+
+
+def test_late_row_and_its_swaps_count_once_when_two_indexers_race(engine, monkeypatch):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=33, pools_per_hook=1), now=NOW)
+    with engine.connect() as c:
+        stale = store.get_state(c, BASE.chain_id)    # both containers read swap_block 1700
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=1, pools_per_hook=1), now=NOW)
+    monkeypatch.setattr(store, "get_state", lambda conn, chain_id: stale)
+    with pytest.raises(store.CursorMoved):
+        core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=1, pools_per_hook=1), now=NOW)
+    monkeypatch.undo()
+    pools, daily, _, state = _tables(engine)
+    assert state.swap_block == 2400 and pools[LAUNCH].sampled and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+
+
+def test_runner_keeps_one_resolver_per_chain_across_loops(engine, monkeypatch):
+    got = []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: got.append((ch.slug, kw["resolver"])) or core.ChainStats(mode="hypersync"))
+    r = Runner(engine, "tok", select_chains("ethereum,base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings())
+    r.run_once()
+    r.run_once()
+    by = {}
+    for slug, res in got:
+        by.setdefault(slug, set()).add(id(res))
+    assert len(got) == 4 and all(len(v) == 1 for v in by.values()) and by["ethereum"] != by["base"]
+
+
+def test_griefing_a_hook_up_to_its_cap_never_hides_a_later_pools_swaps(engine):
+    """Junk pools fill HOOK's cap first; the real pool initialized after them is not a row, but its swap makes it one,
+    with the swap counted, even when the first loop's lookup budget is spent (the page waits, nothing is dropped)."""
+    fake = FakeHyperSync()
+    fake.inits += [init_log(pid(0x100 + n), TOKX, USDC, HOOK, 1500 + n) for n in range(3)]      # junk, blocks 1500-1502
+    fake.inits.append(init_log(LAUNCH, ZERO, USDC, HOOK, 1600))                                  # the real launch
+    fake.swaps.append((swap_log(LAUNCH, 2000, -(10 ** 17), 200 * 10 ** 6), W2))
+    s = dict(pools_per_hook=4)                                                                    # PA + 3 junk fill it
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, **s), now=NOW)
+    assert LAUNCH not in _tables(engine)[0] and _counter(engine).pools_total == 5
+    resolver = core.PoolResolver()                                                                # restarted: nothing in memory
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pool_lookups=0, **s), now=NOW, resolver=resolver)
+    assert _tables(engine)[3].swap_block == 1000                                                 # held, not skipped
+    for _ in range(3):                                                                            # the next loops carry on
+        core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pool_lookups=1, **s), now=NOW,
+                            resolver=resolver)
+    pools, daily, _, state = _tables(engine)
+    assert state.swap_block >= 2400 and pools[LAUNCH].sampled and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+    assert daily[(PA, date(2026, 9, 22))] == (3, 2, 6000.0) and _counter(engine).pools_total == 5
+
+
+def test_lookup_budget_from_env_is_at_least_one_call_so_a_held_page_always_moves(monkeypatch):
+    monkeypatch.setenv("INDEXER_POOL_LOOKUPS", "0")
+    assert core.Settings.from_env().pool_lookups == 1
+
+
+L2 = pid(0xE)
+
+
+def test_a_dust_or_unpriced_swap_makes_no_row_but_its_usage_stays_on_the_hook(engine):
+    fake = FakeHyperSync()
+    fake.inits += [init_log(LAUNCH, ZERO, USDC, HOOK, 1600), init_log(L2, TOKX, TOKX, HOOK, 1601)]
+    fake.swaps += [(swap_log(LAUNCH, 2000, -(10 ** 12), 2 * 10 ** 3), W2),        # $0.002: dust
+                   (swap_log(L2, 2001, -(10 ** 18), 10 ** 18), W3),                # no priced side
+                   (swap_log(LAUNCH, 3000, -(10 ** 17), 200 * 10 ** 6), W2)]      # later a real $200 swap (2026-09-23)
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1), now=NOW)
+    pools, daily, wallets, _ = _tables(engine)
+    agg = db.hook_pool_id(HOOK)
+    assert L2 not in pools and pools[LAUNCH].sampled and (st.late, st.folded) == (1, 2)
+    assert daily[(agg, date(2026, 9, 22))] == (2, 2, 0.0) and daily[(LAUNCH, date(2026, 9, 23))] == (1, 1, 200.0)
+    assert {(p, a) for p, _, a in wallets if p == agg} == {(agg, W2), (agg, W3)}
+    k = _counter(engine)
+    assert (k.pools_total, k.sampled_total, k.swaps_total, round(k.volume_usd_total, 3)) == (3, 1, 2, 0.002)
+
+
+def test_late_rows_stop_at_the_sampled_cap_and_the_rest_stays_on_the_hook(engine):
+    fake = FakeHyperSync()
+    fake.inits += [init_log(LAUNCH, ZERO, USDC, HOOK, 1600), init_log(L2, ZERO, USDC, HOOK, 1601)]
+    fake.swaps += [(swap_log(LAUNCH, 2000, -(10 ** 17), 200 * 10 ** 6), W2),
+                   (swap_log(L2, 2001, -(10 ** 17), 300 * 10 ** 6), W3)]       # $300: the bigger swap takes the one slot
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1, sampled_per_hook=1), now=NOW)
+    pools, daily, _, _ = _tables(engine)
+    d = date(2026, 9, 22)
+    assert pools[L2].sampled and LAUNCH not in pools and (st.late, st.folded) == (1, 1)
+    assert daily[(L2, d)] == (1, 1, 300.0) and daily[(db.hook_pool_id(HOOK), d)] == (1, 1, 200.0)
+    k = _counter(engine)
+    assert (k.pools_total, k.sampled_total, k.swaps_total, k.volume_usd_total) == (3, 1, 1, 200.0)
+    assert ",late=1,folded=1" in heartbeat(1, "hypersync", {"base": st})
+
+
+def test_late_insert_settings_from_env(monkeypatch):
+    monkeypatch.setenv("INDEXER_LATE_INSERT_MIN_USD", "25.5")
+    monkeypatch.setenv("INDEXER_SAMPLED_POOLS_PER_HOOK", "7")
+    s = core.Settings.from_env()
+    assert (s.late_min_usd, s.sampled_per_hook) == (25.5, 7) and (core.Settings().late_min_usd, core.Settings().sampled_per_hook) == (10.0, 1000)
+
+
+def test_a_held_page_commits_while_initialize_churn_evicts_the_recent_cache(engine, monkeypatch):
+    """Reviewer's scenario: a tiny recent cache, one id per lookup chunk, a budget of 2 calls, and 5 new capped pools per
+    loop from the Initialize phase. Looked-up keys must survive that churn, or the same chunks are asked every loop."""
+    global HEAD
+    monkeypatch.setattr(core.PoolResolver, "RECENT_MAX", 4)
+    fake = FakeHyperSync()
+    held = [pid(0x200 + n) for n in range(4)]
+    fake.inits += [init_log(p, ZERO, USDC, HOOK, 1600 + n) for n, p in enumerate(held)]
+    fake.swaps += [(swap_log(p, 2000 + n, -(10 ** 17), 200 * 10 ** 6), W2) for n, p in enumerate(held)]
+    s = dict(pools_per_hook=1, topic_chunk=1, pool_lookups=2)
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, **s), now=NOW)   # Initialize only
+    resolver, old = core.PoolResolver(), HEAD
+    try:
+        for loop in range(12):
+            end = HEAD - BASE.lag + 1
+            fake.inits += [init_log(pid(0x300 + 5 * loop + n), ZERO, USDC, HOOK, end + n) for n in range(5)]
+            HEAD += 700
+            core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, **s), now=NOW, resolver=resolver)
+            if _tables(engine)[3].swap_block >= 2400:
+                break
+    finally:
+        HEAD = old
+    pools, daily, _, state = _tables(engine)
+    assert state.swap_block >= 2400 and loop < 8, loop
+    assert all(pools[p].sampled and daily[(p, date(2026, 9, 22))] == (1, 1, 200.0) for p in held)
+
+
+def test_lookup_cost_is_logged_per_page_and_shown_in_the_heartbeat(engine, caplog):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    with caplog.at_level("INFO", logger="bait.indexer"):
+        st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pools_per_hook=1), now=NOW,
+                                 resolver=core.PoolResolver())
+    # PB: one call over [1600, 1700); LAUNCH: [1600, 2400) is two 700-block responses, both counted against the budget
+    assert (st.unknown, st.lookups, st.chunk_calls) == (2, 3, 2)
+    assert ",unknown=2" in heartbeat(1, "hypersync", {"base": st}) and ",chunk_calls=2" in heartbeat(1, "hypersync", {"base": st})
+    assert any("swap page 1700-2400" in m and "unknown=1" in m and "calls=2" in m for m in caplog.messages)
+
+
+def test_lookup_budget_triples_while_the_swap_cursor_is_far_behind(monkeypatch):
+    s = core.Settings(pool_lookups=10)
+    assert (core.lookup_budget(s, 100_000), core.lookup_budget(s, 100_001)) == (10, 30)
+    monkeypatch.setenv("INDEXER_POOL_LOOKUPS_CATCHUP", "5")
+    assert core.lookup_budget(core.Settings.from_env(), 200_000) == 50
+
+
+def test_a_swap_window_reset_takes_its_folded_days_out_of_the_hook_totals(engine):
+    agg = db.hook_pool_id(HOOK)
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=9, first_block=1,
+                                                        last_block=9, swaps_total=5, volume_usd_total=100.0))
+        store.apply_swaps(c, BASE.chain_id, {(agg, date(2026, 9, 20)): [2, 40.0, 0], (agg, date(2026, 9, 22)): [3, 60.0, 0]}, {})
+        store.reset_swaps_from(c, BASE.chain_id, date(2026, 9, 21))
+    k = _counter(engine)
+    assert (k.swaps_total, k.volume_usd_total) == (2, 40.0)
+
+
+def test_a_late_pool_of_a_hook_without_a_counter_is_a_plain_row(engine):
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=2, first_block=1600,
+                                                        last_block=1600))
+    agg = core.SwapAgg()
+    agg.add(LAUNCH, date(2026, 9, 22), W1, 200.0)
+    agg.add(L2, date(2026, 9, 22), W2, 200.0)
+    late = {LAUNCH: _row(LAUNCH, HOOK, 1600), L2: _row(L2, HOOK2, 1601)}     # HOOK2 has no counter: a gap, not the cap
+    rows, adds = core._admit_late(engine, BASE, late, agg, core.Settings(), core.ChainStats())
+    with engine.begin() as c:
+        store.insert_late_pools(c, rows)
+    pools = _tables(engine)[0]
+    assert pools[LAUNCH].sampled and not pools[L2].sampled and adds == {HOOK: [1, 0, 0.0]}
+
+
+def test_a_history_reset_widens_the_lookup_floor_to_block_zero(engine):
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=9, first_block=500,
+                                                        last_block=900))
+        store.set_state(c, BASE.chain_id, initialize_block=100, swap_block=90, backfilled=True)
+    rpc = core.Rpc("https://x", httpx.Client(transport=httpx.MockTransport(FakeRpc(100_000))))
+    core.sync_rpc(engine, BASE, rpc, 120, core.Settings(rpc_max_windows=2))          # RPC mode skipped blocks: a hole
+    assert _counter(engine).first_block == 0
+    with engine.begin() as c:
+        c.execute(sa.update(db.hook_pool_counts).values(first_block=500))
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=0), now=NOW)   # re-backfill
+    assert _counter(engine).first_block == 0
+
+
+def test_a_history_reset_floors_lookups_at_the_pool_managers_deployment_block_when_known(engine, monkeypatch):
+    import dataclasses
+    from bait.indexer import chains
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=9, first_block=500,
+                                                        last_block=900))
+    monkeypatch.setitem(chains.CHAIN_BY_ID, BASE.chain_id, dataclasses.replace(BASE, deploy_block=120))
+    with engine.begin() as c:
+        store.widen_lookup_floor(c, BASE.chain_id)
+    assert _counter(engine).first_block == 120
+    assert all(c.deploy_block is None or c.deploy_block >= 0 for c in chains.CHAINS)

@@ -21,6 +21,10 @@ class IndexedChain:
     native: str             # DefiLlama coin id for currency 0x0 (native, 18 decimals)
     lag: int                # blocks kept behind the archive head (reorg safety)
     rpc_net: str | None     # key into keyless.LOGS / keyless.CHAINS for the no-token RPC fallback
+    # PoolManager deployment block, the oldest block any v4 pool can have (the lookup floor after a history reset).
+    # None = not recorded yet; a value must be checked against the chain's explorer, never guessed: one above the real
+    # deployment would hide pools from the lookup by pool id.
+    deploy_block: int | None = None
 
 
 CHAINS: list[IndexedChain] = [
