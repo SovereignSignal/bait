@@ -63,7 +63,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
 
   if (!p) return new Response("Not found", { status: 404 });
 
-  const delta = pctDelta(p.metrics.vol7d, p.metrics.vol7dPrev, p.isNew);
+  const delta = pctDelta(p.metrics.vol7d ?? 0, p.metrics.vol7dPrev ?? 0, p.isNew);
   const badge = p.isNew ? { text: "New", bg: T.pinkTint, fg: T.pinkTintFg } : p.rank ? { text: `#${p.rank} trending`, bg: T.amberTint, fg: T.amber } : null;
   const sig = (on: boolean, text: string, money = false) => (
     <div

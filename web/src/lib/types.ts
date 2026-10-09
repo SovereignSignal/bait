@@ -159,8 +159,9 @@ export interface SignalsView {
 
 export interface Metrics {
   tvlUsd: number;
-  vol7d: number;
-  vol7dPrev: number;
+  /** the 7 closed UTC days; null when every pool's volume is unknown (shown as unknown, never $0) */
+  vol7d: number | null;
+  vol7dPrev: number | null;
   swaps7d: number | null; // swaps over the 7 closed UTC days; null unless every day is known
   poolsN: number;
   hooksN: number;
@@ -227,8 +228,9 @@ export interface RowView {
   isNew: boolean;
   isWash: boolean;
   scoreTrending: number;
-  vol7d: number;
-  vol7dPrev: number;
+  /** null = unknown (see Metrics.vol7d) */
+  vol7d: number | null;
+  vol7dPrev: number | null;
   vol24h: number | null;
   tvlUsd: number;
   routable: Eligibility;

@@ -44,7 +44,8 @@ export function projectHref(slug: string, q?: Partial<FeedQuery>): string {
 
 /** Week-over-week change in percent: vol7d (the 7 closed UTC days ending the day before the run) against vol7dPrev (the
  * 7 before), or null when the earlier week is under $1K. */
-export function weekDelta(r: { vol7d: number; vol7dPrev: number }): number | null {
+export function weekDelta(r: { vol7d: number | null; vol7dPrev: number | null }): number | null {
+  if (r.vol7d == null || r.vol7dPrev == null) return null;   // an unknown week is no basis
   return r.vol7dPrev >= 1000 ? (r.vol7d / r.vol7dPrev - 1) * 100 : null;
 }
 
@@ -64,9 +65,14 @@ function matches(p: FeedItem, q: FeedQuery): boolean {
 /** Trending order over every row (not the filtered view), so ranks stay stable across filters. */
 export function trendingOrder<T extends FeedItem>(all: T[]): T[] {
   return [...all]
-    .filter((p) => !p.isWash && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
+    .filter((p) => !p.isWash && p.vol7d != null && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
     .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd)
     .slice(0, TRENDING_TOP_N);
+}
+
+/** Largest 7-day volume first; an unknown one (null) last. */
+export function byVol7d(a: { vol7d: number | null }, b: { vol7d: number | null }): number {
+  return (b.vol7d ?? -1) - (a.vol7d ?? -1);
 }
 
 /** Rows for a tab + filters. `all` must already exclude spam; wash-like rows are listed in All only.
@@ -77,8 +83,8 @@ export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & 
   let rows: T[];
   if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
-  else if (q.tab === "verified") rows = all.filter((p) => inApp(p) && !p.isWash).sort((a, b) => b.vol7d - a.vol7d);
-  else rows = [...all].sort((a, b) => b.vol7d - a.vol7d);
+  else if (q.tab === "verified") rows = all.filter((p) => inApp(p) && !p.isWash).sort(byVol7d);
+  else rows = [...all].sort(byVol7d);
   return rows.filter((p) => matches(p, q)).map((p) => ({ ...p, rank: rankOf.get(p.slug) }));
 }
 
@@ -96,12 +102,13 @@ export function availableChains(rows: Array<Pick<RowView, "chains">>, order: Cha
 export function movers(all: RowView[], n = 10): RowView[] {
   const trending = new Set(trendingOrder(all).map((p) => p.slug));
   const key = (p: RowView) => {
-    if (p.isNew) return (p.vol24h ?? p.vol7d / 7) * 7;
+    const v7 = p.vol7d ?? 0;
+    if (p.isNew) return (p.vol24h ?? v7 / 7) * 7;
     const d = weekDelta(p);
-    return p.vol7d * (d != null && d > 0 ? 1 + d / 100 : 1);
+    return v7 * (d != null && d > 0 ? 1 + d / 100 : 1);
   };
   return all
-    .filter((p) => !p.isWash && ((p.isNew && p.vol7d > 0) || trending.has(p.slug)))
+    .filter((p) => !p.isWash && ((p.isNew && (p.vol7d ?? 0) > 0) || trending.has(p.slug)))
     .sort((a, b) => key(b) - key(a))
     .slice(0, n);
 }

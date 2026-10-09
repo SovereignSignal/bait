@@ -158,7 +158,7 @@ export async function getAllSlugs(): Promise<string[]> {
 /** Usage leaderboards across hook projects. */
 export async function getLeaders(n = 10): Promise<LeadersView> {
   const all = (await loadAll()).filter((p) => !p.isSpam && !p.isWash); // wash-like volume never ranks
-  const active = all.filter((p) => p.metrics.vol7d > 0);
+  const active = all.filter((p) => (p.metrics.vol7d ?? 0) > 0);
   const board = (value: (p: ProjectDetail) => number | null): LeaderEntry[] =>
     all
       .map((p) => ({ p, v: value(p) }))
@@ -169,7 +169,7 @@ export async function getLeaders(n = 10): Promise<LeadersView> {
   const walletKnown = all.filter((p) => p.usage.wallets24h != null);
   return {
     totals: {
-      vol7d: active.reduce((s, p) => s + p.metrics.vol7d, 0),
+      vol7d: active.reduce((s, p) => s + (p.metrics.vol7d ?? 0), 0),
       wallets24h: walletKnown.length ? walletKnown.reduce((s, p) => s + (p.usage.wallets24h ?? 0), 0) : null,
       projects: active.length,
       chains: new Set(active.flatMap((p) => p.chains)).size,
@@ -509,8 +509,9 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
         upgradeable: hs.some((h) => !!h.properties.upgradeable),
         metrics: {
           tvlUsd: d?.tvlUsd ?? 0,
-          vol7d: d?.vol7d ?? 0,
-          vol7dPrev: d?.vol7dPrev ?? 0,
+          // NULL = every pool's volume unknown (score): rendered as unknown, never $0
+          vol7d: d ? d.vol7d : 0,
+          vol7dPrev: d ? d.vol7dPrev : 0,
           swaps7d: d?.swaps7d ?? null,
           poolsN: d?.poolsN ?? 0,
           hooksN: hs.length,
