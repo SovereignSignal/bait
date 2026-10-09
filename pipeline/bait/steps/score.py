@@ -19,7 +19,7 @@ import sqlalchemy as sa
 
 from ..db import (as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
-from ..rules import (WASH_REASONS, WASH_SHARE, is_new, is_spam, is_symmetric, is_wash_7d, is_wash_24h, is_wash_no_liquidity,
+from ..rules import (WASH_REASONS, WASH_SHARE, corroborated, is_new, is_spam, is_symmetric, is_wash_7d, is_wash_24h, is_wash_no_liquidity,
                      is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
 from .onchain import ready_chains
@@ -168,7 +168,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
           tvl: dict) -> dict[int, list[str]]:
     """Wash reasons per project (DESIGN.md "Wash rules"). Each rule judges pools; a project gets the reason when the
     pools it flags carry >= WASH_SHARE of the project's volume in that rule's window. Pools with unknown volume are never
-    judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers.
+    judged. Wallet thresholds compare a lower bound (rules.wallets_lower_bound), never buyers + sellers. Every few-wallet
+    rule also needs rules.corroborated (volume far above a known TVL, no liquidity, or symmetric traders).
     vol7 / tvl: the pool's closed 7-day volume and latest TVL from the snapshots."""
     stats = {(r.pool_id, r.chain_id): r for r in conn.execute(sa.select(pool_stats).where(pool_stats.c.day == day))}
     lb = {k: wallets_lower_bound(r.wallets_24h, r.buyers_24h, r.sellers_24h, r.traders_24h) for k, r in stats.items()}
@@ -179,7 +180,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
     sym = {k: is_symmetric(top.get(k, []), r.vol_24h_rolling) for k, r in stats.items()}
     vol_on, wallets_7d = _onchain_7d(conn, end, ready)
     judged = {
-        "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k])) for k, r in stats.items()},
+        "24h": {k: (r.vol_24h or 0.0, is_wash_24h(r.vol_24h, lb[k]) and corroborated(vol7.get(k), tvl.get(k), sym[k]))
+                for k, r in stats.items()},
         "7d": {k: (v, is_wash_7d(v, wallets_7d.get(k, 0), tvl.get(k), sym.get(k, False))) for k, v in vol_on.items()},
         "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), wallets_7d[k] if k in wallets_7d else lb.get(k)))
                     for k, v in vol7.items()},

@@ -104,12 +104,11 @@ def test_wash_rule_reads_persisted_pool_stats(conn, ctx):
     p = insert_project(conn, "Washy", first_seen=NOW - timedelta(days=60))
     insert_hook(conn, "0xw", 8453, project_id=p, name="Washy")
     insert_pool(conn, "0xwp", 8453, "0xw", created=NOW - timedelta(days=60))
-    insert_snap(conn, "0xwp", 8453, END, 0, 9_000_000, 100, vol_day=8_000_000.0)    # 100 swaps: not spam
+    insert_snap(conn, "0xwp", 8453, END, 10_000, 9_000_000, 100, vol_day=8_000_000.0)    # 800x its TVL; 100 swaps: not spam
     conn.execute(sa.insert(db.pool_stats).values(pool_id="0xwp", chain_id=8453, day=DAY, vol_24h=5_000_000, traders_24h=6))
     out = score.run(conn, ctx)
     d = daily(conn, p)
-    # TVL known to be $0 with $8M through at most 3 wallets: no liquidity as well
-    assert d.is_wash and not d.is_spam and d.wash_reason == "24h,no_liquidity" and d.score_trending == 0.0 and out["wash"] == 1
+    assert d.is_wash and not d.is_spam and d.wash_reason == "24h,vol_tvl" and d.score_trending == 0.0 and out["wash"] == 1
 
 
 def _onchain_project(conn, name, pool, wallets, vol_per_day, tvl=50_000):
@@ -311,3 +310,13 @@ def test_no_liquidity_flags_the_optimism_0x69af_shape(conn, ctx):
     d = daily(conn, p)
     assert d.is_wash and d.wash_reason == "7d,no_liquidity" and d.score_trending == 0.0 and not d.is_new
     assert (out["wash_7d"], out["wash_no_liquidity"], out["wash_vol_tvl"]) == (1, 1, 0)
+
+
+def test_24h_rule_spares_a_private_rfq_hook_with_real_liquidity(conn, ctx):
+    """Four wallets, $714K a day, $2M TVL: few wallets alone is not wash."""
+    rfq = _onchain_project(conn, "Rfq", "0xrfq", wallets=4, vol_per_day=714_000, tvl=2_000_000)
+    _optimism_ready(conn)
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xrfq", chain_id=10, day=DAY, vol_24h=714_000.0, traders_24h=4,
+                                                 wallets_24h=4, vol_source="onchain"))
+    score.run(conn, ctx)
+    assert not daily(conn, rfq).is_wash
