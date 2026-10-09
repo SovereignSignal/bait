@@ -64,9 +64,10 @@ class ContractNames:
         return cls(env("BLOCKSCOUT_API_KEY"), http_client)   # always usable; the key only widens coverage
 
     def lookup(self, chain_id: int, address: str) -> Found | None:
-        """Found(name, source, is_proxy) for verified code (a proxy's implementation name when known), else None. Raises
-        LookupTransient when nothing was found and a source failed transiently."""
-        transient, proxy = False, None
+        """Found(name, source, is_proxy) for verified code (a proxy's implementation name when known), else None. The
+        first useful name wins; a generic one ("ERC1967Proxy") is kept only as the fallback while later sources may
+        resolve the implementation. Raises LookupTransient when no useful name was found and a source failed transiently."""
+        transient, proxy, fallback = False, None, None
         for source, fn in (("sourcify", self._sourcify), ("blockscout_pro", self._blockscout_pro),
                            ("blockscout", self._blockscout), ("routescan", self._routescan)):
             outcome, name = None, None
@@ -79,13 +80,17 @@ class ContractNames:
                 outcome, transient = "error", True
             except (ValueError, KeyError, TypeError, IndexError, AttributeError):
                 outcome = "bad_payload"
+            useful = useful_name(name)
+            if name and not useful:
+                outcome = "generic"
+                fallback = fallback or (name.strip(), source)
             with self._lock:
                 self.outcomes[f"{source}:{outcome or ('hit' if name else 'miss')}"] += 1
-            if name:
-                return Found(name.strip(), source, proxy)
+            if useful:
+                return Found(useful, source, proxy)
         if transient:
             raise LookupTransient(f"{chain_id}:{address}")
-        return None
+        return Found(*fallback, proxy) if fallback else None
 
     def _get(self, url: str, params: dict | None = None) -> dict | None:
         r = self.c.get(url, params=params or {})
