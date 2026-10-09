@@ -150,3 +150,53 @@ def test_onchain_pool_copy_skips_unchanged_rows_and_reports_db_size(pg_engine):
         c.execute(sa.delete(db.onchain_watermarks))                 # force a re-read of the same row
         out = onchain.run(c, _ctx())
     assert out["pools"] == 1 and out["pools_written"] == 0         # read again, not rewritten
+
+
+def _held_row_lock(pg_engine, table):
+    """Another session (the web, the nightly step) holding a row lock: RowExclusiveLock on `table`, uncommitted."""
+    holder = pg_engine.connect()
+    holder.begin()
+    holder.execute(sa.text(f'SELECT 1 FROM "{table}" FOR UPDATE'))
+    holder.execute(sa.text(f'LOCK TABLE "{table}" IN ROW EXCLUSIVE MODE'))
+    return holder
+
+
+def _within(fn, seconds):
+    """Run fn in a thread; return (finished, result-or-exception)."""
+    import threading
+    box = {}
+
+    def go():
+        try:
+            box["r"] = fn()
+        except Exception as e:  # surfaced to the test
+            box["r"] = e
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    t.join(timeout=seconds)
+    return not t.is_alive(), box.get("r"), t
+
+
+def test_additive_migration_issues_no_ddl_when_nothing_is_missing(pg_engine):
+    db.add_missing_indexes(pg_engine)                  # the fixture adds columns, not indexes: make the schema current
+    holder = _held_row_lock(pg_engine, "pool_stats")
+    other = _held_row_lock(pg_engine, "v4_pools")
+    try:
+        done, cols, t1 = _within(lambda: db.add_missing_columns(pg_engine), 3)
+        assert done and cols == []                    # no ALTER: an existing column must not wait for ACCESS EXCLUSIVE
+        done, idx, t2 = _within(lambda: db.add_missing_indexes(pg_engine), 3)
+        assert done and not isinstance(idx, Exception) # no CREATE INDEX: an existing index must not wait for SHARE
+    finally:
+        holder.rollback(); holder.close(); other.rollback(); other.close()
+
+
+def test_additive_migration_gives_up_on_a_lock_instead_of_blocking(pg_engine):
+    with pg_engine.begin() as c:
+        c.execute(sa.text('ALTER TABLE pool_stats DROP COLUMN vol_source'))
+    holder = _held_row_lock(pg_engine, "pool_stats")
+    try:
+        done, r, _ = _within(lambda: db.add_missing_columns(pg_engine, lock_timeout="300ms"), 5)
+        assert done and isinstance(r, db.SchemaLocked)
+    finally:
+        holder.rollback(); holder.close()
+    assert "pool_stats.vol_source" in db.add_missing_columns(pg_engine)     # retried once the lock is gone

@@ -557,3 +557,19 @@ def test_fallback_prices_wrapped_native_and_stables_when_llama_has_no_quote():
         assert cid in CHAIN_BY_ID and addr == addr.lower() and len(addr) == 42
     for cid, m in STABLES.items():
         assert cid in CHAIN_BY_ID and all(a == a.lower() and len(a) == 42 and d in (6, 18) for a, d in m.items())
+
+
+def test_runner_retries_a_locked_schema_migration_next_loop(engine, monkeypatch):
+    seen, tries = [], []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: seen.append(ch.slug) or core.ChainStats(mode="hypersync"))
+
+    def migrate():
+        tries.append(1)
+        return len(tries) > 1                          # first attempt hits a lock timeout
+    r = Runner(engine, "tok", select_chains("base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings(), migrate=migrate)
+    assert r.run_once() == {} and seen == []
+    assert set(r.run_once()) == {"base"} and seen == ["base"]
+    r.run_once()
+    assert len(tries) == 2                             # not re-run once it succeeded
