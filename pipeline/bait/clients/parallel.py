@@ -6,6 +6,10 @@ import time
 from ..config import env
 from . import http
 
+
+class RunGone(Exception):
+    """The run id is unknown to Parallel (HTTP 404): failed or expired. It will never deliver; do not poll again."""
+
 OUTPUT_SCHEMA = {
     "type": "json",
     "json_schema": {
@@ -69,7 +73,9 @@ class Parallel:
                 d = r.json()
                 out = (d.get("output") or {}).get("content") or {}
                 return {k: (v or "") for k, v in out.items()} | {"_run_id": run_id}
-            if r.status_code not in (202, 404, 408, 425):
+            if r.status_code == 404:
+                raise RunGone(run_id)
+            if r.status_code not in (202, 408, 425):
                 r.raise_for_status()
             time.sleep(self.poll_s)
         return None

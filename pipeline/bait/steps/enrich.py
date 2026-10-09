@@ -1,15 +1,17 @@
 """Step 5 (enrich): projects with enriched_at null -> Parallel (optional) -> Blockscout verified source -> Claude what_line + category."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import sqlalchemy as sa
 
 from ..config import CHAIN_BY_ID
-from ..db import hooks, pool_stats, pools, projects, utcnow
+from ..db import as_utc, hooks, pool_stats, pools, projects, utcnow
 from . import RunContext, log
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
-    out = {"candidates": 0, "parallel": 0, "source": 0, "enriched": 0, "errors": 0}
+    out = {"candidates": 0, "parallel": 0, "parallel_failed": 0, "source": 0, "enriched": 0, "errors": 0}
     claude = ctx.client("claude")
     if claude is None:
         log.info("enrich skipped: no ANTHROPIC_API_KEY (what_line keeps the hooklist placeholder)")
@@ -21,7 +23,10 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out["candidates"] = len(todo)
     # Parallel tasks take ~1-2 minutes each; run them side by side (PARALLEL_CONCURRENCY, default 8) before the
     # per-project loop. The whole batch is budget-checked up front, so concurrency cannot overshoot the budget.
-    par_results, waiting = _parallel_batch(conn, par, todo, out) if par is not None else ({}, set())
+    par_results, waiting = _parallel_batch(conn, ctx, par, todo, out) if par is not None else ({}, set())
+    # the batch may have tombstoned or collected Parallel data: re-read enrichment rather than trust the stale rows
+    fresh_enr = {r.id: r.enrichment for r in conn.execute(
+        sa.select(projects.c.id, projects.c.enrichment).where(projects.c.id.in_([p.id for p in todo])))} if todo else {}
     for p in todo:
         if p.id in waiting:
             continue        # paid Parallel run still in progress: collect it next run, then write what_line once
@@ -34,7 +39,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "dynamic_fee": any((h.properties or {}).get("dynamicFee") for h in hs),
             "audit_urls": sorted({h.audit_url for h in hs if h.audit_url}),
         }
-        enrichment = dict(p.enrichment or {})
+        enrichment = dict(fresh_enr.get(p.id) or {})
         try:
             if "parallel" not in enrichment and par_results.get(p.id):
                 enrichment["parallel"] = par_results[p.id]
@@ -99,7 +104,30 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-def _parallel_batch(conn, par, todo, out) -> dict:
+def _parse_iso(s):
+    if not s:
+        return None
+    try:
+        return as_utc(datetime.fromisoformat(str(s).replace("Z", "+00:00")))
+    except ValueError:
+        return None
+
+
+def _persist_enrichment(conn, pid: int, enrichment: dict) -> None:
+    conn.execute(sa.update(projects).values(enrichment=enrichment).where(projects.c.id == pid))
+
+
+def _mark_failed(conn, p, enr: dict, run_id: str, reason: str, out: dict) -> None:
+    """A paid run that will never deliver. Keep a tombstone under "parallel" so it is never resubmitted."""
+    enr.pop("parallel_run_id", None)
+    enr.pop("parallel_run_at", None)
+    enr["parallel"] = {"_failed": run_id, "reason": reason}
+    _persist_enrichment(conn, p.id, enr)
+    out["parallel_failed"] += 1
+    log.warning("enrich parallel project=%s run=%s %s: continuing without Parallel facts", p.slug, run_id, reason)
+
+
+def _parallel_batch(conn, ctx, par, todo, out) -> tuple[dict, set]:
     """Submit Parallel enrichment for every candidate that lacks it, concurrently; returns {project_id: result}."""
     import os
     from concurrent.futures import ThreadPoolExecutor
@@ -110,8 +138,19 @@ def _parallel_batch(conn, par, todo, out) -> dict:
         return {}, set()
     price = parallel_usd(getattr(par, "processor", "core"))
     meter = getattr(par, "meter", None)
-    pending = [p for p in need if (p.enrichment or {}).get("parallel_run_id")]   # already paid: free to collect
-    fresh = [p for p in need if p not in pending]
+    max_age = timedelta(hours=_env_int("PARALLEL_RUN_MAX_AGE_H", 48))
+    pending, fresh = [], []
+    for p in need:
+        enr = dict(p.enrichment or {})
+        rid = enr.get("parallel_run_id")
+        if not rid:
+            fresh.append(p)
+            continue
+        started = _parse_iso(enr.get("parallel_run_at"))
+        if started is not None and ctx.now - started > max_age:
+            _mark_failed(conn, p, enr, rid, "expired", out)
+            continue
+        pending.append(p)                                # already paid: free to collect
     while fresh and meter is not None:         # shrink the paid batch until the whole of it fits the budget
         try:
             meter.check("parallel", price * len(fresh))
@@ -123,11 +162,14 @@ def _parallel_batch(conn, par, todo, out) -> dict:
     if not need:
         return {}, set()
     submitted: dict[int, str] = {}
+    gone: dict[int, str] = {}
     hints = {}
     for p in need:
         descs = sorted({r.description for r in conn.execute(sa.select(hooks.c.description).where(
             hooks.c.project_id == p.id, hooks.c.description.is_not(None))) if r.description})[:5]
         hints[p.id] = "; ".join(descs)[:800]
+
+    from ..clients.parallel import RunGone
 
     def one(p):
         # A run submitted earlier (paid) but not yet collected is fetched for free instead of resubmitted.
@@ -137,6 +179,9 @@ def _parallel_batch(conn, par, todo, out) -> dict:
                 run_id = par.submit(p.name, hints[p.id])
                 submitted[p.id] = run_id
             return p.id, par.result(run_id)
+        except RunGone:
+            gone[p.id] = run_id
+            return p.id, None
         except BudgetExceeded:
             return p.id, None
         except Exception as e:  # one task failing must not lose the others
@@ -150,11 +195,17 @@ def _parallel_batch(conn, par, todo, out) -> dict:
     with ThreadPoolExecutor(max_workers=workers) as ex:
         results = {pid: res for pid, res in ex.map(one, need) if res}
     # Remember paid runs whose output did not arrive in time, so the next run collects them instead of paying again.
+    for p in need:
+        if p.id in gone:
+            _mark_failed(conn, p, dict(p.enrichment or {}), gone[p.id], "404", out)
     waiting: set[int] = set()
     for p in need:
+        if p.id in gone:
+            continue
         rid = submitted.get(p.id) or (p.enrichment or {}).get("parallel_run_id")
         if rid and p.id not in results:
             enr = dict(p.enrichment or {}) | {"parallel_run_id": rid}
+            enr.setdefault("parallel_run_at", ctx.now.isoformat())   # never reset the clock of a run already in flight
             conn.execute(sa.update(projects).values(enrichment=enr).where(projects.c.id == p.id))
             waiting.add(p.id)
     out["parallel_pending"] = len(waiting)
