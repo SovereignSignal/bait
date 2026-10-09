@@ -44,7 +44,8 @@ class Settings:
         return cls(max_pages=_env_int("INDEXER_MAX_PAGES", 40), topic_filter_max=_env_int("INDEXER_TOPIC_FILTER_MAX", 2000),
                    topic_chunk=max(1, _env_int("INDEXER_TOPIC_CHUNK", 500)), rpc_max_windows=_env_int("INDEXER_RPC_MAX_WINDOWS", 30),
                    pools_per_hook=_env_int("INDEXER_POOLS_PER_HOOK", 2000),
-                   pool_lookups=max(0, _env_int("INDEXER_POOL_LOOKUPS", 10)))
+                   # at least 1: a chunk in progress always finishes, so a held swap page moves every loop
+                   pool_lookups=max(1, _env_int("INDEXER_POOL_LOOKUPS", 10)))
 
 
 @dataclass
@@ -90,7 +91,9 @@ class PoolResolver:
     """Keys of hooked pools that are not v4_pools rows (past their hook's cap, or pruned), for when one of them swaps.
     One per chain, kept by the Runner across loops. First `recent` (rows this process left out of v4_pools, the newest
     RECENT_MAX), then one HyperSync Initialize query by pool id (topic1) over [floor, page end) per `topic_chunk` ids, at
-    most `pool_lookups` calls per loop. `absent` remembers ids that are not hooked pools (unhooked pools are most of a
+    most `pool_lookups` calls per loop (a chunk that started finishes). A swap page with ids left unresolved is not
+    committed: its swaps are never dropped, and what was learned carries over to the next loop. This is also the defence
+    against a hook filled to its cap with junk pools: a later real pool is a row from its first swap on. `absent` remembers ids that are not hooked pools (unhooked pools are most of a
     scan page); it is only valid for the floor it was built with, so it is cleared when the floor moves down."""
     RECENT_MAX = 50_000
     ABSENT_MAX = 1_000_000

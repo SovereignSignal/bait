@@ -799,3 +799,29 @@ def test_runner_keeps_one_resolver_per_chain_across_loops(engine, monkeypatch):
     for slug, res in got:
         by.setdefault(slug, set()).add(id(res))
     assert len(got) == 4 and all(len(v) == 1 for v in by.values()) and by["ethereum"] != by["base"]
+
+
+def test_griefing_a_hook_up_to_its_cap_never_hides_a_later_pools_swaps(engine):
+    """Junk pools fill HOOK's cap first; the real pool initialized after them is not a row, but its swap makes it one,
+    with the swap counted, even when the first loop's lookup budget is spent (the page waits, nothing is dropped)."""
+    fake = FakeHyperSync()
+    fake.inits += [init_log(pid(0x100 + n), TOKX, USDC, HOOK, 1500 + n) for n in range(3)]      # junk, blocks 1500-1502
+    fake.inits.append(init_log(LAUNCH, ZERO, USDC, HOOK, 1600))                                  # the real launch
+    fake.swaps.append((swap_log(LAUNCH, 2000, -(10 ** 17), 200 * 10 ** 6), W2))
+    s = dict(pools_per_hook=4)                                                                    # PA + 3 junk fill it
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, **s), now=NOW)
+    assert LAUNCH not in _tables(engine)[0] and _counter(engine).pools_total == 5
+    resolver = core.PoolResolver()                                                                # restarted: nothing in memory
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pool_lookups=0, **s), now=NOW, resolver=resolver)
+    assert _tables(engine)[3].swap_block == 1000                                                 # held, not skipped
+    for _ in range(3):                                                                            # the next loops carry on
+        core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pool_lookups=1, **s), now=NOW,
+                            resolver=resolver)
+    pools, daily, _, state = _tables(engine)
+    assert state.swap_block >= 2400 and pools[LAUNCH].sampled and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+    assert daily[(PA, date(2026, 9, 22))] == (3, 2, 6000.0) and _counter(engine).pools_total == 5
+
+
+def test_lookup_budget_from_env_is_at_least_one_call_so_a_held_page_always_moves(monkeypatch):
+    monkeypatch.setenv("INDEXER_POOL_LOOKUPS", "0")
+    assert core.Settings.from_env().pool_lookups == 1
