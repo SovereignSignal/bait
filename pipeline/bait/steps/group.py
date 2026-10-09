@@ -114,11 +114,16 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 except Exception as e:
                     log.warning("group claude classify failed for %s: %s", h.address, e)
                     continue
-                pname = (res.get("project") or h.name or f"hook {h.address[:10]}").strip()
-                match = next((pid for pid, n in names.items() if n.lower() == pname.lower()), None)
+                # A template answer ("Counter") names nothing: an address card, never matched or keyed by that name,
+                # so the next run neither splits it nor pays Claude again.
+                pname = useful_name(res.get("project"), max_len=None)
+                if pname and normalize_name(pname) in generic:
+                    pname = None
+                match = next((pid for pid, n in names.items() if n.lower() == pname.lower()), None) if pname else None
                 if match is None:
-                    match = _create_project(conn, ctx, pname, normalize_name(pname) or None, h.description, category=res.get("category"))
-                    names[match] = pname
+                    match = _create_project(conn, ctx, pname or f"Unlisted hook {h.address[:6]}…{h.address[-4:]}",
+                                            normalize_name(pname) or None, h.description, category=res.get("category"))
+                    names[match] = pname or ""
                     out["created"] += 1
                 _assign(conn, h, match)
                 out["by_claude"] += 1
