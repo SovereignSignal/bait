@@ -132,7 +132,8 @@ def test_wash_7d_from_indexer_one_wallet_hundreds_of_millions(conn, ctx):
 
 def test_is_wash_7d_thresholds():
     from bait.rules import is_wash_7d
-    assert is_wash_7d(1_000_000, 10) and not is_wash_7d(999_999, 1) and not is_wash_7d(5_000_000, 11)
+    assert is_wash_7d(1_000_000, 10, tvl=1_000, symmetric=False)
+    assert not is_wash_7d(999_999, 1, tvl=1, symmetric=False) and not is_wash_7d(5_000_000, 11, tvl=1, symmetric=False)
 
 
 def _optimism_ready(conn, swap_time=NOW):
