@@ -1,4 +1,5 @@
 """python -m bait.indexer: loop every INDEXER_INTERVAL seconds (default 60) over all chains.
+`python -m bait.indexer prune-pools --dry-run|--yes [--keep N]`: one-time trim of v4_pools, see indexer/prune.py.
 
 Env: DATABASE_URL, HYPERSYNC_API_TOKEN (without it: RPC fallback, Initialize only, new blocks only, 10 chains),
 INDEXER_INTERVAL, INDEXER_CHAINS (comma slugs or ids), INDEXER_MAX_PAGES, INDEXER_TOPIC_FILTER_MAX,
@@ -134,11 +135,15 @@ def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats], schema_locked:
 
 def main(argv: list[str] | None = None) -> int:
     logsetup.configure()
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["prune-pools"]:
+        from .prune import main as prune_main
+        return prune_main(argv[1:])
     ap = argparse.ArgumentParser(prog="bait.indexer")
     ap.add_argument("--once", action="store_true", help="one loop, then exit")
     ap.add_argument("--chains", default=os.environ.get("INDEXER_CHAINS"), help="comma slugs or chain ids (default all)")
     ap.add_argument("--database-url", default=None)
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    args = ap.parse_args(argv)
     try:
         chains = select_chains(args.chains)
     except ValueError as e:
