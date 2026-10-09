@@ -123,3 +123,11 @@ def test_activity_records_distinct_wallets_only_when_it_saw_every_trade_of_the_d
     conn.execute(sa.update(db.pool_stats).values(wallets_24h=None))
     activity.run(conn, ctx)
     assert conn.execute(sa.select(db.pool_stats.c.wallets_24h).where(db.pool_stats.c.pool_id == POOL_A)).scalar() is None
+
+
+def test_select_pools_skips_a_hooks_aggregate_pool(conn, ctx):
+    for p, v in (("0xreal", 10.0), (db.hook_pool_id("0xh"), 99.0)):
+        conn.execute(sa.insert(db.pools).values(pool_id=p, chain_id=8453, hook_address="0xh"))
+        conn.execute(sa.insert(db.pool_stats).values(pool_id=p, chain_id=8453, day=ctx.day, vol_24h=v, traders_24h=50))
+    keep, wash = activity.select_pools(conn, ctx, 10, 10)
+    assert keep + wash == [("0xreal", 8453)]

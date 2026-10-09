@@ -569,3 +569,28 @@ def test_a_known_wallet_bound_overrides_the_swap_bound_on_ready_chains_too(conn,
     _optimism_ready(conn)
     score.run(conn, ctx)
     assert not daily(conn, p).is_wash
+
+
+def test_pools_n_counts_every_pool_of_a_launchpad_past_the_indexer_cap(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xpad").values(pools_total=104_000))
+    other = insert_project(conn, "Other", first_seen=NOW - timedelta(days=30), slug="other")
+    insert_hook(conn, "0xother", 8453, project_id=other, name="Other")
+    for p, h in (("0xpp1", "0xpad"), ("0xop1", "0xother"), ("0xop2", "0xother")):
+        insert_pool(conn, p, 8453, h, created=NOW - timedelta(days=30))
+        series(conn, p, 8453, {END: 1000.0}, tvl=100.0, tx={END: 5})
+    score.run(conn, ctx)
+    assert (daily(conn, pad).pools_n, daily(conn, other).pools_n) == (104_000, 2)
+
+
+def test_a_hooks_aggregate_pool_adds_volume_but_is_not_a_pool(conn, ctx):
+    pad = insert_project(conn, "Pad", first_seen=NOW - timedelta(days=30), slug="pad")
+    insert_hook(conn, "0xpad", 8453, project_id=pad, name="Pad")
+    for p in ("0xpp1", db.hook_pool_id("0xpad")):
+        insert_pool(conn, p, 8453, "0xpad", created=NOW - timedelta(days=30) if p == "0xpp1" else None)
+    series(conn, "0xpp1", 8453, {END: 1000.0}, tvl=100.0, tx={END: 5})
+    series(conn, db.hook_pool_id("0xpad"), 8453, {END: 500.0}, tx={END: 40})
+    score.run(conn, ctx)
+    d = daily(conn, pad)
+    assert (d.vol_24h, d.swaps_24h, d.pools_n) == (1500.0, 45, 1)
