@@ -14,7 +14,7 @@ bait/
   mock.html            UI mock, source of the design tokens
   db/                  SQL migrations (db/migrations/000N_*.sql), applied with psql
   pipeline/            Python nightly job, Railway cron service: python -m bait run
-  web/                 Next.js App Router site, Railway web service (Drizzle -> Postgres, ISR 1h)
+  web/                 Next.js App Router site, Railway web service (Drizzle -> Postgres; ISR 1h on project and week pages, stale-while-revalidate cache elsewhere)
   railway/README.md    how the three Railway services are created and configured
   scripts/             apply-migrations.sh, run-pipeline-local.sh
   .env.example         every env var, one comment each, no values

@@ -106,22 +106,44 @@ async function fromChain(refs: TokenRef[]): Promise<void> {
   );
 }
 
-/** Resolve symbols for up to `limit` uncached tokens; returns a lookup for all requested (cached or not). */
-export async function resolveSymbols(refs: TokenRef[], limit = 60): Promise<(t: TokenRef) => string | null> {
+/** Lookups in flight, per token: concurrent renders share one resolution instead of each starting their own. */
+const inflight = new Map<string, Promise<void>>();
+
+export type ResolveDeps = { llama: (refs: TokenRef[]) => Promise<void>; chain: (refs: TokenRef[]) => Promise<void> };
+const REAL_DEPS: ResolveDeps = { llama: fromLlama, chain: fromChain };
+
+/**
+ * Resolve symbols for up to `limit` uncached tokens, waiting at most `waitMs` for the lookups. Anything still pending
+ * keeps resolving in the background and fills the cache for the next request. Returns a lookup for all requested tokens.
+ */
+export async function resolveSymbols(
+  refs: TokenRef[],
+  { limit = 60, waitMs = 1500 }: { limit?: number; waitMs?: number } = {},
+  deps: ResolveDeps = REAL_DEPS,
+): Promise<(t: TokenRef) => string | null> {
   const want = new Map<string, TokenRef>();
   for (const r of refs) {
     if (!r.address || r.address.toLowerCase() === ZERO) continue;
     const k = key(r);
-    if (!fresh(k) && !want.has(k)) want.set(k, { chainId: r.chainId, address: r.address.toLowerCase() });
+    if (!fresh(k) && !inflight.has(k) && !want.has(k)) want.set(k, { chainId: r.chainId, address: r.address.toLowerCase() });
   }
   const todo = [...want.values()].slice(0, limit);
   if (todo.length) {
-    try {
-      await fromLlama(todo);
-      await fromChain(todo.filter((r) => !cache.get(key(r))?.sym));
-    } catch {
-      /* never fail a page over symbols */
-    }
+    const work = (async () => {
+      try {
+        await deps.llama(todo);
+        await deps.chain(todo.filter((r) => !cache.get(key(r))?.sym));
+      } catch {
+        /* never fail a page over symbols */
+      }
+    })();
+    const keys = todo.map(key);
+    const done = work.finally(() => keys.forEach((k) => inflight.delete(k)));
+    keys.forEach((k) => inflight.set(k, done));
   }
+  const pending = Promise.all(refs.map((r) => inflight.get(key(r))).filter((p): p is Promise<void> => !!p));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([pending, new Promise<void>((res) => { timer = setTimeout(res, waitMs); })]);
+  clearTimeout(timer);
   return (t: TokenRef) => cache.get(key(t))?.sym ?? null;
 }
