@@ -28,6 +28,10 @@ MAX_SWAP_USD = 500_000_000.0    # a single swap above $500M is a broken quote, n
 MISMATCH = 20.0                 # sides disagree by more than 20x: trust the smaller one
 
 
+class PricesUnavailable(RuntimeError):
+    """DefiLlama did not answer for a batch. The caller must not commit the page: a swap stored at $0 is never revalued."""
+
+
 class PriceBook:
     def __init__(self, client: httpx.Client, ttl: float = TTL, clock=time.time):
         self.client = client
@@ -44,13 +48,17 @@ class PriceBook:
         now = self.clock()
         ids = {a.lower(): self.coin_id(chain, a) for a in addrs}
         missing = sorted({cid for cid in ids.values() if cid not in self._cache or now - self._cache[cid][0] > self.ttl})
+        failed = 0
         for i in range(0, len(missing), BATCH):
             chunk = missing[i:i + BATCH]
             got = self._fetch(chunk)
-            if got is None:  # failed call: do not cache, try again next batch
+            if got is None:  # transient failure: nothing cached, the caller retries the page
+                failed += len(chunk)
                 continue
             for cid in chunk:
                 self._cache[cid] = (now, got.get(cid))
+        if failed:
+            raise PricesUnavailable(f"{chain.slug}: DefiLlama unavailable for {failed} coins")
         out = {}
         for a, cid in ids.items():
             hit = self._cache.get(cid)
@@ -62,12 +70,19 @@ class PriceBook:
         self.calls += 1
         try:
             r = self.client.get(LLAMA + ",".join(ids), headers={"User-Agent": "bait-indexer/0.1"}, timeout=30)
-            if r.status_code != 200:
-                log.warning("defillama HTTP %s for %d coins", r.status_code, len(ids))
-                return None
-            coins = (r.json() or {}).get("coins") or {}
-        except (httpx.HTTPError, ValueError) as e:
+        except httpx.HTTPError as e:
             log.warning("defillama error %r", e)
+            return None
+        if r.status_code == 429 or r.status_code >= 500:
+            log.warning("defillama HTTP %s for %d coins; page retried next loop", r.status_code, len(ids))
+            return None
+        if r.status_code != 200:
+            log.warning("defillama HTTP %s for %d coins; treated as unpriced", r.status_code, len(ids))
+            return {}
+        try:
+            coins = (r.json() or {}).get("coins") or {}
+        except ValueError as e:
+            log.warning("defillama bad JSON %r", e)
             return None
         out = {}
         for cid, c in coins.items():
