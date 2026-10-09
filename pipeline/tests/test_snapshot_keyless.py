@@ -59,7 +59,7 @@ def test_keyless_rows_feed_scoring_and_wash_is_excluded(conn, ctx, monkeypatch):
     assert (real_row.vol_7d, real_row.vol_7d_prev, real_row.vol_24h) == (70_000, 35_000, 10_000)
     assert (real_row.swaps_24h, real_row.swaps_7d) == (500, None)      # one known day of swaps is not a 7-day count
     assert real_row.score_trending > 0 and not real_row.is_spam
-    assert wash_row.is_spam and wash_row.score_trending == 0 and res["wash"] == 1
+    assert wash_row.is_wash and not wash_row.is_spam and wash_row.score_trending == 0 and res["wash"] == 1
 
 
 def test_keyless_rerun_clears_a_stale_onchain_volume_label(conn, ctx, monkeypatch):
