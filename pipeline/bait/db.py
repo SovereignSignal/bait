@@ -4,6 +4,7 @@ JSONB on Postgres, JSON on SQLite so tests run in memory. Upsert helper picks th
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
@@ -308,6 +309,13 @@ def add_missing_columns(engine: sa.Engine, columns: Iterable[tuple[str, str, str
                 conn.execute(sa.text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {sqltype}'))
                 added.append(f"{table}.{column}")
     return added
+
+
+def savepoint(conn: sa.Connection):
+    """Per-item isolation inside a step transaction. Postgres aborts the whole transaction on the first
+    statement error, so each item's writes run in a SAVEPOINT that rolls back alone. SQLite: no-op (pysqlite's
+    savepoint support is unreliable and the test suite runs there)."""
+    return conn.begin_nested() if conn.dialect.name == "postgresql" else nullcontext()
 
 
 def upsert(conn: sa.Connection, table: sa.Table, rows: Sequence[dict], keys: Iterable[str],

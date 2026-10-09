@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -60,3 +61,19 @@ def insert_snap(conn, pool_id, chain_id, day, tvl, vol, tx):
 def _no_keyless_network(monkeypatch):
     """The snapshot step falls back to GeckoTerminal + public RPC; tests must never hit the network."""
     monkeypatch.setenv("KEYLESS", "0")
+
+
+@pytest.fixture
+def pg_engine():
+    """Real Postgres for behaviour SQLite cannot show (aborted transactions, savepoints, advisory locks).
+    Skips unless TEST_DATABASE_URL is set; see scripts/pg-test-cluster.sh."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL not set")
+    e = db.make_engine(url)
+    db.metadata.drop_all(e)
+    db.create_all(e)
+    db.add_missing_columns(e)
+    yield e
+    db.metadata.drop_all(e)
+    e.dispose()

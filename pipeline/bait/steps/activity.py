@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 
 from ..clients.nansen import is_smart_money
-from ..db import as_utc, pool_stats, pool_top_wallets, pools, upsert, wallet_labels
+from ..db import as_utc, pool_stats, pool_top_wallets, pools, savepoint, upsert, wallet_labels
 from . import RunContext, log
 
 TOP_WALLETS = 20
@@ -53,17 +53,18 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if net is None:
             continue
         try:
-            trades = K.fetch_trades(http, net, pid)
-            if trades is None:
-                out["pools_no_trades"] += 1
-                continue
-            rows = aggregate(trades, pid, cid, ctx.day)
-            conn.execute(sa.delete(pool_top_wallets).where(pool_top_wallets.c.pool_id == pid, pool_top_wallets.c.chain_id == cid,
-                                                           pool_top_wallets.c.day == ctx.day))
-            upsert(conn, pool_top_wallets, rows, keys=["pool_id", "chain_id", "day", "address"])
-            out["pools_fetched"] += 1
-            out["trades"] += len(trades)
-            out["wallets"] += len(rows)
+            with savepoint(conn):
+                trades = K.fetch_trades(http, net, pid)
+                if trades is None:
+                    out["pools_no_trades"] += 1
+                    continue
+                rows = aggregate(trades, pid, cid, ctx.day)
+                conn.execute(sa.delete(pool_top_wallets).where(pool_top_wallets.c.pool_id == pid, pool_top_wallets.c.chain_id == cid,
+                                                               pool_top_wallets.c.day == ctx.day))
+                upsert(conn, pool_top_wallets, rows, keys=["pool_id", "chain_id", "day", "address"])
+                out["pools_fetched"] += 1
+                out["trades"] += len(trades)
+                out["wallets"] += len(rows)
         except Exception as e:  # one pool must not kill the night
             out["errors"] += 1
             log.warning("activity pool=%s chain=%s failed: %s", pid, cid, e)

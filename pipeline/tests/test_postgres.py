@@ -1,0 +1,47 @@
+"""Postgres-only behaviour. Run with: eval "$(scripts/pg-test-cluster.sh start)" && .venv/bin/python -m pytest -q tests/test_postgres.py"""
+from datetime import timedelta
+
+import pytest
+import sqlalchemy as sa
+
+from bait import db
+from bait.steps import RunContext, signals
+from tests.conftest import DAY, FIXTURE, NOW
+
+
+def _ctx():
+    return RunContext(day=DAY, now=NOW, hooklist_file=FIXTURE, max_code_fetch=0,
+                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "parallel", "nansen", "github", "names")})
+
+
+def test_one_bad_item_does_not_lose_the_step_on_postgres(pg_engine):
+    # Three signals targets. The middle one's receipt write violates a constraint. Before savepoints, Postgres
+    # aborted the whole transaction: the first project's signals vanished too and the log still said "ok".
+    with pg_engine.begin() as conn:
+        pids = []
+        for i, name in enumerate(("Alpha", "Beta", "Gamma")):
+            r = conn.execute(sa.insert(db.projects).values(slug=name.lower(), name=name, norm_name=name.lower(),
+                                                           first_seen_at=NOW - timedelta(days=40)))
+            pid = r.inserted_primary_key[0]
+            pids.append(pid)
+            conn.execute(sa.insert(db.hooks).values(address=f"0x{i:040x}", chain_id=1, project_id=pid, name=name,
+                                                    first_seen_at=NOW, flags={}, properties={}))
+            conn.execute(sa.insert(db.project_daily).values(project_id=pid, day=DAY, tvl_usd=1e6 - i, vol_7d=0, vol_7d_prev=0,
+                                                            swaps_7d=0, pools_n=1, score_trending=30.0 - i, is_new=False, is_spam=False))
+
+    class Exa:
+        def search_recent(self, query, days=30, n=10, now=None):
+            if "Beta" in query:
+                # url None violates receipts.url NOT NULL -> IntegrityError inside the per-project try
+                return [{"url": None, "title": "Beta hook ships", "source": "x", "published_at": NOW, "highlights": []}]
+            return [{"url": f"https://e.com/{query[:5]}", "title": f"{query[1:6]} hook ships", "source": "e.com",
+                     "published_at": NOW - timedelta(days=1), "highlights": []}]
+
+    ctx = _ctx()
+    ctx.clients["exa"] = Exa()
+    with pg_engine.begin() as conn:
+        out = signals.run(conn, ctx)
+    assert out["errors"] == 1
+    with pg_engine.connect() as conn:
+        got = {r.project_id for r in conn.execute(sa.select(db.signals.c.project_id).where(db.signals.c.kind == "alive"))}
+    assert got == {pids[0], pids[2]}              # Alpha and Gamma persisted; Beta's savepoint rolled back on its own

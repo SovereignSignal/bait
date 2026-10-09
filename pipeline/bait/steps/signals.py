@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from ..clients.nansen import is_smart_money
 from ..rules import name_tokens, receipt_relevant
 from ..config import CHAIN_BY_ID
-from ..db import as_utc, hooks, pool_snapshots, pools, project_daily, projects, receipts, signals, upsert, utcnow, wallet_labels
+from ..db import as_utc, hooks, pool_snapshots, pools, project_daily, projects, receipts, savepoint, signals, upsert, utcnow, wallet_labels
 from ..rules import is_alive
 from . import RunContext, log
 
@@ -28,39 +28,41 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         changed = False
         hits = None
         try:
-            if exa is not None and name_tokens(p.name):   # unnamed projects can never keep a receipt: don't pay to search
-                try:
-                    hits = exa.search_recent(f'"{p.name}" Uniswap v4 hook', now=ctx.now)
-                except BudgetExceeded:
-                    out["budget_stop"] = 1
-                    exa = None            # no more paid searches this run; free signals continue
-                    hits = None
-            if exa is not None and hits is not None:
-                out["exa"] += 1
-                hits = [h for h in hits if receipt_relevant(p.name, h["title"], h["source"])]
-                rows = [{"project_id": p.id, "url": h["url"], "title": h["title"], "source": h["source"], "published_at": h["published_at"]} for h in hits]
-                out["receipts"] += upsert(conn, receipts, rows, keys=["project_id", "url"])
-                latest = max((h["published_at"] for h in hits if h["published_at"]), default=None)
-                changed |= _set_signal(conn, p.id, "exa", {"hits_30d": len(hits), "latest": latest.isoformat() if latest else None,
-                                                            "top": [{"url": h["url"], "title": h["title"]} for h in hits[:2]]}, ctx.now)
-            if gh is not None and p.github:
-                act = gh.activity(p.github, now=ctx.now)
-                if act:
-                    out["github"] += 1
-                    changed |= _set_signal(conn, p.id, "github", act, ctx.now)
-            if nansen is not None:
-                res = _nansen(conn, ctx, p, nansen, graph, out)
-                if res is not None:
-                    changed |= _set_signal(conn, p.id, "nansen", res, ctx.now)
-            changed |= _set_signal(conn, p.id, "alive", {"alive": _alive(conn, p.id, ctx.now)}, ctx.now)
+            with savepoint(conn):
+                if exa is not None and name_tokens(p.name):   # unnamed projects can never keep a receipt: don't pay to search
+                    try:
+                        hits = exa.search_recent(f'"{p.name}" Uniswap v4 hook', now=ctx.now)
+                    except BudgetExceeded:
+                        out["budget_stop"] = 1
+                        exa = None            # no more paid searches this run; free signals continue
+                        hits = None
+                if exa is not None and hits is not None:
+                    out["exa"] += 1
+                    hits = [h for h in hits if receipt_relevant(p.name, h["title"], h["source"])]
+                    rows = [{"project_id": p.id, "url": h["url"], "title": h["title"], "source": h["source"], "published_at": h["published_at"]} for h in hits]
+                    out["receipts"] += upsert(conn, receipts, rows, keys=["project_id", "url"])
+                    latest = max((h["published_at"] for h in hits if h["published_at"]), default=None)
+                    changed |= _set_signal(conn, p.id, "exa", {"hits_30d": len(hits), "latest": latest.isoformat() if latest else None,
+                                                                "top": [{"url": h["url"], "title": h["title"]} for h in hits[:2]]}, ctx.now)
+                if gh is not None and p.github:
+                    act = gh.activity(p.github, now=ctx.now)
+                    if act:
+                        out["github"] += 1
+                        changed |= _set_signal(conn, p.id, "github", act, ctx.now)
+                if nansen is not None:
+                    res = _nansen(conn, ctx, p, nansen, graph, out)
+                    if res is not None:
+                        changed |= _set_signal(conn, p.id, "nansen", res, ctx.now)
+                changed |= _set_signal(conn, p.id, "alive", {"alive": _alive(conn, p.id, ctx.now)}, ctx.now)
         except Exception as e:
             out["errors"] += 1
             log.warning("signals project=%s failed: %s", p.slug, e)
         if claude is not None and _needs_blurb(conn, p):
             try:
-                blurb = claude.why_blurb(_blurb_ctx(conn, p, daily))
-                conn.execute(sa.update(projects).values(why_blurb=blurb.strip()[:400], blurb_at=ctx.now).where(projects.c.id == p.id))
-                out["blurbs"] += 1
+                with savepoint(conn):
+                    blurb = claude.why_blurb(_blurb_ctx(conn, p, daily))
+                    conn.execute(sa.update(projects).values(why_blurb=blurb.strip()[:400], blurb_at=ctx.now).where(projects.c.id == p.id))
+                    out["blurbs"] += 1
             except BudgetExceeded:
                 out["budget_stop"] = 1
                 claude = None

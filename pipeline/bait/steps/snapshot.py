@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 
 from ..config import CHAINS
-from ..db import hooks, pool_snapshots, pool_stats, pools, upsert
+from ..db import hooks, pool_snapshots, pool_stats, pools, savepoint, upsert
 from . import RunContext, log
 
 
@@ -20,7 +20,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if g is None or not ch.subgraph_id:
             continue
         try:
-            n = _snapshot_chain(conn, ctx, g, ch)
+            with savepoint(conn):
+                n = _snapshot_chain(conn, ctx, g, ch)
             out["chains"] += 1
             out["pools"] += n
             covered.add(ch.chain_id)
@@ -31,7 +32,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     rest = [ch.chain_id for ch in wanted if ch.chain_id not in covered]
     if rest and os.environ.get("KEYLESS", "1") != "0":
         try:
-            _keyless(conn, ctx, rest, out)
+            with savepoint(conn):
+                _keyless(conn, ctx, rest, out)
         except Exception as e:
             out["errors"] += 1
             log.warning("snapshot keyless failed: %s", e)

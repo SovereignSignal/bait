@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 
 from ..config import CHAIN_BY_ID
-from ..db import as_utc, hooks, pool_stats, pools, projects, utcnow
+from ..db import as_utc, hooks, pool_stats, pools, projects, savepoint, utcnow
 from . import RunContext, log
 
 
@@ -42,13 +42,14 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         }
         enrichment = dict(fresh_enr.get(p.id) or {})
         try:
-            if bs is not None and "source" not in enrichment:
-                src = _verified_source(bs, hs)
-                if src:
-                    enrichment["source"] = src
-                    out["source"] += 1
-            ctxd["enrichment"] = enrichment
-            res = claude.what_line(ctxd)
+            with savepoint(conn):
+                if bs is not None and "source" not in enrichment:
+                    src = _verified_source(bs, hs)
+                    if src:
+                        enrichment["source"] = src
+                        out["source"] += 1
+                ctxd["enrichment"] = enrichment
+                res = claude.what_line(ctxd)
         except BudgetExceeded:
             out["budget_stop"] = 1
             if enrichment != dict(p.enrichment or {}):   # keep what was already paid for
