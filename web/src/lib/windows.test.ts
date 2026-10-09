@@ -21,6 +21,10 @@ test("wash rows: in All with the rest, never in Trending, New or movers", () => 
   assert.deepEqual(applyTab(rows, { tab: "all" }).map((r) => r.slug), ["wash", "real", "fresh"]);
   assert.ok(!movers(rows).some((r) => r.slug === "wash"));
 });
+test("wash rows are listed in All only, not in the In Uniswap app tab", () => {
+  const rows = [row({ slug: "real", routable: "eligible", vol7d: 5 }), row({ slug: "wash", routable: "eligible", isWash: true, vol7d: 9 })];
+  assert.deepEqual(applyTab(rows, { tab: "verified" }).map((r) => r.slug), ["real"]);
+});
 test("weekDelta compares two closed weeks: flat reads 0, a tiny prior week is no basis", () => {
   assert.equal(weekDelta({ vol7d: 70_000, vol7dPrev: 70_000 }), 0);
   assert.equal(weekDelta({ vol7d: 70_000, vol7dPrev: 999 }), null);
@@ -34,5 +38,6 @@ test("walletsText marks an upper bound", () => {
 test("washLine names every reason", () => {
   assert.equal(washLine("24h,vol_tvl"), "Wash-like volume: $250K+ in a day through 25 or fewer wallets; 7-day volume over 300x its liquidity from fewer than 50 wallets.");
   assert.equal(washLine("7d,no_liquidity"), "Wash-like volume: $1M+ in 7 days through 10 or fewer wallets; $1M+ in 7 days through a pool with $1K or less of liquidity.");
+  assert.equal(washLine("unverified"), "Wash-like volume: $1M+ moved through a pool that looks idle, with no wallet data to check who moved it.");
   assert.equal(washLine(null), "Wash-like volume.");
 });
