@@ -1,6 +1,7 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
 import { CHAINS } from "./chains";
 import { weekDelta } from "./feed";
+import { clip, fmtDelta, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
@@ -24,11 +25,17 @@ export function sourceLine(p: ProjectSummary): string {
   return parts.join(" · ");
 }
 
-/** "▲ 26%" / "▼ 8%" / null when there is no base week. */
+/** "+26%" / "-8%" / null when there is no base week. */
 export function deltaText(r: { vol7d: number; vol7dPrev: number }): { text: string; up: boolean } | null {
   const d = weekDelta(r);
-  if (d == null) return null;
-  return { text: `${d >= 0 ? "▲" : "▼"} ${Math.abs(Math.round(d))}%`, up: d >= 0 };
+  return d == null ? null : { text: fmtDelta(d), up: d >= 0 };
+}
+
+export type Win = "24h" | "7d";
+
+/** The number a row or mover shows and the window it covers. 24h only when asked for and known. */
+export function rowMetric(r: { vol24h: number | null; vol7d: number }, use24h: boolean): { v: number; win: Win } {
+  return use24h && r.vol24h != null ? { v: r.vol24h, win: "24h" } : { v: r.vol7d, win: "7d" };
 }
 
 const HOOK_SEARCH_CAP = 8;
@@ -38,6 +45,7 @@ export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
   return {
     slug: p.slug,
     name: p.name,
+    whatLine: clip(p.whatLine ?? "", 90),
     color: p.color,
     category: p.category,
     secondaryCategories: p.secondaryCategories,
@@ -60,4 +68,13 @@ export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
 export function pace(vol24h: number | null, vol7d: number): number {
   if (vol24h == null || vol7d <= 0) return 0;
   return Math.min(100, Math.round(((vol24h * 7) / vol7d) * 100));
+}
+
+export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev">, rank: number | undefined, m: { v: number; win: Win }): string {
+  const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
+  const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "24-hour"} volume`];
+  const d = weekDelta(r);
+  if (r.isNew) parts.push("new");
+  else if (d != null) parts.push(`${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))} percent`);
+  return parts.join(", ");
 }

@@ -37,11 +37,12 @@ export function Terminal({
       <Suspense fallback={<MoversFallback rows={moverRows} />}>
         <Movers rows={moverRows} />
       </Suspense>
-      <main className={s.app}>
-        <Suspense fallback={<ProjectListFallback rows={rows} selected={project?.slug} now={now} />}>
-          <ProjectList rows={rows} selected={project?.slug} now={now} launches={launches} launchesNow={launchesNow} />
+      <main className={s.app} id="main" tabIndex={-1}>
+        {view === "list" && <h1 className={s.listTitle}>Hook projects</h1>}
+        <Suspense fallback={<ProjectListFallback rows={rows} selected={project?.slug} view={view} now={now} />}>
+          <ProjectList rows={rows} selected={project?.slug} view={view} now={now} launches={launches} launchesNow={launchesNow} />
         </Suspense>
-        <section className={s.detail} aria-live="polite" aria-label="Project">
+        <section className={s.detail} aria-label="Project">
           {view === "detail" && (
             <Suspense fallback={<BackLinkView />}>
               <BackLink />
