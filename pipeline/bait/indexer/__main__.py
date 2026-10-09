@@ -28,12 +28,13 @@ log = logging.getLogger("bait.indexer")
 
 
 class Runner:
-    def __init__(self, engine, token: str | None, chains, client: httpx.Client, settings: Settings):
+    def __init__(self, engine, token: str | None, chains, client: httpx.Client, settings: Settings, should_stop=None):
         self.engine = engine
         self.token = token
         self.mode, self.chains = plan(token, chains)
         self.client = client
         self.settings = settings
+        self.should_stop = should_stop or (lambda: False)
         self.prices = PriceBook(client)
         self.loops = 0
         self._pruned_on = None
@@ -44,10 +45,19 @@ class Runner:
         self.loops += 1
         out: dict[str, ChainStats] = {}
         for ch in self.chains:
+            if self.should_stop():
+                log.info("stop requested: leaving the loop before chain=%s", ch.slug)
+                break
+            # Railway starts the new container before stopping the old one: never two processes on one chain.
+            lock = db.try_advisory_lock(self.engine, f"bait-indexer:{ch.chain_id}")
+            if lock is None:
+                log.info("chain=%s is being synced by another indexer process; skipped this loop", ch.slug)
+                out[ch.slug] = ChainStats(mode=self.mode, error="locked")
+                continue
             try:
                 if self.mode == "hypersync":
                     hs = self._hs.setdefault(ch.chain_id, HyperSync(ch.hypersync, self.token, self.client))
-                    out[ch.slug] = sync_hypersync(self.engine, ch, hs, self.prices, self.settings)
+                    out[ch.slug] = sync_hypersync(self.engine, ch, hs, self.prices, self.settings, should_stop=self.should_stop)
                 else:
                     _, url, window = rpc_endpoint(ch)
                     rpc = self._rpc.setdefault(ch.chain_id, Rpc(url, self.client))
@@ -58,6 +68,8 @@ class Runner:
             except Exception as e:  # one chain failing must not stop the others
                 log.warning("chain=%s sync failed: %s: %s", ch.slug, type(e).__name__, e)
                 out[ch.slug] = ChainStats(mode=self.mode, error=type(e).__name__)
+            finally:
+                lock.close()
         today = datetime.now(timezone.utc).date()
         if self._pruned_on != today:
             try:
@@ -104,20 +116,20 @@ def main(argv: list[str] | None = None) -> int:
     db.add_missing_indexes(engine)
     token = env("HYPERSYNC_API_TOKEN")
     client = httpx.Client(follow_redirects=True)
-    runner = Runner(engine, token, chains, client, Settings.from_env())
+    stop = {"flag": False}
+
+    def _stop(signum, _frame):
+        log.info("signal %s: stopping after the current page", signum)
+        stop["flag"] = True
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    runner = Runner(engine, token, chains, client, Settings.from_env(), should_stop=lambda: stop["flag"])
     if runner.mode == "rpc":
         log.warning("HYPERSYNC_API_TOKEN not set: RPC fallback on %d chains (%s), new Initialize logs only, no backfill and "
                     "no swaps. Full coverage (HyperSync on %d chains: pool history, swaps, wallets, volume) needs the token.",
                     len(runner.chains), ",".join(c.slug for c in runner.chains), len(chains))
     else:
         log.info("HyperSync mode on %d chains: %s", len(runner.chains), ",".join(c.slug for c in runner.chains))
-    stop = {"flag": False}
-
-    def _stop(signum, _frame):
-        log.info("signal %s: stopping after this loop", signum)
-        stop["flag"] = True
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
     while True:
         t0 = time.monotonic()
         runner.run_once()

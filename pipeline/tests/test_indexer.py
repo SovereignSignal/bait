@@ -398,7 +398,7 @@ def test_rpc_gap_clears_swap_cursor_for_later_hypersync_backfill(engine):
 def test_runner_one_chain_failing_does_not_stop_others(engine, monkeypatch, caplog):
     seen = []
 
-    def fake_sync(engine_, ch, hs, prices, settings):
+    def fake_sync(engine_, ch, hs, prices, settings, **kw):
         seen.append(ch.slug)
         if ch.slug == "ethereum":
             raise RuntimeError("boom")
@@ -428,3 +428,22 @@ def test_additive_schema_upgrades_an_existing_indexer_database():
     with e.connect() as c:
         assert c.execute(sa.text("SELECT unpriced_swaps FROM pool_daily_onchain")).scalar_one() == 0
     assert "onchain_watermarks" in sa.inspect(e).get_table_names()
+
+
+def test_stop_flag_ends_a_sync_between_pages(engine):
+    asked = {"n": 0}
+
+    def stop():
+        asked["n"] += 1
+        return asked["n"] > 3
+    st = core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(), now=NOW, should_stop=stop)
+    assert st.pages == 3                                  # three Initialize pages, then the stop was honoured
+
+
+def test_runner_stops_between_chains(engine, monkeypatch):
+    seen = []
+    monkeypatch.setattr("bait.indexer.__main__.sync_hypersync",
+                        lambda e, ch, hs, p, s, **kw: seen.append(ch.slug) or core.ChainStats(mode="hypersync"))
+    r = Runner(engine, "tok", select_chains("ethereum,base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings(), should_stop=lambda: len(seen) >= 1)
+    assert set(r.run_once()) == {"ethereum"} and seen == ["ethereum"]

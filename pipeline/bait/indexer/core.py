@@ -126,7 +126,8 @@ def swap_start_ts(now: datetime) -> tuple[date, int]:
 
 
 def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices: PriceBook | None,
-                   settings: Settings, now: datetime | None = None) -> ChainStats:
+                   settings: Settings, now: datetime | None = None, should_stop=None) -> ChainStats:
+    stop = should_stop or (lambda: False)
     st = ChainStats(mode="hypersync")
     now = now or datetime.now(timezone.utc)
     head = hs.height()
@@ -149,7 +150,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             state = store.get_state(conn, chain.chain_id)
 
     init_from = state.initialize_block or 0
-    while init_from < end and st.pages < settings.max_pages:
+    while init_from < end and st.pages < settings.max_pages and not stop():
         logs, blocks, _, nb, _ = page(hs.query(initialize_query(chain.pool_manager, init_from, end)))
         st.pages += 1
         if nb is None or nb <= init_from:
@@ -177,7 +178,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             known = store.all_pools(conn, chain.chain_id)
         ids = sorted(known)
         chunks = [ids[i:i + settings.topic_chunk] for i in range(0, len(ids), settings.topic_chunk)]
-        while swap_from < swap_end and st.pages < settings.max_pages:
+        while swap_from < swap_end and st.pages < settings.max_pages and not stop():
             agg = SwapAgg()
             logs, blocks, txs, nb, _ = page(hs.query(swap_query(chain.pool_manager, swap_from, swap_end, chunks[0])))
             st.pages += 1
@@ -198,7 +199,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             swap_from = nb
     else:
         st.mode = "hypersync/scan"
-        while swap_from < swap_end and st.pages < settings.max_pages:
+        while swap_from < swap_end and st.pages < settings.max_pages and not stop():
             agg = SwapAgg()
             logs, blocks, txs, nb, _ = page(hs.query(swap_query(chain.pool_manager, swap_from, swap_end)))
             st.pages += 1
