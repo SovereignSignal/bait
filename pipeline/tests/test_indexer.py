@@ -894,3 +894,22 @@ def test_a_held_page_commits_while_initialize_churn_evicts_the_recent_cache(engi
     pools, daily, _, state = _tables(engine)
     assert state.swap_block >= 2400 and loop < 8, loop
     assert all(pools[p].sampled and daily[(p, date(2026, 9, 22))] == (1, 1, 200.0) for p in held)
+
+
+def test_lookup_cost_is_logged_per_page_and_shown_in_the_heartbeat(engine, caplog):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    with caplog.at_level("INFO", logger="bait.indexer"):
+        st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pools_per_hook=1), now=NOW,
+                                 resolver=core.PoolResolver())
+    # PB: one call over [1600, 1700); LAUNCH: [1600, 2400) is two 700-block responses, both counted against the budget
+    assert (st.unknown, st.lookups, st.chunk_calls) == (2, 3, 2)
+    assert ",unknown=2" in heartbeat(1, "hypersync", {"base": st}) and ",chunk_calls=2" in heartbeat(1, "hypersync", {"base": st})
+    assert any("swap page 1700-2400" in m and "unknown=1" in m and "calls=2" in m for m in caplog.messages)
+
+
+def test_lookup_budget_triples_while_the_swap_cursor_is_far_behind(monkeypatch):
+    s = core.Settings(pool_lookups=10)
+    assert (core.lookup_budget(s, 100_000), core.lookup_budget(s, 100_001)) == (10, 30)
+    monkeypatch.setenv("INDEXER_POOL_LOOKUPS_CATCHUP", "5")
+    assert core.lookup_budget(core.Settings.from_env(), 200_000) == 50
