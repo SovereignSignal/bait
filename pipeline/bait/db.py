@@ -320,7 +320,21 @@ hook_pool_counts = sa.Table(
     sa.Column("first_block", sa.BigInteger),
     sa.Column("last_block", sa.BigInteger),
     sa.Column("last_seen", TS),
+    # Second cap: pools past the first that became rows (v4_pools.sampled) on a priced swap >= INDEXER_LATE_INSERT_MIN_USD,
+    # at most INDEXER_SAMPLED_POOLS_PER_HOOK. Swaps of the others (dust, unpriced, past both caps), all time; per day they
+    # are in pool_daily_onchain / pool_wallet_day under hook_pool_id(hook), the hook's aggregate pool.
+    sa.Column("sampled_total", sa.BigInteger, nullable=False, server_default="0"),
+    sa.Column("swaps_total", sa.BigInteger, nullable=False, server_default="0"),
+    sa.Column("volume_usd_total", sa.Float, nullable=False, server_default="0"),
 )
+
+# One pool id per capped hook for the swaps of its pools that are not rows. Never a real pool id (0x + 64 hex); the step
+# onchain gives it a pools row so its per-day usage reaches the hook's project; per-pool web lists skip it.
+HOOK_POOL_PREFIX = "hook:"
+
+
+def hook_pool_id(hook: str) -> str:
+    return HOOK_POOL_PREFIX + hook
 # --- /indexer ---
 
 run_receipts = sa.Table(

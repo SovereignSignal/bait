@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS hook_pool_counts (
   first_block  bigint,
   last_block   bigint,
   last_seen    timestamptz,
+  -- second cap: pools past the first that became rows on a priced swap >= INDEXER_LATE_INSERT_MIN_USD
+  sampled_total    bigint           NOT NULL DEFAULT 0,
+  -- swaps of pools past both caps (or under the minimum), all time; per day they sit on the pool id 'hook:<address>'
+  swaps_total      bigint           NOT NULL DEFAULT 0,
+  volume_usd_total double precision NOT NULL DEFAULT 0,
   PRIMARY KEY (chain_id, hook_address)
 );
 -- Every pool initialized through the hook, from the indexer (nightly step onchain). NULL = no indexer rows.

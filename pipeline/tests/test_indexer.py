@@ -659,7 +659,8 @@ def test_pool_cap_schema_is_additive_on_an_existing_database():
     with e.connect() as c:
         assert c.execute(sa.text("SELECT sampled FROM v4_pools")).scalar_one() == 0
     assert {c["name"] for c in sa.inspect(e).get_columns("hook_pool_counts")} == {
-        "chain_id", "hook_address", "pools_total", "first_block", "last_block", "last_seen"}
+        "chain_id", "hook_address", "pools_total", "first_block", "last_block", "last_seen", "sampled_total", "swaps_total",
+        "volume_usd_total"}
     assert "pools_total" in {c["name"] for c in sa.inspect(e).get_columns("hooks")}
 
 
@@ -825,3 +826,44 @@ def test_griefing_a_hook_up_to_its_cap_never_hides_a_later_pools_swaps(engine):
 def test_lookup_budget_from_env_is_at_least_one_call_so_a_held_page_always_moves(monkeypatch):
     monkeypatch.setenv("INDEXER_POOL_LOOKUPS", "0")
     assert core.Settings.from_env().pool_lookups == 1
+
+
+L2 = pid(0xE)
+
+
+def test_a_dust_or_unpriced_swap_makes_no_row_but_its_usage_stays_on_the_hook(engine):
+    fake = FakeHyperSync()
+    fake.inits += [init_log(LAUNCH, ZERO, USDC, HOOK, 1600), init_log(L2, TOKX, TOKX, HOOK, 1601)]
+    fake.swaps += [(swap_log(LAUNCH, 2000, -(10 ** 12), 2 * 10 ** 3), W2),        # $0.002: dust
+                   (swap_log(L2, 2001, -(10 ** 18), 10 ** 18), W3),                # no priced side
+                   (swap_log(LAUNCH, 3000, -(10 ** 17), 200 * 10 ** 6), W2)]      # later a real $200 swap (2026-09-23)
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1), now=NOW)
+    pools, daily, wallets, _ = _tables(engine)
+    agg = db.hook_pool_id(HOOK)
+    assert L2 not in pools and pools[LAUNCH].sampled and (st.late, st.folded) == (1, 2)
+    assert daily[(agg, date(2026, 9, 22))] == (2, 2, 0.0) and daily[(LAUNCH, date(2026, 9, 23))] == (1, 1, 200.0)
+    assert {(p, a) for p, _, a in wallets if p == agg} == {(agg, W2), (agg, W3)}
+    k = _counter(engine)
+    assert (k.pools_total, k.sampled_total, k.swaps_total, round(k.volume_usd_total, 3)) == (3, 1, 2, 0.002)
+
+
+def test_late_rows_stop_at_the_sampled_cap_and_the_rest_stays_on_the_hook(engine):
+    fake = FakeHyperSync()
+    fake.inits += [init_log(LAUNCH, ZERO, USDC, HOOK, 1600), init_log(L2, ZERO, USDC, HOOK, 1601)]
+    fake.swaps += [(swap_log(LAUNCH, 2000, -(10 ** 17), 200 * 10 ** 6), W2),
+                   (swap_log(L2, 2001, -(10 ** 17), 300 * 10 ** 6), W3)]       # $300: the bigger swap takes the one slot
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1, sampled_per_hook=1), now=NOW)
+    pools, daily, _, _ = _tables(engine)
+    d = date(2026, 9, 22)
+    assert pools[L2].sampled and LAUNCH not in pools and (st.late, st.folded) == (1, 1)
+    assert daily[(L2, d)] == (1, 1, 300.0) and daily[(db.hook_pool_id(HOOK), d)] == (1, 1, 200.0)
+    k = _counter(engine)
+    assert (k.pools_total, k.sampled_total, k.swaps_total, k.volume_usd_total) == (3, 1, 1, 200.0)
+    assert ",late=1,folded=1" in heartbeat(1, "hypersync", {"base": st})
+
+
+def test_late_insert_settings_from_env(monkeypatch):
+    monkeypatch.setenv("INDEXER_LATE_INSERT_MIN_USD", "25.5")
+    monkeypatch.setenv("INDEXER_SAMPLED_POOLS_PER_HOOK", "7")
+    s = core.Settings.from_env()
+    assert (s.late_min_usd, s.sampled_per_hook) == (25.5, 7) and (core.Settings().late_min_usd, core.Settings().sampled_per_hook) == (10.0, 1000)

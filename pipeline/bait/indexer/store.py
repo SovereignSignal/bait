@@ -69,11 +69,7 @@ def store_pools(conn: sa.Connection, chain_id: int, rows: list[dict], cap: int) 
     for r in rows:
         by_hook.setdefault(r["hook_address"], []).append(r)
     hooks = sorted(by_hook)
-    counters = {}
-    for i in range(0, len(hooks), CHUNK):
-        for c in conn.execute(sa.select(hook_pool_counts).where(
-                hook_pool_counts.c.chain_id == chain_id, hook_pool_counts.c.hook_address.in_(hooks[i:i + CHUNK]))):
-            counters[c.hook_address] = c
+    counters = hook_counters(conn, chain_id, hooks)
     have: dict[str, int] = {}
     open_hooks = [h for h in hooks if h not in counters]
     if cap > 0:
@@ -111,6 +107,27 @@ def store_pools(conn: sa.Connection, chain_id: int, rows: list[dict], cap: int) 
     upsert(conn, hook_pool_counts, counts, keys=["chain_id", "hook_address"])
     upsert_pools(conn, stored)
     return stored, unstored
+
+
+def hook_counters(conn: sa.Connection, chain_id: int, hooks) -> dict:
+    """hook address -> hook_pool_counts row, for the hooks past the cap among `hooks`."""
+    hooks, out = sorted(set(hooks)), {}
+    for i in range(0, len(hooks), CHUNK):
+        for c in conn.execute(sa.select(hook_pool_counts).where(
+                hook_pool_counts.c.chain_id == chain_id, hook_pool_counts.c.hook_address.in_(hooks[i:i + CHUNK]))):
+            out[c.hook_address] = c
+    return out
+
+
+def add_hook_usage(conn: sa.Connection, chain_id: int, adds: dict[str, list]) -> None:
+    """adds: hook -> [sampled rows inserted, swaps folded into its aggregate pool, their USD]. Increments, in the page's
+    transaction (after the compare-and-set), so a page that loses the race adds nothing."""
+    rows = [{"c": chain_id, "h": h, "s": s, "n": n, "v": v} for h, (s, n, v) in adds.items() if s or n or v]
+    if rows:
+        t = hook_pool_counts.c
+        conn.execute(sa.update(hook_pool_counts).where(t.chain_id == sa.bindparam("c"), t.hook_address == sa.bindparam("h"))
+                     .values(sampled_total=t.sampled_total + sa.bindparam("s"), swaps_total=t.swaps_total + sa.bindparam("n"),
+                             volume_usd_total=t.volume_usd_total + sa.bindparam("v")), rows)
 
 
 def _counted(chain_id: int, hook: str, total: int, first, last, seen_at, rows: list[dict]) -> dict:
