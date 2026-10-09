@@ -631,3 +631,17 @@ def test_defillama_auth_errors_are_transient_not_a_rejected_batch(status):
     with pytest.raises(PricesUnavailable):
         pb.get(BASE, [TOKX, ZERO])
     assert pb.calls == 1                                   # not split into per-coin retries
+
+
+def test_runner_escalates_repeated_schema_locks_and_reports_them_in_the_heartbeat(engine, caplog):
+    r = Runner(engine, "tok", select_chains("base"), httpx.Client(transport=httpx.MockTransport(lambda q: httpx.Response(500))),
+               core.Settings(), migrate=lambda: False)
+    levels, beats = [], []
+    for _ in range(3):
+        caplog.clear()
+        with caplog.at_level("INFO", logger="bait.indexer"):
+            r.run_once()
+        levels.append([rec.levelname for rec in caplog.records if "schema migration" in rec.getMessage()])
+        beats.append([rec.getMessage() for rec in caplog.records if rec.getMessage().startswith("heartbeat")])
+    assert levels == [["WARNING"], ["WARNING"], ["ERROR"]]
+    assert [b[0].split("schema_locked=")[1].split()[0] for b in beats] == ["1", "2", "3"]
