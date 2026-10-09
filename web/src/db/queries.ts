@@ -123,8 +123,8 @@ export function isKnownPool(chainId: number, poolId: string): Promise<boolean> {
     const known = usingFixtures() && SAMPLE_PROJECTS.some((p) => p.pools.some((x) => x.chainId === chainId && x.poolId.toLowerCase() === id));
     return Promise.resolve(known);
   }
-  return cached(
-    `poolkey:${chainId}:${id}`,
+  return poolKeyCache.get(
+    `${chainId}:${id}`,
     async () => {
       const [scored, indexed] = await Promise.all([
         safe("poolkey:pools", () => db.select({ one: sql`1` }).from(t.pools).where(and(eq(t.pools.chainId, chainId), eq(t.pools.poolId, id))).limit(1), []),
@@ -132,7 +132,6 @@ export function isKnownPool(chainId: number, poolId: string): Promise<boolean> {
       ]);
       return scored.length > 0 || indexed.length > 0;
     },
-    600_000,
   );
 }
 
@@ -247,6 +246,8 @@ export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T):
 
 // ---------- one-hour stale-while-revalidate cache for the heavy reads (single replica on Railway) ----------
 const cache = createSwrCache<unknown>({ ttlMs: 3_600_000, max: 400 });
+// Pool probes get their own cache: a burst of unknown pool ids from /api/trades must never evict loadAll or the leaders.
+const poolKeyCache = createSwrCache<boolean>({ ttlMs: 600_000, max: 5_000 });
 function cached<T>(key: string, fn: () => Promise<T>, ttl?: Ttl<T>): Promise<T> {
   return cache.get(key, fn as () => Promise<unknown>, ttl as Ttl<unknown> | undefined) as Promise<T>;
 }
