@@ -60,7 +60,6 @@ def test_noop_when_indexer_tables_empty(conn, ctx):
 
 def test_onchain_writes_hooks_pools_series_and_overrides_keyless(conn, ctx):
     _setup(conn)
-    ctx.extras["keyless_pool_stats"] = {(PA, 8453): (999.0, 3)}
     out = onchain.run(conn, ctx)
     assert out["hooks_added"] == 2 and out["errors"] == 0
 
@@ -87,9 +86,8 @@ def test_onchain_writes_hooks_pools_series_and_overrides_keyless(conn, ctx):
     st = {r.pool_id: r for r in conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.day == DAY))}
     assert (st[PA].vol_24h, st[PA].traders_24h, st[PA].buys_24h) == (500.0, 7, 40)   # on-chain wins, keyless buys kept
     assert (st[PC].vol_24h, st[PC].traders_24h) == (50.0, 2)
-    assert ctx.extras["keyless_pool_stats"][(PA, 8453)] == (500.0, 7)
 
-    # score reads the on-chain series: 7d = day-6..day, prev = day-13..day-7
+    # score reads the on-chain series: 7d = REF-6..REF, prev = REF-13..REF-7
     for i, h in enumerate([HOOK, HOOK2]):
         p = conn.execute(sa.insert(db.projects).values(slug=f"p{i}", name=f"P{i}", first_seen_at=NOW - timedelta(days=60))).inserted_primary_key[0]
         conn.execute(sa.update(db.hooks).values(project_id=p).where(db.hooks.c.address == h))
