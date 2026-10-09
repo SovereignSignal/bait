@@ -84,3 +84,9 @@ Schema changes reach production through the indexer: it runs `add_missing_column
 `pipeline/bait/db.py` change, so new columns (package 8: `0012_windows.sql`) appear about a minute after a merge. In that
 minute the web can serve empty lists (its `safe()` fallback, not cached) and recovers on its own.
 
+## One-off repairs (package 9)
+
+Repairs run inside the `pipeline` service (Postgres has no public endpoint): set its start command to the repair
+command, redeploy, wait for the process to exit, then clear the start command so the image `CMD` (`python -m bait run`)
+is back before the 06:00 UTC cron. Start with `python -m bait repair all --since 14 --dry-run`; paid steps (`repair
+prose`) run only after the owner's go. See `pipeline/README.md` "Repair".

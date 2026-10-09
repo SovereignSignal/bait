@@ -36,6 +36,7 @@ Exit codes:
 - 2: bad arguments (unknown step or chain slug).
 - 3: another run holds the run lock.
 - 4: schema not ready (a required column is missing).
+- 5: (repair only) precondition: the last nightly receipt failed, or no package 8 per-day rows from the last day.
 
 Flags: `--steps ingest,snapshot,...` (subset, run in canonical order), `--chains base,ethereum`
 (slugs), `--hooklist-file`, `--force-digest`, `--max-code-fetch N` (Blockscout lookups per night,
@@ -225,6 +226,23 @@ unverified until the first run with a key (watch the `_meta hasIndexingErrors` w
 (4663) and Ink (57073) have no public v4 subgraph and are skipped by the subgraph path (keyless covers them, and the
 on-chain indexer covers every chain it serves, see step 3b). BNB and
 Avalanche have no Blockscout instance, so code_hash lookups there return None.
+
+## Repair (package 9, one-off)
+
+`python -m bait repair` brings stored data up to package 8's windows. Every command except `--dry-run` takes the run
+lock (exit 3 while the nightly runs), refuses to start after a failed nightly receipt or before a package 8 nightly
+(exit 5), and writes one `run_receipts` row per sub-step (`notes` = `repair <name>`, `soft_errors` 0).
+
+| command | what it does | cost |
+|---|---|---|
+| `repair all --since 14 --dry-run` | prints the plan: pools and minutes to backfill, days to re-score, verify calls, prose counts and worst-case USD with the two budget options | free, writes nothing |
+| `repair backfill-days --since 14 [--pools N]` | GeckoTerminal daily candles (one call per pool, `KEYLESS_SPACING` apart, busiest first) into `pool_snapshots.volume_usd_day` for the closed days `today-since-14 .. today-1`: rows written before 0012 and closed-day estimates only; stops between pools at `--stop-at` (05:30 UTC); a rerun resumes | free, about 10 s a pool |
+| `repair rescore --since 14` | `score.run` for every stored run day in `today-since .. today`, oldest first, after copying each day once into `project_daily_p9_backup`; prints counts, wash reasons and the Trending top-10 change; `--restore` puts the copy back | free, seconds a day |
+| `repair verify --sample 5` | Bait's 24h / 7d / prev 7d against GeckoTerminal candle sums for the same pools and closed days, as a markdown table | free, up to 15 calls |
+| `repair prose --what-lines --blurbs --dry-run\|--yes [--limit N] [--max-usd X]` | Claude rewrites from stored facts: what-lines never written after a budget stop or cut mid-word at 200 chars; blurbs of the current signals targets written before package 8 | paid, Meter-checked |
+
+GeckoTerminal candles carry no trade counts, so backfilled days keep `tx_count_day` NULL and those projects' `swaps_7d`
+stays NULL (unknown) until seven nights of counts exist. Signals and digests are never rewritten by the repair.
 
 ## Docker
 `Dockerfile`: python:3.12-slim, `pip install -r requirements.txt`, `CMD python -m bait run`
