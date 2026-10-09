@@ -148,9 +148,10 @@ def test_generic_names_match_after_normalising():
               "Arbitrage Hook", "Example", "My New Hook", "Hook", "Hooks", "Transparent Upgradeable Proxy", "Dynamic-Fee Hook"):
         assert useful_name(g, max_len=None) is None, g
     for ok in ("OrderBookHook", "Arbitrum Hook", "Testudo", "FoundationHookV2", "Limit Order Hook (Arbitrum)", "Bunni",
-               "CurveHook", "VaultHook", "OrderHook", "PointsHook", "Base Pair", "ArbHook"):   # bare words: real names too
+               "Curve", "VaultHook", "OrderHook", "PointsHook", "Base Pair", "Arb Labs"):     # bare words: real names too
         assert useful_name(ok, max_len=None) == ok, ok
     assert useful_name("BaseHook") is None and useful_name("BaseTestHooks") is None       # the template class names
+    assert useful_name("ArbHook") is None and useful_name("Curve Hook") is None             # template example hooks
 
 
 def test_proxy_bytecode_needs_the_proxy_shape_not_just_the_constant():
