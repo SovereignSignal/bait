@@ -106,8 +106,9 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
    at most `ONCHAIN_MAX_NEW_HOOKS` (500) per night because each one can cost a Claude call in group's long tail;
    code_hash via `keyless.code_hashes` where a public RPC exists (KEYLESS != 0).
 2. `pools` upserted from `v4_pools` for hooks we hold (every chain; the web filters unknown chain ids), incrementally
-   (per-chain `onchain_watermarks` on `block_number`, plus every pool of a newly known hook); a row is rewritten only
-   when a value changed. token0/token1 are set on insert only, so GeckoTerminal/subgraph symbols survive; `created_at` =
+   (per-chain `onchain_watermarks` on `block_number` as the fast path, plus a nightly pool-level anti-join for known
+   hooks' pools that have no `pools` row, which catches rows a backfill inserts below the watermark); a row is rewritten
+   only when a value changed. token0/token1 are set on insert only, so GeckoTerminal/subgraph symbols survive; `created_at` =
    Initialize block time.
 3. Usage, only for chains whose `indexer_state.backfilled` is true and `updated_at` is within `ONCHAIN_MAX_STALE_HOURS`
    (6) and `swap_block_time` has passed the end of the reference day (the 7-day wash rule uses the same chains): pools with `pool_daily_onchain` rows in day-14..day get a cumulative volume + swap-count series in
