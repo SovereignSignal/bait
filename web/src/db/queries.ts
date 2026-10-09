@@ -111,6 +111,26 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
   return { ...detail, rank };
 }
 
+/** `chainId:poolId` (lowercase) for every pool Bait knows: scored pools plus the indexer's v4_pools. The trades proxy only serves these. */
+export function knownPoolKeys(): Promise<Set<string>> {
+  const db = getDb();
+  if (!db) {
+    const keys = usingFixtures() ? SAMPLE_PROJECTS.flatMap((p) => p.pools.map((x) => `${x.chainId}:${x.poolId.toLowerCase()}`)) : [];
+    return Promise.resolve(new Set(keys));
+  }
+  return cached(
+    "poolkeys",
+    async () => {
+      const [scored, indexed] = await Promise.all([
+        safe("poolkeys:pools", () => db.select({ poolId: t.pools.poolId, chainId: t.pools.chainId }).from(t.pools), []),
+        safe("poolkeys:v4_pools", () => db.select({ poolId: t.v4Pools.poolId, chainId: t.v4Pools.chainId }).from(t.v4Pools), []),
+      ]);
+      return new Set([...scored, ...indexed].map((r) => `${r.chainId}:${r.poolId.toLowerCase()}`));
+    },
+    600_000,
+  );
+}
+
 /** Current slug of the project that owns a hook matching an old unlisted slug, for redirects after renames. */
 export async function slugForOldUnlisted(slug: string): Promise<string | null> {
   const db = getDb();

@@ -1,6 +1,8 @@
 // Live recent trades for one pool, from GeckoTerminal (keyless), with wallet_labels joined.
-// Never throws: any upstream error, 429 or bad input is an empty list.
-import { getWalletLabels } from "@/db/queries";
+// Never throws: any upstream error, 429 or bad input is an empty list with an explicit status. Only pools Bait knows are proxied.
+import { getWalletLabels, knownPoolKeys } from "@/db/queries";
+import { createSwrCache } from "@/lib/swr-cache";
+import { createTokenBucket } from "@/lib/token-bucket";
 import { CHAINS, parseChainParam } from "@/lib/chains";
 import type { ChainId, TradeView } from "@/lib/types";
 
@@ -10,9 +12,11 @@ const TTL_MS = 120_000;
 const ERROR_TTL_MS = 30_000;
 const MIN_USD = 10;
 const LIMIT = 25;
+const NO_STORE = "no-store";
 const UA = "bait/0.1 (+https://github.com/Uniswap/hooklist; hook discovery feed)";
 
-type Payload = { trades: TradeView[] };
+type Status = "ok" | "unknown_pool" | "rate_limited" | "upstream_error" | "empty";
+type Payload = { trades: TradeView[]; status: Status };
 type GtTrade = {
   attributes?: {
     block_timestamp?: string;
@@ -23,38 +27,42 @@ type GtTrade = {
   };
 };
 
-// In-process cache (single replica): 120s per pool, 30s after an error so a 429 is not hammered.
-const memo = new Map<string, { until: number; value: Promise<Payload> }>();
+// In-process stale-while-revalidate cache (single replica): 120 s per pool, 30 s after an error or an empty list,
+// hard cap of 500 pools. GeckoTerminal's keyless tier is ~30 calls/min; we spend at most 20.
+const cache = createSwrCache<Payload>({ ttlMs: TTL_MS, max: 500 });
+const gtBucket = createTokenBucket({ capacity: 20, refillPerSec: 20 / 60 });
+class RateLimited extends Error {}
 
 export async function GET(_req: Request, { params }: { params: Promise<{ chain: string; pool: string }> }) {
   const { chain, pool } = await params;
   const chainId = parseChainParam(chain);
   const poolId = pool.toLowerCase();
-  if (!chainId || !CHAINS[chainId] || !/^0x[0-9a-f]{40,64}$/.test(poolId)) return json({ trades: [] });
+  if (!chainId || !CHAINS[chainId] || !/^0x[0-9a-f]{40,64}$/.test(poolId)) return json({ trades: [], status: "unknown_pool" }, 404, NO_STORE);
 
   const key = `${chainId}:${poolId}`;
-  const now = Date.now();
-  const hit = memo.get(key);
-  if (hit && hit.until > now) return json(await hit.value);
-  if (memo.size > 1000) for (const [k, v] of memo) if (v.until <= now) memo.delete(k);
+  if (!(await knownPoolKeys()).has(key)) return json({ trades: [], status: "unknown_pool" }, 404, NO_STORE);
 
-  const entry = { until: now + TTL_MS, value: load(chainId, poolId) };
-  memo.set(key, entry);
-  const value = await entry.value;
-  if (!value.trades.length) entry.until = now + ERROR_TTL_MS;
-  return json(value);
+  try {
+    const value = await cache.get(key, () => load(chainId, poolId), (v) => (v.status === "ok" ? TTL_MS : ERROR_TTL_MS));
+    return json(value);
+  } catch (e) {
+    if (e instanceof RateLimited) return json({ trades: [], status: "rate_limited" }, 503, NO_STORE);
+    throw e;
+  }
 }
 
 async function load(chainId: ChainId, poolId: string): Promise<Payload> {
   try {
     const network = CHAINS[chainId]?.gtNetwork;
-    if (!network) return { trades: [] };
+    if (!network) return { trades: [], status: "upstream_error" };
+    // Checked inside the load, so a stale entry keeps serving when the budget is spent; a first load throws and is not cached.
+    if (!gtBucket.take()) throw new RateLimited();
     const res = await fetch(`https://api.geckoterminal.com/api/v2/networks/${network}/pools/${poolId}/trades`, {
       headers: { Accept: "application/json", "User-Agent": UA },
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return { trades: [] };
+    if (!res.ok) return { trades: [], status: "upstream_error" };
     const body = (await res.json()) as { data?: GtTrade[] };
     const trades: TradeView[] = (body.data ?? [])
       .map((d) => d.attributes ?? {})
@@ -74,13 +82,15 @@ async function load(chainId: ChainId, poolId: string): Promise<Payload> {
         const l = labels.get(x.wallet);
         return l ? { ...x, labels: l.labels, smartMoney: l.smartMoney } : x;
       }),
+      status: trades.length ? "ok" : "empty",
     };
   } catch (e) {
+    if (e instanceof RateLimited) throw e;
     console.error("[trades] upstream failed, serving empty:", (e as Error).message);
-    return { trades: [] };
+    return { trades: [], status: "upstream_error" };
   }
 }
 
-function json(p: Payload): Response {
-  return Response.json(p, { headers: { "Cache-Control": "public, max-age=60, s-maxage=120" } });
+function json(p: Payload, status = 200, cacheControl = "public, max-age=60, s-maxage=120"): Response {
+  return Response.json(p, { status, headers: { "Cache-Control": cacheControl } });
 }
