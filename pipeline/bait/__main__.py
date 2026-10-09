@@ -131,9 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             log.info("step=%s ok %s elapsed=%.1fs", name, " ".join(f"{k}={v}" for k, v in counts.items()), time.monotonic() - t0)
         log.info("run spend $%.4f (paid API calls this run; ledger: api_spend)", meter.run_usd)
         if soft_errors:
-            log.error("run finished with %d soft errors (see warnings above)", soft_errors)
-            rc = 1
-            return rc
+            log.warning("run completed with %d soft errors (recorded in the run receipt; exit 0)", soft_errors)
         rc = 0
         return rc
     finally:
