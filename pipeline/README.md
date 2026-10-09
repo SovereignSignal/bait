@@ -86,7 +86,7 @@ block time the swap cursor reached). Additive changes: `../db/migrations/0010_in
 - **USD volume is approximate by design:** each swap is valued at the token's *current* DefiLlama price
   (`coins.llama.fi/prices/current`, batched 80 ids, cached 30 min; native 0x0 -> the chain's coingecko id). Prices with
   confidence < 0.5, above $10M, or without decimals are ignored; with both sides priced the larger value is used unless
-  they differ by more than 20x (then the smaller); a single swap above $500M counts as $0; swaps with no priced side
+  they differ by more than 20x (then the smaller); a single swap above $500M counts as unpriced; swaps with no priced side
   count as swaps and wallets, add $0 and are counted in `unpriced_swaps`; wrapped native and major stablecoins fall back
   to the native coin price / $1 (`indexer/prices.py`); when the DefiLlama call fails the page is not committed and is
   retried next loop.
