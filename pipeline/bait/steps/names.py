@@ -3,10 +3,10 @@
 1. Lookup: hooks with no hooklist name, in an "Unlisted hook" project, not checked in the last RECHECK_DAYS, busiest
    first, at most NAMES_MAX per run. Stores hooks.contract_name (raw, even when generic) + hooks.name_checked_at.
 2. Rename: an "Unlisted hook" project whose hooks carry a useful contract name takes that name. Projects are keyed
-   per chain ("contract:<chain>:<norm>") so the same contract name on one chain becomes one project (a launchpad's
-   per-token hooks), while two teams that both wrote "LimitOrderHook" on different chains stay apart. A project
-   emptied by a merge is deleted with its rows. Curated (hooklist) projects are never merged into: a name clash gets
-   the chain appended.
+   per chain ("contract:<chain>:<norm>"). Same contract name on one chain merges only with evidence (shared code_hash
+   or deployer, rules.merge_evidence); without it the later project gets a short-address suffix. Two teams that both
+   wrote "LimitOrderHook" on different chains stay apart. A project emptied by a merge is deleted with its rows and its
+   slug becomes an alias. Curated (hooklist) projects are never merged into: a name clash gets the chain appended.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from ..clients.contract_names import useful_name
 from ..config import CHAIN_BY_ID
 from ..indexer.chains import CHAIN_BY_ID as INDEXED_BY_ID
 from ..db import hooks, project_aliases, project_daily, projects, receipts, signals, upsert
-from ..rules import normalize_name, slugify
+from ..rules import merge_evidence, normalize_name, slugify
 from . import RunContext, log
 
 UNLISTED = "Unlisted hook%"
@@ -40,6 +40,7 @@ def run(conn: sa.Connection, ctx: RunContext, out: dict) -> None:
     out.setdefault("names_found", 0)
     out.setdefault("projects_renamed", 0)
     out.setdefault("projects_merged", 0)
+    out.setdefault("names_split", 0)
     client = ctx.client("names")
     if client is not None:
         _lookup(conn, ctx, client, out)
@@ -80,7 +81,7 @@ def _rename(conn, out: dict, now) -> None:
     unlisted = conn.execute(sa.select(projects.c.id).where(projects.c.name.like(UNLISTED))).scalars().all()
     if not unlisted:
         return
-    rows = conn.execute(sa.select(hooks.c.project_id, hooks.c.chain_id, hooks.c.contract_name)
+    rows = conn.execute(sa.select(hooks.c.project_id, hooks.c.chain_id, hooks.c.address, hooks.c.contract_name)
                         .where(hooks.c.project_id.in_(unlisted), hooks.c.contract_name.is_not(None))).all()
     by_project: dict[int, list] = {}
     for r in rows:
@@ -101,12 +102,18 @@ def _rename(conn, out: dict, now) -> None:
         norm = normalize_name(cname) or cname.lower()
         key = f"contract:{chain_id}:{norm}"
         target = by_key.get(key)
-        if target is not None and target != pid:
-            retire_project(conn, pid, into=target, reason="names:merge", now=now)
-            out["projects_merged"] += 1
-            continue
         display = cname
-        if display.lower() in taken_names or norm in curated_norms:
+        if target is not None and target != pid:
+            why = merge_evidence(hook_rows(conn, pid), hook_rows(conn, target))
+            if why:
+                retire_project(conn, pid, into=target, reason=f"names:{why}", now=now)
+                out["projects_merged"] += 1
+                continue
+            # Same contract name on one chain, no shared code or deployer: likely two teams. Keep both, tell them apart.
+            first = min(h.address for h in hs)
+            key, display = f"{key}:{first}", f"{cname} {first[:6]}…{first[-4:]}"
+            out["names_split"] += 1
+        elif display.lower() in taken_names or norm in curated_norms:
             display = f"{cname} ({chain_label(chain_id)})"
         old = conn.execute(sa.select(projects.c.slug).where(projects.c.id == pid)).scalar_one()
         slug = unique_slug(conn, display, pid)
