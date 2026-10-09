@@ -297,9 +297,10 @@ unverified). The web labels those by their busiest pair: "WETH/USDC hook · 0x7b
 - **One code hash.** `code_hash` is `0x` + sha256 of the deployed bytes everywhere (`rules.code_hash`). Legacy keyless
   sha1 rows are re-hashed from public RPC by the group step (2,000 per run, new hooks first, then a window that moves
   daily, `REHASH_BUDGET_S` wall clock, null when the chain has no code).
-- **Proxy status is a bytecode fact** (`hooks.is_proxy`): the EIP-1967 implementation slot or the EIP-1167 clone prefix
-  in the runtime, or Blockscout/Sourcify proxy flags. Proxy bytecode is shared by unrelated deployments, so a code_hash
-  is evidence only when `is_proxy` is false; unknown is not evidence. Auto-named projects that joined proxies by
+- **Proxy status is a bytecode fact** (`hooks.is_proxy`, `hooks.proxy_kind`): a 45-byte runtime that starts with the
+  EIP-1167 clone prefix, or a runtime under 2,048 bytes that reads the EIP-1967 slot; Blockscout's or Sourcify's own
+  verdict wins when given. ERC-1967 proxy bytecode is shared by unrelated deployments, so a code_hash is evidence only
+  when `is_proxy` is false or the hook is an EIP-1167 clone (its hash embeds the implementation); unknown is not. Auto-named projects that joined proxies by
   bytecode were split, and their generic stored contract names looked up again (proxies resolve to implementations).
 - **Regroup.** Ingest flags a grouped hook (`hooks.regroup`) when the hooklist names or lists it; a code-hash write flags
   it too. The group step moves it into the curated project with that name, or renames its auto-named project in place,
@@ -308,9 +309,11 @@ unverified). The web labels those by their busiest pair: "WETH/USDC hook · 0x7b
   factory (`rules.merge_evidence`). A shared name alone, hooklist or verified source, is not evidence. Two same-named
   contracts on one chain without evidence stay apart; the later one gets a short-address suffix.
 - **Generic names** (`rules.GENERIC`, matched on lowercased alphanumerics) never group by name: proxies, template
-  defaults and the OpenZeppelin uniswap-hooks / v4 example names (LimitOrder, DynamicFee, FullRange, TWAMM, Vault,
-  Order, Curve, ...). A hooklist name is also generic when 2 to 20 entries carry known, all-different deployers and no
-  shared non-proxy bytecode. A generic Claude answer becomes an address card. Projects keyed on such names were split.
+  defaults and the OpenZeppelin uniswap-hooks / v4 example names (LimitOrder, DynamicFee, FullRange, TWAMM, ...);
+  bare words like Curve or Vault are real names. A hooklist name is also generic when its 2 to 20 entries show at least
+  two same-chain deployer conflicts and no shared non-proxy bytecode (one team often uses a deployer per chain). A
+  generic Claude answer becomes an address card. A generic-named project is split only when it has no enrichment and
+  fewer than 3 hooks (otherwise the log says "would split"); its slug, receipts and enrichment follow most of its hooks.
 - **Aliases.** Every rename, merge and regroup writes `project_aliases`; `/p/<old>` redirects through it. Merges move
   receipts and fill the target's missing enrichment.
 - **Lookups.** The first useful contract name wins; a generic one is the fallback. A transient failure (network, 429,
