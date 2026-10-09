@@ -288,6 +288,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
         start_block = hs.block_at_or_after(ts, end - 1)
         with engine.begin() as conn:
             store.reset_swaps_from(conn, chain.chain_id, start_day)
+            store.widen_lookup_floor(conn, chain.chain_id)
             store.set_state(conn, chain.chain_id, initialize_block=0, swap_block=start_block, head_block=head, backfilled=False,
                             swap_block_time=None)
         log.info("chain=%s backfill start: Initialize from 0, Swap from block %d (%s 00:00 UTC)", chain.slug, start_block, start_day)
@@ -413,11 +414,11 @@ def _admit_late(engine: sa.Engine, chain: IndexedChain, late: dict[str, dict], a
     for p, r in sorted(late.items(), key=lambda kv: (-agg.best.get(kv[0], -1.0), kv[0])):
         h = r["hook_address"]
         if h not in counters:
-            rows.append(r)
+            rows.append({**r, "sampled": False})
             continue
         a = adds.setdefault(h, [0, 0, 0.0])
         if agg.best.get(p, 0.0) >= settings.late_min_usd and p in agg.best and free[h] > 0:
-            rows.append(r)
+            rows.append({**r, "sampled": True})
             free[h] -= 1
             a[0] += 1
         else:
@@ -518,6 +519,7 @@ def sync_rpc(engine: sa.Engine, chain: IndexedChain, rpc: Rpc, window: int, sett
         with engine.begin() as conn:
             store.set_state(conn, chain.chain_id, initialize_block=cur, swap_block=None, backfilled=False, head_block=head,
                             swap_block_time=None)
+            store.widen_lookup_floor(conn, chain.chain_id)
         log.warning("chain=%s rpc mode fell %d blocks behind; skipped them (a HyperSync run will backfill)", chain.slug, skipped)
     while cur < end:
         to = min(cur + window, end) - 1

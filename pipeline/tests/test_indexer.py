@@ -913,3 +913,43 @@ def test_lookup_budget_triples_while_the_swap_cursor_is_far_behind(monkeypatch):
     assert (core.lookup_budget(s, 100_000), core.lookup_budget(s, 100_001)) == (10, 30)
     monkeypatch.setenv("INDEXER_POOL_LOOKUPS_CATCHUP", "5")
     assert core.lookup_budget(core.Settings.from_env(), 200_000) == 50
+
+
+def test_a_swap_window_reset_takes_its_folded_days_out_of_the_hook_totals(engine):
+    agg = db.hook_pool_id(HOOK)
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=9, first_block=1,
+                                                        last_block=9, swaps_total=5, volume_usd_total=100.0))
+        store.apply_swaps(c, BASE.chain_id, {(agg, date(2026, 9, 20)): [2, 40.0, 0], (agg, date(2026, 9, 22)): [3, 60.0, 0]}, {})
+        store.reset_swaps_from(c, BASE.chain_id, date(2026, 9, 21))
+    k = _counter(engine)
+    assert (k.swaps_total, k.volume_usd_total) == (2, 40.0)
+
+
+def test_a_late_pool_of_a_hook_without_a_counter_is_a_plain_row(engine):
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=2, first_block=1600,
+                                                        last_block=1600))
+    agg = core.SwapAgg()
+    agg.add(LAUNCH, date(2026, 9, 22), W1, 200.0)
+    agg.add(L2, date(2026, 9, 22), W2, 200.0)
+    late = {LAUNCH: _row(LAUNCH, HOOK, 1600), L2: _row(L2, HOOK2, 1601)}     # HOOK2 has no counter: a gap, not the cap
+    rows, adds = core._admit_late(engine, BASE, late, agg, core.Settings(), core.ChainStats())
+    with engine.begin() as c:
+        store.insert_late_pools(c, rows)
+    pools = _tables(engine)[0]
+    assert pools[LAUNCH].sampled and not pools[L2].sampled and adds == {HOOK: [1, 0, 0.0]}
+
+
+def test_a_history_reset_widens_the_lookup_floor_to_block_zero(engine):
+    with engine.begin() as c:
+        c.execute(sa.insert(db.hook_pool_counts).values(chain_id=BASE.chain_id, hook_address=HOOK, pools_total=9, first_block=500,
+                                                        last_block=900))
+        store.set_state(c, BASE.chain_id, initialize_block=100, swap_block=90, backfilled=True)
+    rpc = core.Rpc("https://x", httpx.Client(transport=httpx.MockTransport(FakeRpc(100_000))))
+    core.sync_rpc(engine, BASE, rpc, 120, core.Settings(rpc_max_windows=2))          # RPC mode skipped blocks: a hole
+    assert _counter(engine).first_block == 0
+    with engine.begin() as c:
+        c.execute(sa.update(db.hook_pool_counts).values(first_block=500))
+    core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(max_pages=0), now=NOW)   # re-backfill
+    assert _counter(engine).first_block == 0
