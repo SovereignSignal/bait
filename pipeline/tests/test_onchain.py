@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import sqlalchemy as sa
 
 from bait import db
+from bait.rules import flags_from_address
 from bait.steps import onchain, score
 from tests.conftest import DAY, NOW, insert_hook
 
@@ -64,6 +65,8 @@ def test_onchain_writes_hooks_pools_series_and_overrides_keyless(conn, ctx):
     hk = {(r.address, r.chain_id): r for r in conn.execute(sa.select(db.hooks))}
     assert hk[(HOOK2, 8453)].name is None and hk[(HOOK3, 143)].name is None and hk[(HOOK2, 8453)].code_hash is None
     assert hk[(HOOK, 8453)].name == "Listed Hook"
+    assert hk[(HOOK2, 8453)].flags == flags_from_address(HOOK2) and hk[(HOOK2, 8453)].flags["beforeSwap"] is True
+    assert hk[(HOOK2, 8453)].hooklisted is False and hk[(HOOK3, 143)].hooklisted is False
 
     pl = {(r.pool_id, r.chain_id): r for r in conn.execute(sa.select(db.pools))}
     assert set(pl) == {(PA, 8453), (PC, 8453), (PE, 143)}

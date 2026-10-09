@@ -87,12 +87,12 @@ def test_unlisted_bytecode_family_becomes_one_project(conn, ctx):
     from tests.conftest import insert_hook
     ctx.clients.update(claude=None, blockscout=None)
     for i in range(3):
-        insert_hook(conn, f"0xfam{i}", 4663, name=None, code_hash="same")
-    insert_hook(conn, "0xlone", 4663, name=None, code_hash="other")
+        insert_hook(conn, f"0xfa0{i}", 4663, name=None, code_hash="same")
+    insert_hook(conn, "0x10e0", 4663, name=None, code_hash="other")
     group.run(conn, ctx)
     rows = conn.execute(sa.select(db.hooks.c.address, db.hooks.c.project_id)).all()
-    fam = {r.project_id for r in rows if r.address.startswith("0xfam")}
-    lone = next(r.project_id for r in rows if r.address == "0xlone")
+    fam = {r.project_id for r in rows if r.address.startswith("0xfa0")}
+    lone = next(r.project_id for r in rows if r.address == "0x10e0")
     assert len(fam) == 1 and lone not in fam
     name = conn.execute(sa.select(db.projects.c.name).where(db.projects.c.id == fam.pop())).scalar_one()
     assert name.startswith("Unlisted hook family")
@@ -108,3 +108,10 @@ def test_bare_address_hooks_never_reach_claude(conn, ctx):
     assert fc.calls == [] and out["by_claude"] == 0 and out["unlisted_named"] == 2
     names = sorted(r.name for r in conn.execute(sa.select(db.projects)))
     assert all(n.startswith("Unlisted hook 0x") for n in names)
+
+
+def test_group_backfills_address_flags_for_empty_metadata_hooks(conn, ctx):
+    insert_hook(conn, "0x4444000000000000000000000000000000000008", 8453)   # flags={} from conftest
+    group.run(conn, ctx)
+    f = conn.execute(sa.select(db.hooks.c.flags).where(db.hooks.c.address == "0x4444000000000000000000000000000000000008")).scalar_one()
+    assert f["beforeSwapReturnsDelta"] is True and f["beforeSwap"] is False

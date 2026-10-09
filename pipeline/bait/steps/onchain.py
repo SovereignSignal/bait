@@ -24,6 +24,7 @@ from sqlalchemy.dialects import postgresql, sqlite
 
 from ..db import (as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pools, upsert,
                   v4_pools)
+from ..rules import flags_from_address
 from . import RunContext, log
 
 WINDOW_DAYS = 14
@@ -71,7 +72,7 @@ def _add_hooks(conn, ctx: RunContext, where: list, out: dict) -> set[tuple[str, 
     cap = _env_int("ONCHAIN_MAX_NEW_HOOKS", 500)
     take, out["hooks_deferred"] = missing[:cap], max(len(missing) - cap, 0)
     codes = _code_hashes(ctx, take, out)
-    new = [{"address": r.hook_address, "chain_id": r.chain_id, "name": None, "description": "", "flags": {}, "properties": {},
+    new = [{"address": r.hook_address, "chain_id": r.chain_id, "name": None, "description": "", "flags": flags_from_address(r.hook_address), "properties": {}, "hooklisted": False,
             "verified_source": None, "audit_url": None, "deployer": None, "first_seen_at": ctx.now,
             "code_hash": codes.get((r.chain_id, r.hook_address))} for r in take]
     for i in range(0, len(new), CHUNK):
