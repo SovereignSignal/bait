@@ -12,9 +12,9 @@ from tests.conftest import NOW, insert_hook, insert_project
 def test_group_by_name_and_factories(conn, ctx):
     ingest.run(conn, ctx)
     out = group.run(conn, ctx)
-    # 26 template-named hooks (LimitOrderHook x7, FeeHook x3, CustomHook, DynamicFeeHook, BlackListHook, Counter,
-    # ArbitrageHook, MyNewHook, GridHook x2 each, TestHook, SwapFeeHook) get a card each
-    assert out["by_name"] == 274 and out["created"] == 106 and out["unassigned"] == 0
+    # 30 template-named hooks (LimitOrderHook x7, FeeHook x3, CustomHook, DynamicFeeHook, BlackListHook, Counter,
+    # ArbitrageHook, MyNewHook, ArbHook, GridHook, CurveHook x2 each, TestHook, SwapFeeHook) get a card each
+    assert out["by_name"] == 270 and out["created"] == 108 and out["unassigned"] == 0
     assert out["factories"] == 3   # EulerSwap 51, OrketHook 47, StrategyFeeHook 34 (> 20)
     rows = conn.execute(sa.select(db.projects.c.name, db.projects.c.is_factory, db.projects.c.slug, db.projects.c.what_line)).all()
     by = {r.name: r for r in rows}
@@ -312,11 +312,10 @@ def test_sample_template_names_never_merge_by_name(conn, ctx):
     group.run(conn, ctx)
     rows = conn.execute(sa.select(db.hooks.c.name, db.hooks.c.chain_id, db.hooks.c.project_id, db.projects.c.name.label("pname"))
                         .join(db.projects)).all()
-    for name, n in (("LimitOrderHook", 7), ("BlackListHook", 2)):
+    for name, n in (("LimitOrderHook", 7), ("BlackListHook", 2), ("CurveHook", 2)):
         mine = [r for r in rows if r.name == name]
         assert len(mine) == n and len({r.project_id for r in mine}) == n and not any(r.pname == name for r in mine)
-    curve = [r for r in rows if r.name == "CurveHook"]                   # a bare word is a real name: one card again
-    assert {r.chain_id for r in curve} == {42161, 5042} and len({r.project_id for r in curve}) == 1
+    assert {r.chain_id for r in rows if r.name == "CurveHook"} == {42161, 5042}
 
 
 def _deploy(conn, n, chain_id, name, dep):
