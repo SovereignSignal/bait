@@ -44,6 +44,7 @@ export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
     chains: p.chains,
     firstSeenAt: p.firstSeenAt,
     isNew: p.isNew,
+    isWash: p.isWash,
     scoreTrending: p.scoreTrending,
     vol7d: p.metrics.vol7d,
     vol7dPrev: p.metrics.vol7dPrev,

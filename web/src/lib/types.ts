@@ -81,22 +81,28 @@ export interface PoolView {
   tvlUsd: number;
   /** null when the pool's on-chain volume is unknown (NULL cumulative volume) */
   vol7d: number | null;
-  tx7d: number;
-  /** null until two daily snapshots (or a pool_stats row) exist */
+  /** swaps over the 7 closed UTC days; null unless all 7 are known */
+  tx7d: number | null;
+  /** volume of the closed UTC day before the latest run; null when unknown */
   vol24h: number | null;
-  /** pool_stats.traders_24h, latest day */
+  /** distinct wallets when walletsExact, else buyers + sellers (an upper bound); latest pool_stats day */
   wallets24h: number | null;
+  walletsExact: boolean;
   /** routing eligibility of this pool, evaluated with its own fee (set by derive in db/queries.ts) */
   eligibility: Eligibility;
 }
 
-/** 24h usage per project. null = no data yet (table empty, missing, or not backfilled). */
+/** Usage per project. Volume, swaps and wallets cover the closed UTC day before the latest run; buys/sells are
+ * GeckoTerminal's rolling 24 h. null = no data (table empty, missing, not every day known). */
 export interface Usage {
   vol24h: number | null;
-  /** tx_count_cum delta over the last day (swaps + liquidity mods) */
+  /** GeckoTerminal's rolling 24 h at the run (sum of pool_stats.vol_24h_rolling); only the pace line uses it */
+  vol24hRolling: number | null;
+  /** swaps on the closed day; null unless every pool's day is known */
   tx24h: number | null;
-  /** sum of pool_stats.traders_24h over the project's pools, latest day */
+  /** distinct across the project's pools when walletsExact, else an upper bound (pools added, buyers + sellers) */
   wallets24h: number | null;
+  walletsExact: boolean | null;
   buys24h: number | null;
   sells24h: number | null;
   buyers24h: number | null;
@@ -155,7 +161,7 @@ export interface Metrics {
   tvlUsd: number;
   vol7d: number;
   vol7dPrev: number;
-  swaps7d: number; // Pool.txCount-derived; labelled "Txs" in the UI
+  swaps7d: number | null; // swaps over the 7 closed UTC days; null unless every day is known
   poolsN: number;
   hooksN: number;
 }
@@ -186,8 +192,12 @@ export interface ProjectSummary {
   topPool: { poolId: string; chainId: ChainId; token0Symbol: string | null; token1Symbol: string | null; hookAddress: string | null } | null;
   usage: Usage;
   isNew: boolean;
-  /** DESIGN.md spam filter: no pools, or all pools under $100 TVL and < 10 txs lifetime. Hidden from All. */
+  /** DESIGN.md spam filter: no pools, or all pools under $100 TVL and < 10 txs lifetime. Hidden everywhere (404). */
   isSpam: boolean;
+  /** wash-like volume: listed in All and on its page with a badge, never in Trending, New, movers or Leaders */
+  isWash: boolean;
+  /** comma list of reasons: 24h, 7d, vol_tvl, no_liquidity, symmetric */
+  washReason: string | null;
   scoreTrending: number;
   /** 1-based trending rank, set when listing the Trending tab */
   rank?: number;
@@ -214,6 +224,7 @@ export interface RowView {
   chains: ChainId[];
   firstSeenAt: string;
   isNew: boolean;
+  isWash: boolean;
   scoreTrending: number;
   vol7d: number;
   vol7dPrev: number;

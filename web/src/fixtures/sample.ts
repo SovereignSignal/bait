@@ -174,6 +174,7 @@ function build(raw: Raw, i: number): ProjectDetail {
         tx7d: 0,
         vol24h: t.v24,
         wallets24h: t.w,
+        walletsExact: true,
         eligibility: "unknown" as const, // derive() evaluates it
       };
     })
@@ -209,8 +210,10 @@ function build(raw: Raw, i: number): ProjectDetail {
     topPool: top ? { poolId: top.poolId, chainId: top.chainId, token0Symbol: top.token0Symbol, token1Symbol: top.token1Symbol, hookAddress: hookAddr } : null,
     usage: {
       vol24h: raw.vol24,
+      vol24hRolling: raw.vol24,
       tx24h: raw.txs,
       wallets24h: raw.wallets,
+      walletsExact: true,
       buys24h: buys,
       sells24h: buys == null ? null : raw.txs - buys,
       buyers24h: raw.wallets > 0 ? Math.round(raw.wallets * (buyShare + 0.05)) : null,
@@ -219,6 +222,8 @@ function build(raw: Raw, i: number): ProjectDetail {
     },
     isNew,
     isSpam: false,
+    isWash: false,
+    washReason: null,
     scoreTrending: score,
     color: COLORS[h % COLORS.length],
     hooks,
