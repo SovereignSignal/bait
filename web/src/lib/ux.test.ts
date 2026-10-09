@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clip, fmtDelta, NONE, usd } from "./format";
-import { rowMetric } from "./present";
+import { rowLabel, rowMetric } from "./present";
 import { moversFor } from "./feed";
 
 test("usd: trimmed .0, B to one decimal, one missing glyph", () => {
@@ -28,4 +28,9 @@ test("moversFor: chain filter first, then the cap, order kept", () => {
   const rows = [{ slug: "a", chains: [1] }, { slug: "b", chains: [8453] }, { slug: "c", chains: [1, 8453] }] as never[];
   assert.deepEqual(moversFor(rows, 8453, 1).map((x: { slug: string }) => x.slug), ["b"]);
   assert.deepEqual(moversFor(rows, 10), []);
+});
+test("rowLabel reads rank, name, category, chain, window, direction", () => {
+  const r = { name: "StablePairHook", category: "dynamic-fee" as const, chains: [1 as const], isNew: false, vol7d: 10_600_000, vol7dPrev: 1_000_000 };
+  assert.equal(rowLabel(r, 1, { v: r.vol7d, win: "7d" }), "#1 StablePairHook, Dynamic fee on Ethereum, $10.6M 7-day volume, up 960 percent");
+  assert.equal(rowLabel({ ...r, isNew: true, category: "other" }, undefined, { v: 5000, win: "24h" }), "StablePairHook, Ethereum, $5K 24-hour volume, new");
 });

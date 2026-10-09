@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: "About", description: "How Bait finds
 export default function AboutPage() {
   return (
     <>
-      <main className="col">
+      <main className="col" id="main" tabIndex={-1}>
         <div className="lead">
           <h1>How this works</h1>
           <p>A terminal for Uniswap v4 hooks. Projects, not hook addresses. Figures refreshed nightly; trades live.</p>

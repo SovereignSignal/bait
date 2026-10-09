@@ -16,6 +16,8 @@ interface TerminalState {
   closeSearch: () => void;
   watchOnly: boolean;
   setWatchOnly: (on: boolean) => void;
+  topMatch: string | null;
+  setTopMatch: (href: string | null) => void;
   watchlist: string[];
   toggleWatch: (slug: string) => void;
 }
@@ -45,6 +47,7 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
   const [watchOnly, setWatchOnly] = useState(false);
+  const [topMatch, setTopMatch] = useState<string | null>(null);
   const [watchlist, setWatchlist] = useState<string[]>([]);
 
   useEffect(() => {
@@ -66,8 +69,8 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   const closeSearch = useCallback(() => setSearchOpen(false), []);
 
   const value = useMemo(
-    () => ({ q, setQ, searchOpen, focusTick, openSearch, closeSearch, watchOnly, setWatchOnly, watchlist, toggleWatch }),
-    [q, searchOpen, focusTick, openSearch, closeSearch, watchOnly, watchlist, toggleWatch],
+    () => ({ q, setQ, searchOpen, focusTick, openSearch, closeSearch, watchOnly, setWatchOnly, topMatch, setTopMatch, watchlist, toggleWatch }),
+    [q, searchOpen, focusTick, openSearch, closeSearch, watchOnly, topMatch, watchlist, toggleWatch],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
