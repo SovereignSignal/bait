@@ -19,7 +19,7 @@ cp .env.example .env            # fill in keys; never commit .env
 .venv/bin/python -m bait run --day 2026-10-06 --hooklist-file fixtures/hooklist.sample.json \
     --database-url sqlite:///./bait.sqlite --force-digest
 
-.venv/bin/python -m pytest -q -p no:cacheprovider   # 93 tests, SQLite in memory, HTTP mocked, KEYLESS=0
+.venv/bin/python -m pytest -q -p no:cacheprovider   # SQLite in memory, HTTP mocked, KEYLESS=0; Postgres-only tests need TEST_DATABASE_URL (scripts/pg-test-cluster.sh)
 ```
 
 `--day` defaults to today's UTC date (what the Docker CMD relies on). Runs are idempotent per day:
