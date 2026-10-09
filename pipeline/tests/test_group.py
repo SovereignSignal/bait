@@ -198,7 +198,7 @@ def test_legacy_sha1_hash_is_rehashed_and_the_clone_joins_the_registered_project
     other = _unlisted_project(conn, A(5), 1, code_hash="e" * 40)                      # RPC did not answer: kept
     asked = []
     facts = {(8453, A(3)): (canon, False), (8453, A(4)): (canon, False)}
-    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows: asked.extend(rows) or facts)
+    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows, deadline: asked.extend(rows) or facts)
     out = group.run(conn, ctx)
     pid = {r.address: (r.project_id, r.code_hash) for r in conn.execute(sa.select(db.hooks))}
     assert out["code_refreshed"] == 2 and len(asked) == 3
@@ -267,7 +267,7 @@ class _Names:
 
 
 def _all_proxies(monkeypatch):
-    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows: {(r.chain_id, r.address): (PROXY, True) for r in rows})
+    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows, deadline: {(r.chain_id, r.address): (PROXY, True) for r in rows})
 
 
 def test_unverified_proxies_sharing_bytecode_never_become_a_family(conn, ctx, monkeypatch):
@@ -344,3 +344,32 @@ def test_a_generic_claude_answer_is_not_created_split_and_recreated(conn, ctx):
     p = conn.execute(sa.select(db.projects).where(db.projects.c.id == pids[0])).one()
     assert len(fc.calls) == 1 and len(set(pids)) == 1
     assert p.name.startswith("Unlisted hook 0x") and p.norm_name is None and p.category == "other"
+
+
+def test_code_refresh_nulls_a_definitive_miss_within_the_budget(conn, ctx, monkeypatch):
+    import time
+    _unlisted_project(conn, A(91), 8453, code_hash="a" * 40)
+    budgets = []
+
+    def facts(ctx, rows, deadline):
+        budgets.append(deadline - time.monotonic())
+        return {(8453, A(91)): None}                                # the chain answered: no code at this address
+    monkeypatch.setattr(group, "_rpc_code_facts", facts)
+    monkeypatch.setenv("REHASH_BUDGET_S", "7")
+    out = group.run(conn, ctx)
+    assert out["code_missing"] == 1 and 6 < budgets[0] <= 7
+    assert conn.execute(sa.select(db.hooks.c.code_hash).where(db.hooks.c.address == A(91))).scalar_one() is None
+
+
+def test_code_refresh_window_rotates_past_unreachable_rows(conn, ctx, monkeypatch):
+    from datetime import timedelta
+    pid = _unlisted_project(conn, A(92), 8453, code_hash="b" * 40)
+    for n in (93, 94):
+        insert_hook(conn, A(n), 8453, project_id=pid, code_hash="b" * 40)
+    seen = []
+    monkeypatch.setattr(group, "_rpc_code_facts", lambda ctx, rows, deadline: seen.extend(r.address for r in rows) or {})
+    monkeypatch.setattr(group, "CODE_FACTS_BATCH", 1)
+    for _ in range(3):                                               # never answered: each night asks a different row
+        group.run(conn, ctx)
+        ctx.day += timedelta(days=1)
+    assert sorted(seen) == [A(92), A(93), A(94)]
