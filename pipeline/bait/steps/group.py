@@ -401,7 +401,7 @@ def _regroup(conn, ctx, out: dict, generic: set[str] = frozenset()) -> None:
                 _promote(conn, ctx, cur, name, norm)
                 by_norm[norm] = cur.id
                 out["promoted"] += 1
-        elif c := _code(h):
+        if c := _code(h):                                # after the name move, so clones follow it
             _regroup_by_code(conn, ctx, c, out)
     if marked:
         conn.execute(sa.update(hooks).values(regroup=False).where(hooks.c.regroup.is_(True)))
