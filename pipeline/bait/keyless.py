@@ -23,7 +23,7 @@ import urllib.request
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from .rules import code_hash as canonical_code_hash, flags_from_address, is_proxy_code, normalize_name, routable, score_trending, slugify
+from .rules import code_hash as canonical_code_hash, flags_from_address, proxy_kind, normalize_name, routable, score_trending, slugify
 
 GT = "https://api.geckoterminal.com/api/v2"
 HOOKLIST = "https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json"
@@ -367,8 +367,8 @@ def code_hashes(http: Http, addrs_by_net: dict[str, set[str]]) -> dict[tuple[str
 
 
 def code_facts(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | None = None,
-               max_fail: int = 3) -> dict[tuple[str, str], tuple[str, bool] | None]:
-    """(canonical code_hash, is_proxy) per (net, address) from eth_getCode, 10 per batch. None = the RPC answered with no
+               max_fail: int = 3) -> dict[tuple[str, str], tuple[str, str | None] | None]:
+    """(canonical code_hash, proxy kind or None) per (net, address) from eth_getCode, 10 per batch. None = the RPC answered with no
     code (a definitive miss); absent = not answered (retry later). A chain stops after max_fail consecutive unanswered
     batches; everything stops at `deadline` (time.monotonic())."""
     out: dict[tuple[str, str], tuple[str, bool] | None] = {}
@@ -394,7 +394,7 @@ def code_facts(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | 
                     continue
                 code = r.get("result")
                 h = canonical_code_hash(code) if isinstance(code, str) else None
-                out[(net, a)] = (h, is_proxy_code(code)) if h else None
+                out[(net, a)] = (h, proxy_kind(code)) if h else None
         log(f"{CHAINS[net][1]}: code facts for {sum(1 for a in addrs if (net, a) in out)}/{len(addrs)} hooks")
     return out
 

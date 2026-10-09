@@ -48,7 +48,8 @@ def _impl_name(impls) -> str | None:
 
 def _blockscout_name(d: dict | None) -> tuple[str | None, bool | None]:
     d = d or {}
-    proxy = bool(d.get("proxy_type") or d.get("implementations")) or None
+    known = "proxy_type" in d or "implementations" in d
+    proxy = bool(d.get("proxy_type") or d.get("implementations")) if known else None
     return _impl_name(d.get("implementations")) or (d.get("name") if d.get("is_verified", True) else None), proxy
 
 
@@ -73,7 +74,8 @@ class ContractNames:
             outcome, name = None, None
             try:
                 name, flag = fn(chain_id, address) or (None, None)
-                proxy = proxy or flag
+                if flag is not None:                     # an explorer verdict; any True wins
+                    proxy = flag if proxy is None else (proxy or flag)
             except _Skip:
                 outcome = "skipped"
             except (httpx.HTTPError, _Transient):
@@ -104,7 +106,7 @@ class ContractNames:
         d = self._get(f"https://sourcify.dev/server/v2/contract/{chain_id}/{address}",
                       {"fields": "compilation.name,proxyResolution"}) or {}
         pr = d.get("proxyResolution") or {}
-        return _impl_name(pr.get("implementations")) or (d.get("compilation") or {}).get("name"), pr.get("isProxy") or None
+        return _impl_name(pr.get("implementations")) or (d.get("compilation") or {}).get("name"), (pr["isProxy"] if "isProxy" in pr else None)
 
     def _blockscout_pro(self, chain_id: int, address: str) -> tuple[str | None, bool | None] | None:
         if not (CHAIN_BY_ID.get(chain_id) and CHAIN_BY_ID[chain_id].blockscout):

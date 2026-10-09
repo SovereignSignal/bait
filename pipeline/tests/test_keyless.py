@@ -58,7 +58,7 @@ def test_code_facts_hash_and_proxy_flag_from_the_bytecode():
             return [{"id": x["id"], "result": codes[x["params"][0]]} for x in calls if x["params"][0] in codes]
 
     got = K.code_facts(Rpc(), {"base": {a, b, c, d}})
-    assert got[("base", a)] == (code_hash(proxy), True) and got[("base", b)] == (code_hash(plain), False)
+    assert got[("base", a)] == (code_hash(proxy), "eip1967") and got[("base", b)] == (code_hash(plain), None)
     assert got[("base", c)] is None and ("base", d) not in got      # no code: definitive; unanswered: absent
 
 
@@ -91,3 +91,13 @@ def test_code_facts_stops_a_silent_chain_after_three_batches_and_at_the_deadline
     assert K.code_facts(rpc, {"base": addrs, "ink": set()}) == {} and rpc.calls == 3
     late = Silent()
     assert K.code_facts(late, {"base": addrs}, deadline=time.monotonic() - 1) == {} and late.calls == 0
+
+
+def test_blockscout_prefers_its_own_proxy_verdict_over_the_bytecode():
+    import httpx
+    from bait.clients.blockscout import Blockscout
+    a = "0x" + "1" * 40
+    uups = Blockscout(http_client=httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(
+        200, json={"deployed_bytecode": "0x6080" + SLOT, "proxy_type": None}, request=req))))
+    info = uups.fetch_code(8453, a)
+    assert info.is_proxy is False and info.proxy_kind is None                      # explorer knows: not a proxy

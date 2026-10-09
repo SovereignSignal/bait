@@ -150,3 +150,23 @@ def test_generic_names_match_after_normalising():
         assert useful_name(g, max_len=None) is None, g
     for ok in ("OrderBookHook", "Arbitrum Hook", "Testudo", "FoundationHookV2", "Limit Order Hook (Arbitrum)", "Bunni"):
         assert useful_name(ok, max_len=None) == ok, ok
+
+
+def test_proxy_bytecode_needs_the_proxy_shape_not_just_the_constant():
+    from types import SimpleNamespace
+    from bait.rules import code_evidence, is_proxy_code, proxy_kind
+    slot = "360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc"
+    clone = "0x363d3d373d3d3d363d73" + "ab" * 20 + "5af43d82803e903d91602b57fd5bf3"           # real EIP-1167, 45 bytes
+    assert len(clone) == 2 + 90 and proxy_kind(clone) == "eip1167" and is_proxy_code(clone)
+    clones_user = ("0x6080604052" + "00" * 100 + "3d602d80600a3d3981f3363d3d373d3d3d363d73"   # OZ Clones embeds the
+                   + "00" * 300)                                                             # clone code as a constant
+    assert not is_proxy_code(clones_user)
+    uups_impl = "0x6080604052" + slot + "00" * 3000                                          # UUPS implementation
+    assert not is_proxy_code(uups_impl)
+    erc1967 = "0x6080604052" + slot + "00" * 200                                             # real ERC1967 proxy
+    assert proxy_kind(erc1967) == "eip1967"
+
+    def row(kind):
+        return SimpleNamespace(code_hash="0xc", is_proxy=True, proxy_kind=kind)
+    assert code_evidence(row("eip1167")) == "0xc"          # same clone hash = same implementation: evidence
+    assert code_evidence(row("eip1967")) is None and code_evidence(row(None)) is None

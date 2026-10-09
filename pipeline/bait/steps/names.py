@@ -84,8 +84,10 @@ def _lookup(conn, ctx: RunContext, client, out: dict) -> None:
         vals = {"name_checked_at": ctx.now}
         if res:
             vals.update(contract_name=res[0], verified_source=True)
-            if len(res) > 2 and res[2]:
-                vals["is_proxy"] = True               # Sourcify/Blockscout say proxy: its bytecode never joins hooks
+            if len(res) > 2 and res[2] is not None:  # the explorer's verdict beats the bytecode guess
+                vals["is_proxy"] = res[2]
+                if not res[2]:
+                    vals["proxy_kind"] = None
             out["names_found"] += 1
         conn.execute(sa.update(hooks).values(**vals).where(hooks.c.address == h.address, hooks.c.chain_id == h.chain_id))
     out["names_checked"] += len(todo)
@@ -236,7 +238,8 @@ def settle_split(conn, snap: dict, now) -> int | None:
 
 
 def hook_rows(conn, pid: int):
-    return conn.execute(sa.select(hooks.c.code_hash, hooks.c.is_proxy, hooks.c.deployer, hooks.c.name, hooks.c.contract_name)
+    return conn.execute(sa.select(hooks.c.code_hash, hooks.c.is_proxy, hooks.c.proxy_kind, hooks.c.deployer, hooks.c.name,
+                                  hooks.c.contract_name)
                         .where(hooks.c.project_id == pid)).all()
 
 

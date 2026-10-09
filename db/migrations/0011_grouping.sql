@@ -3,6 +3,8 @@
 ALTER TABLE hooks ADD COLUMN IF NOT EXISTS regroup boolean NOT NULL DEFAULT false;
 -- Proxy status from the bytecode (EIP-1967 slot, EIP-1167 clone) or the explorer; NULL = not fetched yet.
 ALTER TABLE hooks ADD COLUMN IF NOT EXISTS is_proxy boolean;
+-- eip1167 (minimal clone: same hash = same implementation), eip1967, explorer; NULL = not a proxy or unknown.
+ALTER TABLE hooks ADD COLUMN IF NOT EXISTS proxy_kind text;
 
 CREATE TABLE IF NOT EXISTS project_aliases (
   old_slug    TEXT PRIMARY KEY,
