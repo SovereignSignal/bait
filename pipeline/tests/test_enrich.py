@@ -310,3 +310,27 @@ def test_cut_line_word_boundary_and_ellipsis():
     assert out.endswith("…") and len(out) <= 200 and not out[:-1].endswith(" ")
     assert long.startswith(out[:-1]) and long[len(out) - 1] == " "   # the cut sits on a word boundary
     assert enrich.cut_line("x" * 300) == "x" * 199 + "…"               # no spaces: hard cut, still marked
+
+
+def test_what_context_is_what_enrich_sends_claude(conn, ctx):
+    pid = insert_project(conn, "Ctx", first_seen=NOW - timedelta(days=30), slug="ctx")
+    insert_hook(conn, "0x" + "c" * 40, 8453, project_id=pid, name="Ctx")
+    conn.execute(sa.update(db.hooks).values(description="limit orders", flags={"beforeSwap": True})
+                 .where(db.hooks.c.address == "0x" + "c" * 40))
+    insert_pool(conn, "0xpoolctx", 8453, "0x" + "c" * 40, NOW - timedelta(days=30))
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xpoolctx", chain_id=8453, day=DAY, vol_24h=1.0, traders_24h=1))
+    conn.execute(sa.update(db.projects).values(enrichment={"parallel": {"team": "T"}}).where(db.projects.c.id == pid))
+    seen = []
+
+    class Spy(FakeClaude):
+        def what_line(self, ctxd):
+            seen.append(ctxd)
+            return super().what_line(ctxd)
+
+    ctx.clients.update(claude=Spy(), parallel=None, blockscout=None)
+    enrich.run(conn, ctx)
+    p = conn.execute(sa.select(db.projects).where(db.projects.c.id == pid)).one()
+    assert seen == [enrich.what_context(p, enrich.hooks_of(conn, pid), {"parallel": {"team": "T"}})]
+    assert seen[0]["hooklist_descriptions"] == ["limit orders"] and seen[0]["flags_union"] == ["beforeSwap"]
+    vals = enrich.what_values(p, {"what_line": "x " * 150, "category": "orders"}, {"parallel": {"website": "https://c.xyz"}})
+    assert vals["what_line"].endswith("…") and len(vals["what_line"]) <= 200 and vals["website"] == "https://c.xyz"
