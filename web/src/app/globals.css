@@ -75,6 +75,9 @@ table { border-collapse: collapse; }
 .block a.inline, a.inline { color: var(--pink2); }
 .skip { position: absolute; left: 12px; top: -64px; z-index: 50; padding: 10px 14px; border-radius: 10px; background: var(--fg); color: var(--bg); font-weight: 700; }
 .skip:focus { top: 8px; }
+.empty p { margin: 0 0 8px; }
+.empty a { color: var(--pink2); font-weight: 600; }
+.linkBtn { color: var(--pink2); font-weight: 600; }
 .empty { padding: 24px; color: var(--fg2); text-align: center; }
 .foot { position: relative; z-index: 1; max-width: 1520px; margin: 0 auto; padding: 0 16px 32px; font-size: 12px; color: var(--fg3); line-height: 1.6; }
 .foot a { color: var(--fg2); }

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
-import { applyTab, availableCategories, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
+import { applyTab, availableCategories, emptyCopy, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
 import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
 import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
@@ -108,7 +108,22 @@ function ProjectListView({ rows, selected, view, now, query, launches, launchesN
         {launches && query.tab === "new" && !watching && !searching && <JustLaunched initial={launches} now={launchesNow ?? now} chainId={query.chain} compact />}
         {list.length === 0 ? (
           <div className="empty">
-            {watching ? "Star a project to keep it here. Saved on this device only." : rows.length ? "Nothing matches this filter." : "Nothing indexed yet."}
+            {watching ? (
+              "Star a project to keep it here. Saved on this device only."
+            ) : searching ? (
+              "Try a token symbol or 0x address."
+            ) : rows.length ? (
+              <>
+                <p>{emptyCopy(query)}</p>
+                <p>
+                  {query.category && <Link href={feedHref({ ...query, category: undefined })}>Clear category</Link>}
+                  {query.category && query.chain && " · "}
+                  {query.chain && <Link href={feedHref({ ...query, chain: undefined })}>All chains</Link>}
+                </p>
+              </>
+            ) : (
+              "Nothing indexed yet."
+            )}
           </div>
         ) : (
           list.map((r, i) => {

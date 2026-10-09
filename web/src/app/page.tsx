@@ -38,7 +38,7 @@ export default async function TerminalPage({ searchParams }: { searchParams: Pro
       view="list"
       now={sample ? SAMPLE_NOW : Date.now()}
       sample={sample}
-      emptyText={rows.length ? "Nothing matches this filter." : "Nothing indexed yet. The first pipeline run fills this in."}
+      emptyText={rows.length ? "Pick a project from the list to see its pools, wallets and live trades." : "Nothing indexed yet. The first pipeline run fills this in."}
       launches={launches}
       launchesNow={Date.now()}
     />

@@ -299,7 +299,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
         {p.topWallets.length > 0 && <span>by 24h volume in the busiest pools</span>}
       </div>
       {p.topWallets.length === 0 ? (
-        <div className="mut">Wallet breakdown appears after the next activity run.</div>
+        <div className="mut">No wallet data for this project yet. It usually fills in within a day.</div>
       ) : (
         <div className={s.tw}>
           <table className={s.table}>
