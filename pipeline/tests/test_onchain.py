@@ -175,3 +175,26 @@ def test_pools_copy_is_incremental_and_catches_up_hooks_known_later(conn, ctx, m
     assert onchain.run(conn, ctx)["pools"] == 0                     # nothing new: nothing read
     _v4(conn, 8453, "0x" + "9" * 64, HOOK, 500)
     assert onchain.run(conn, ctx)["pools"] == 1
+
+
+def _pool_keys(conn):
+    return {(r.pool_id, r.chain_id) for r in conn.execute(sa.select(db.pools))}
+
+
+def test_pools_inserted_below_the_watermark_after_a_copy_are_copied(conn, ctx):
+    _setup(conn)
+    onchain.run(conn, ctx)                                          # 8453 watermark = block 200
+    late = "0x" + "7" * 64
+    _v4(conn, 8453, late, HOOK, 50)                                 # a backfill inserts an older Initialize of a known hook
+    onchain.run(conn, ctx)
+    assert (late, 8453) in _pool_keys(conn)
+
+
+def test_deferred_hook_whose_first_pool_came_from_snapshot_still_gets_its_other_pools(conn, ctx, monkeypatch):
+    monkeypatch.setenv("ONCHAIN_MAX_NEW_HOOKS", "1")
+    _setup(conn)
+    onchain.run(conn, ctx)                                          # HOOK3 deferred; PE (block 300) passes the watermark
+    insert_hook(conn, HOOK3, 143, name="Snapshotted")               # keyless snapshot adds the hook and one of its pools
+    conn.execute(sa.insert(db.pools).values(pool_id="0x" + "6" * 64, chain_id=143, hook_address=HOOK3))
+    onchain.run(conn, ctx)
+    assert (PE, 143) in _pool_keys(conn)

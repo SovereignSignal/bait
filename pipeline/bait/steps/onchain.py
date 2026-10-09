@@ -5,8 +5,8 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
    first, at most ONCHAIN_MAX_NEW_HOOKS (500) per night so the group step's Claude long tail stays bounded; code_hash from
    keyless.code_hashes where a public RPC exists for the chain (KEYLESS != 0), else None.
 2. Pools: every v4_pools row whose hook is in `hooks` is upserted into `pools` (any chain; the web filters unknown chains),
-   incrementally (per-chain `onchain_watermarks` on `block_number`, plus every pool of a newly known hook); a row is
-   rewritten only when a value changed. A Postgres size line (pg_database_size vs DISK_LIMIT_GB) is logged every night.
+   incrementally (per-chain `onchain_watermarks` on `block_number` as the fast path, plus a nightly pool-level anti-join
+   for known hooks' pools with no pools row); a row is rewritten only when a value changed. A Postgres size line (pg_database_size vs DISK_LIMIT_GB) is logged every night.
    token0/token1 are only set on insert, so GeckoTerminal/subgraph symbols survive; created_at = Initialize block time.
 3. Usage (chains whose indexer_state is backfilled and updated within ONCHAIN_MAX_STALE_HOURS): for each pool with
    pool_daily_onchain rows in day-14..day, pool_snapshots becomes a cumulative volume / swap series from the on-chain daily
@@ -115,9 +115,9 @@ def _code_hashes(ctx: RunContext, rows, out: dict) -> dict[tuple[int, str], str]
 
 
 def _upsert_pools(conn, ctx: RunContext, known: set[tuple[str, int]], out: dict) -> None:
-    """v4_pools -> pools for known hooks, incrementally: 1) per chain, rows above the block watermark (Initialize history
-    only grows upward per chain); 2) every pool of a known hook with no pools row yet (hooks that became known tonight,
-    incl. ones the cap deferred while their pools passed the watermark). Unchanged rows are never rewritten."""
+    """v4_pools -> pools for known hooks: 1) fast path, per chain, rows above the block watermark (new Initialize logs,
+    and value changes of recent rows); 2) every night, a pool-level anti-join for rows of known hooks that have no pools
+    row (the watermark alone misses rows a backfill inserts below it). Unchanged rows are never rewritten."""
     marks = {r.chain_id: r.pools_block for r in conn.execute(sa.select(onchain_watermarks))}
     chain_ids = {c.chain_id for c in CHAINS} | set(marks) | {r[0] for r in conn.execute(sa.select(indexer_state.c.chain_id))}
     for cid in sorted(chain_ids):
@@ -137,15 +137,24 @@ def _upsert_pools(conn, ctx: RunContext, known: set[tuple[str, int]], out: dict)
             _copy_pools(conn, [r for r in batch if (r.hook_address, r.chain_id) in known], out)
         if top is not None:
             upsert(conn, onchain_watermarks, [{"chain_id": cid, "pools_block": top[0], "updated_at": ctx.now}], keys=["chain_id"])
-    orphans = conn.execute(sa.select(hooks.c.chain_id, hooks.c.address).where(
-        ~sa.exists().where(pools.c.chain_id == hooks.c.chain_id, pools.c.hook_address == hooks.c.address),
-        sa.exists().where(v4_pools.c.chain_id == hooks.c.chain_id, v4_pools.c.hook_address == hooks.c.address))).all()
-    for h in orphans:
-        if ctx.chains and h.chain_id not in ctx.chains:
-            continue
-        rows = conn.execute(sa.select(v4_pools).where(v4_pools.c.chain_id == h.chain_id, v4_pools.c.hook_address == h.address)).all()
-        for i in range(0, len(rows), 2000):
-            _copy_pools(conn, rows[i:i + 2000], out)
+    # Pool-level catch-up, every night: v4_pools rows of a known hook that have no pools row. Covers rows a backfill
+    # inserted below the watermark (RPC head-following before a token was set, the sync_rpc gap path, a chain still
+    # backfilling) and hooks that became known after their pools passed the watermark. Keyset-paginated on the v4_pools
+    # primary key, so each batch is an index range scan with a per-row probe of the pools primary key.
+    hook_known = sa.exists().where(hooks.c.chain_id == v4_pools.c.chain_id, hooks.c.address == v4_pools.c.hook_address)
+    not_copied = ~sa.exists().where(pools.c.chain_id == v4_pools.c.chain_id, pools.c.pool_id == v4_pools.c.pool_id)
+    last = None
+    while True:
+        q = sa.select(v4_pools).where(hook_known, not_copied)
+        if ctx.chains:
+            q = q.where(v4_pools.c.chain_id.in_(ctx.chains))
+        if last is not None:
+            q = q.where(sa.tuple_(v4_pools.c.chain_id, v4_pools.c.pool_id) > sa.tuple_(sa.literal(last[0]), sa.literal(last[1])))
+        batch = conn.execute(q.order_by(v4_pools.c.chain_id, v4_pools.c.pool_id).limit(2000)).all()
+        if not batch:
+            break
+        last = (batch[-1].chain_id, batch[-1].pool_id)
+        _copy_pools(conn, batch, out)
 
 
 def _copy_pools(conn, batch, out: dict) -> None:
