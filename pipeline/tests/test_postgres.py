@@ -200,3 +200,43 @@ def test_additive_migration_gives_up_on_a_lock_instead_of_blocking(pg_engine):
     finally:
         holder.rollback(); holder.close()
     assert "pool_stats.vol_source" in db.add_missing_columns(pg_engine)     # retried once the lock is gone
+
+
+def test_two_threads_committing_the_same_page_count_it_once(pg_engine):
+    import threading
+    from datetime import date
+    from bait.indexer import core, store
+    from bait.indexer.chains import CHAIN_BY_ID
+    base = CHAIN_BY_ID[8453]
+    with pg_engine.begin() as c:
+        store.set_state(c, 8453, initialize_block=100, swap_block=10, head_block=100)
+    holder = pg_engine.connect()                                # park both writers on the indexer_state row lock
+    holder.begin()
+    holder.execute(sa.update(db.indexer_state).where(db.indexer_state.c.chain_id == 8453).values(head_block=100))
+    results, start = [], threading.Barrier(2)
+
+    def commit_page():
+        agg = core.SwapAgg()
+        agg.add("0xpool", date(2026, 10, 6), "0xw1", 100.0)
+        agg.add("0xpool", date(2026, 10, 6), "0xw2", 50.0)
+        start.wait()
+        try:
+            core._commit_swaps(pg_engine, base, agg, 10, 20, 100, core.ChainStats())
+            results.append("won")
+        except store.CursorMoved:
+            results.append("moved")
+    threads = [threading.Thread(target=commit_page) for _ in range(2)]
+    for t in threads:
+        t.start()
+    import time
+    time.sleep(0.5)
+    holder.rollback()
+    holder.close()
+    for t in threads:
+        t.join(timeout=10)
+    assert sorted(results) == ["moved", "won"]
+    with pg_engine.connect() as c:
+        r = c.execute(sa.select(db.pool_daily_onchain)).one()
+        assert (r.swaps, r.wallets, r.volume_usd) == (2, 2, 150.0)   # the loser added nothing
+        assert c.execute(sa.select(sa.func.count()).select_from(db.pool_wallet_day)).scalar_one() == 2
+        assert store.get_state(c, 8453).swap_block == 20
