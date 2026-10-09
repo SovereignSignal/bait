@@ -424,3 +424,23 @@ def test_a_pool_born_this_morning_makes_its_project_new_not_spam(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, p)
     assert d.is_new and not d.is_spam and (d.pools_n, d.tvl_usd, d.vol_7d) == (1, 500_000, 0)
+
+
+def test_rescoring_a_past_day_does_not_depend_on_indexer_freshness_now(conn, ctx):
+    """Package 9 re-scores past days. The indexer's updated_at five days later says nothing about whether that day's
+    swaps were complete; swap_block_time past the day's end does."""
+    wash = _onchain_project(conn, "Desk", "0xdp", wallets=1, vol_per_day=60_000_000)
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    first = daily(conn, wash).wash_reason
+    ctx.now = NOW + timedelta(days=5)            # updated_at (NOW) is now days stale
+    score.run(conn, ctx)
+    assert first == "7d,vol_tvl" and daily(conn, wash).wash_reason == first
+
+
+def test_pruned_wallet_rows_are_unknown_not_zero_wallets(conn, ctx):
+    """pool_wallet_day is kept 30 days; volume without wallet rows must not read as "<= 10 wallets"."""
+    wash = _onchain_project(conn, "Desk", "0xdp", wallets=0, vol_per_day=60_000_000)
+    _optimism_ready(conn)
+    out = score.run(conn, ctx)
+    assert out["wash_7d"] == 0 and "7d" not in (daily(conn, wash).wash_reason or "").split(",")
