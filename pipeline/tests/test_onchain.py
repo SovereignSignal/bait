@@ -209,3 +209,41 @@ def test_an_earlier_mostly_unpriced_day_makes_volume_unknown_from_that_day_in_se
     assert s[bad - timedelta(days=1)][0] == 0.0 and s[bad][0] is None and s[DAY][:2] == (None, 8)
     st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PC)).one()
     assert (st.vol_24h, st.traders_24h, st.vol_source) == (None, 2, "unpriced")   # agrees with the series at REF
+
+
+def _snapd(conn, pool_id):
+    return {r.day: (r.volume_usd_day, r.tx_count_day, r.estimated) for r in conn.execute(
+        sa.select(db.pool_snapshots).where(db.pool_snapshots.c.pool_id == pool_id))}
+
+
+def test_onchain_series_carries_daily_values_and_keeps_older_days(conn, ctx):
+    _setup(conn)
+    old = DAY - timedelta(days=20)
+    conn.execute(sa.insert(db.pool_snapshots).values(pool_id=PA, chain_id=8453, day=old, tvl_usd=1.0, volume_usd_cum=5.0,
+                                                     volume_usd_day=5.0, tx_count_day=1))
+    conn.execute(sa.update(db.pool_snapshots).where(db.pool_snapshots.c.pool_id == PA,
+                                                    db.pool_snapshots.c.day == DAY - timedelta(days=15))
+                 .values(volume_usd_day=777.0, tx_count_day=3))
+    onchain.run(conn, ctx)
+    d = _snapd(conn, PA)
+    assert d[REF] == (500.0, 9, False) and d[REF - timedelta(days=1)] == (100.0, 2, False)
+    assert d[DAY - timedelta(days=15)] == (777.0, 3, None)      # the seed day resets the cumulative only
+    assert d[old] == (5.0, 1, None)                             # days before the series stay, for re-scoring past days
+    c = _snapd(conn, PC)
+    assert c[REF] == (50.0, 4, False) and c[REF - timedelta(days=1)] == (0.0, 0, False)   # no swaps that day: 0, known
+
+
+def test_kept_keyless_series_gets_onchain_swap_counts(conn, ctx):
+    _setup(conn, coverage_days=3)                               # history too short: PA keeps its keyless series
+    onchain.run(conn, ctx)
+    d = _snapd(conn, PA)
+    assert (d[REF][1], d[REF - timedelta(days=1)][1], d[DAY - timedelta(days=5)][1]) == (9, 2, None)
+    assert d[REF][0] is None                                    # volume columns untouched
+
+
+def test_onchain_pool_stats_carry_distinct_wallets_and_the_closed_day_boundary(conn, ctx):
+    _setup(conn)
+    onchain.run(conn, ctx)
+    st = conn.execute(sa.select(db.pool_stats).where(db.pool_stats.c.pool_id == PA)).one()
+    assert (st.wallets_24h, st.traders_24h) == (7, 7)
+    assert db.as_utc(st.window_end) == datetime(2026, 10, 6, tzinfo=timezone.utc)    # REF (10-05) ends 10-06 00:00
