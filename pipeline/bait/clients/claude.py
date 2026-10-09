@@ -132,13 +132,26 @@ class Claude:
         return out
 
     def what_line(self, ctx: dict) -> dict:
-        user = "Write the 'what it does' line and pick a category for this hook project.\n\n" + json.dumps(ctx, indent=1, default=str)[:12000]
-        return self._json(CLAUDE_BLURB_MODEL, user, WHAT_SCHEMA, 600)
+        return self._json(CLAUDE_BLURB_MODEL, what_line_prompt(ctx), WHAT_SCHEMA, PROSE_MAX_TOKENS)
 
     def why_blurb(self, ctx: dict) -> str:
-        user = (
-            "Write 'why people care' for this hook project: two sentences grounded in the metrics, "
+        return self._json(CLAUDE_BLURB_MODEL, why_blurb_prompt(ctx), WHY_SCHEMA, PROSE_MAX_TOKENS)["why_blurb"]
+
+
+PROSE_MAX_TOKENS = 600     # what_line and why_blurb
+
+
+def what_line_prompt(ctx: dict) -> str:
+    return "Write the 'what it does' line and pick a category for this hook project.\n\n" + json.dumps(ctx, indent=1, default=str)[:12000]
+
+
+def why_blurb_prompt(ctx: dict) -> str:
+    return ("Write 'why people care' for this hook project: two sentences grounded in the metrics, "
             "signals and receipts below. Mention a number if one is notable.\n\n"
-            + json.dumps(ctx, indent=1, default=str)[:12000]
-        )
-        return self._json(CLAUDE_BLURB_MODEL, user, WHY_SCHEMA, 600)["why_blurb"]
+            + json.dumps(ctx, indent=1, default=str)[:12000])
+
+
+def prose_estimate(user: str) -> float:
+    """The worst case Claude._json checks against the budget before a what_line / why_blurb call with this prompt."""
+    from ..costs import anthropic_estimate
+    return anthropic_estimate(CLAUDE_BLURB_MODEL, len(user) + len(SYSTEM), PROSE_MAX_TOKENS)
