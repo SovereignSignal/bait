@@ -76,10 +76,15 @@ def normalize_name(name: str | None) -> str:
     return s
 
 
-# Names that say nothing about the project: proxies and template defaults. Applies to hooklist and verified-source names.
-GENERIC = re.compile(
-    r"(?i)^(hook|basehook|v4hook|uniswapv4hook|uniswaphook|anyhook|customhook|myhook|testhook|counter|counterhook|"
-    r"swapfeehook|feehook|platformhook|.*proxy.*|implementation|main|contract)$")
+# Names that say nothing about the project: proxies, template defaults, and the OpenZeppelin uniswap-hooks and v4 example
+# names many unrelated teams deploy unchanged. Matched on the lowercased alphanumerics, with an optional "hook(s)" and
+# version suffix ("Limit Order Hook V2" -> "limitorderhookv2"). Applies to hooklist and verified-source names.
+GENERIC_STEMS = (
+    "base", "v4", "uniswapv4", "uniswap", "any", "custom", "my", "mynew", "test", "counter", "swapfee", "fee", "platform",
+    "limitorder", "dynamicfee", "antisandwich", "liquiditypenalty", "fullrange", "twamm", "geomeanoracle", "points",
+    "blacklist", "whitelist", "arb", "arbitrage", "grid", "curve", "vault", "order", "example", "demo", "sample")
+GENERIC = re.compile(r"^(?:(?:" + "|".join(GENERIC_STEMS) + r")(?:hooks?)?|hooks?)(?:v?\d+)?$"
+                     r"|^.*proxy.*$|^(?:implementation|main|contract)$")
 
 # Deterministic CREATE2 deployers (Arachnid, ImmutableCreate2Factory, CreateX) deploy for everyone: not team evidence.
 SHARED_DEPLOYERS = frozenset({
@@ -92,7 +97,8 @@ SHARED_DEPLOYERS = frozenset({
 def useful_name(name: str | None, max_len: int | None = 60) -> str | None:
     """The name stripped, or None when it is empty, generic, or (verified-source names) longer than max_len."""
     n = (name or "").strip()
-    if not n or (max_len and len(n) > max_len) or GENERIC.match(n):
+    flat = re.sub(r"[^a-z0-9]", "", n.lower())
+    if not flat or (max_len and len(n) > max_len) or GENERIC.match(flat):
         return None
     return n
 
@@ -114,23 +120,18 @@ def code_evidence(r) -> str | None:
 
 
 def merge_evidence(a, b) -> str | None:
-    """Why two sets of hooks are one project, or None. A shared name is only a candidate; evidence is shared non-proxy
-    bytecode, a shared deployer that is not a CREATE2 factory, or the same non-generic hooklist name."""
+    """Why two sets of hooks are one project, or None. A shared name, hooklist or verified-source, is only a candidate;
+    evidence is shared non-proxy bytecode or a shared deployer that is not a CREATE2 factory."""
     def hashes(rows):
         return {c for r in rows if (c := code_evidence(r))}
 
     def deployers(rows):
         return {r.deployer for r in rows if r.deployer and r.deployer not in SHARED_DEPLOYERS}
 
-    def listed(rows):
-        return {normalize_name(useful_name(r.name, max_len=None)) for r in rows} - {""}
-
     if hashes(a) & hashes(b):
         return "code_hash"
     if deployers(a) & deployers(b):
         return "deployer"
-    if listed(a) & listed(b):
-        return "hooklist_name"
     return None
 
 

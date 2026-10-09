@@ -22,14 +22,15 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out["flags_backfilled"] = backfill_address_flags(conn)
     _refresh_code_facts(conn, ctx, out)
     out["aliases_backfilled"] = backfill_unlisted_aliases(conn, ctx.now)
-    out["split"] = _split_generic(conn, ctx) + _split_proxy_families(conn, ctx)
-    _regroup(conn, ctx, out)
+    generic = _data_generic_norms(conn)
+    out["split"] = _split_generic(conn, ctx, generic) + _split_proxy_families(conn, ctx)
+    _regroup(conn, ctx, out, generic)
     unassigned = _unassigned(conn)
 
     # Rule 1: hooklist name -> curated project, else a same-chain verified-name project with evidence, else a new one.
     by_norm = _projects_by_norm(conn)
     for h in unassigned:
-        name = _gname(h)
+        name = _gname(h, generic)
         norm = normalize_name(name)
         if not norm:
             continue
@@ -83,7 +84,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         if claude is None:
             # No key: every unnamed hook becomes its own project keyed by address so the feed still renders.
             for h in unassigned:
-                pid = _create_project(conn, ctx, _gname(h) or f"Unlisted hook {h.address[:6]}…{h.address[-4:]}", None, h.description, category=None)
+                pid = _create_project(conn, ctx, _gname(h, generic) or f"Unlisted hook {h.address[:6]}…{h.address[-4:]}", None, h.description, category=None)
                 _assign(conn, h, pid)
                 out["created"] += 1
             unassigned = []
@@ -168,9 +169,30 @@ def _create_project(conn, ctx, name: str, norm: str | None, description: str | N
 CODE_FACTS_BATCH = 2000
 
 
-def _gname(h) -> str | None:
-    """The hooklist name if it identifies a project; template and proxy names count as no name."""
-    return useful_name(h.name, max_len=None)
+def _gname(h, generic: set[str] = frozenset()) -> str | None:
+    """The hooklist name if it identifies a project; template, proxy and data-generic names (`generic`) count as none."""
+    name = useful_name(h.name, max_len=None)
+    return name if name and normalize_name(name) not in generic else None
+
+
+def _data_generic_norms(conn) -> set[str]:
+    """Hooklist names that unrelated teams share: at least two entries with a known deployer, all of those deployers
+    different, and no non-proxy code_hash shared between entries. Unknown deployers prove nothing either way, and a name
+    on FACTORY_MIN_HOOKS or more hooks is a factory family by design, so neither makes a name generic."""
+    by: dict[str, list] = {}
+    for r in conn.execute(sa.select(hooks.c.name, hooks.c.deployer, hooks.c.code_hash, hooks.c.is_proxy)
+                          .where(hooks.c.name.is_not(None))):
+        if norm := normalize_name(useful_name(r.name, max_len=None)):
+            by.setdefault(norm, []).append(r)
+    out = set()
+    for norm, rows in by.items():
+        if not 2 <= len(rows) < FACTORY_MIN_HOOKS:
+            continue
+        deps = [r.deployer for r in rows if r.deployer and r.deployer not in SHARED_DEPLOYERS]
+        codes = [c for r in rows if (c := code_evidence(r))]
+        if len(deps) >= 2 and len(set(deps)) == len(deps) and len(set(codes)) == len(codes):
+            out.add(norm)
+    return out
 
 
 def _code(h) -> str | None:
@@ -257,12 +279,14 @@ def _split_proxy_families(conn, ctx) -> int:
     return len(bad)
 
 
-def _split_generic(conn, ctx) -> int:
-    """Projects keyed on a template or proxy name ("ERC1967Proxy") merged unrelated hooks by name alone. Detach their
-    hooks so the rules regroup them on evidence; the project goes with no alias (its hooks now live in several)."""
+def _split_generic(conn, ctx, generic: set[str]) -> int:
+    """Projects keyed on a template, proxy or data-generic name ("ERC1967Proxy", "LimitOrderHook") merged unrelated hooks
+    by name alone. Detach their hooks so the rules regroup them on evidence; the project goes with no alias (its hooks
+    now live in several)."""
     bad = [p.id for p in conn.execute(sa.select(projects.c.id, projects.c.name, projects.c.norm_name)
                                       .where(projects.c.norm_name.is_not(None)))
-           if not p.norm_name.startswith(("contract:", "code:")) and not useful_name(p.name, max_len=None)]
+           if not p.norm_name.startswith(("contract:", "code:"))
+           and (not useful_name(p.name, max_len=None) or p.norm_name in generic)]
     for pid in bad:
         conn.execute(sa.update(hooks).values(project_id=None).where(hooks.c.project_id == pid))
         retire_project(conn, pid, into=None, reason="split:generic", now=ctx.now)
@@ -326,7 +350,7 @@ def _regroup_by_code(conn, ctx, code_hash: str, out: dict) -> None:
             _move(conn, ctx, r, r.project_id, target, "regroup:code_hash", out)
 
 
-def _regroup(conn, ctx, out: dict) -> None:
+def _regroup(conn, ctx, out: dict, generic: set[str] = frozenset()) -> None:
     """Hooks flagged by ingest (the registry named them) or by a code_hash write. A named hook in an auto-named project
     joins the curated project with that name, or its project is promoted to that name. A hashed one pulls same-bytecode
     hooks together. Unassigned flagged hooks are left to rules 1-3."""
@@ -337,7 +361,7 @@ def _regroup(conn, ctx, out: dict) -> None:
                            .where(hooks.c.address == h.address, hooks.c.chain_id == h.chain_id)).first()
         if cur is None:
             continue
-        name = _gname(h)
+        name = _gname(h, generic)
         norm = normalize_name(name)
         if norm and _provisional(cur.name, cur.norm_name):
             target = by_norm.get(norm)
