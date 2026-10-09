@@ -38,3 +38,9 @@ def test_repo_url_with_a_deep_path_reads_the_repo():
         return httpx.Response(200, json={"stargazers_count": 3, "pushed_at": "2026-10-01T00:00:00Z"}, request=req)
     assert _gh(handler).activity("https://github.com/acme/repo/tree/main")["repo"] == "acme/repo"
     assert seen == ["/repos/acme/repo", "/repos/acme/repo/commits"]
+
+
+def test_rate_limit_403_named_only_in_the_body_still_raises():
+    gh = _gh(lambda req: httpx.Response(403, json={"message": "API rate limit exceeded for 1.2.3.4."}, request=req))
+    with pytest.raises(httpx.HTTPStatusError):
+        gh.activity("https://github.com/acme/repo")
