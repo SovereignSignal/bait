@@ -43,6 +43,9 @@ EXIT_PRECONDITION = 5
 # never its own; with no nightly receipt at all it carries this, which health reports as stale.
 NO_NIGHTLY_DAY = date(1970, 1, 1)
 MORNING = (dtime(5, 30), dtime(8, 0))   # from the stop time before the 06:00 nightly to health's 08:00 deadline
+NIGHTLY_AT = dtime(6, 0)                 # the pipeline cron; a repair stops before it (--stop-at) and never starts near it
+NIGHTLY_GRACE = timedelta(minutes=30)    # a nightly that started less than this ago is still "the next one"
+EXIT_INCOMPLETE = 6                      # stopped at --stop-at: what is done is kept, a rerun resumes
 
 _D = timedelta(days=1)
 _COLS = [c.name for c in project_daily.c]
@@ -145,9 +148,10 @@ def fill_pool(conn, pool_id: str, chain_id: int, candles: list[tuple[int, float]
 
 
 def backfill(engine, ctx: RunContext, since: int, max_pools: int | None = None, deadline: datetime | None = None,
-             clock=_utcnow) -> dict:
+             clock=None) -> dict:
     """Pull candles for every target pool (or the busiest max_pools), one committed transaction per pool, so a stop at any
     point keeps what is done and a rerun skips it. Stops between pools at `deadline`."""
+    clock = clock or _utcnow
     today = ctx.day
     start, end = backfill_window(today, since)
     with engine.connect() as conn:
@@ -264,12 +268,16 @@ def onchain_coverage(conn) -> dict[int, date]:
         .group_by(pool_daily_onchain.c.chain_id))}
 
 
-def rescore(engine, days: list[date], now: datetime, echo=print) -> dict:
-    """score.run per day, oldest first, each day in its own transaction after its backup. Prints one block per day."""
+def rescore(engine, days: list[date], now: datetime, echo=print, deadline: datetime | None = None, clock=None) -> dict:
+    """score.run per day, oldest first, each day in its own transaction after its backup; stops between days at
+    `deadline`. Prints one block per day. Returns {"days": {day: counts...}, "left_at_deadline": n}."""
+    clock = clock or _utcnow
     per: dict[str, dict] = {}
     with engine.connect() as conn:
         cov = onchain_coverage(conn)
-    for d in days:
+    for i, d in enumerate(days):
+        if deadline is not None and clock() >= deadline:
+            return {"days": per, "left_at_deadline": len(days) - i}
         with engine.begin() as conn:
             before = trending_top(conn, d)
             backed = backup_day(conn, d)
@@ -285,7 +293,7 @@ def rescore(engine, days: list[date], now: datetime, echo=print) -> dict:
         if partial:
             echo(f"            on-chain history starts after this day's 7-day window opens on: {', '.join(partial)}")
         per[d.isoformat()] = {**counts, "backed_up": backed, "top10_in": came, "top10_out": went}
-    return per
+    return {"days": per, "left_at_deadline": 0}
 
 
 # ------------------------------------------------------------------------------------------------
@@ -360,11 +368,19 @@ def blurb_estimates(conn, targets) -> list[float]:
     return [prose_estimate(why_blurb_prompt(signals._blurb_ctx(conn, p, daily))) for p, daily in targets]
 
 
-def write_what_lines(engine, claude, targets) -> dict:
+def _past(deadline: datetime | None, clock) -> bool:
+    return deadline is not None and (clock or _utcnow)() >= deadline
+
+
+def write_what_lines(engine, claude, targets, deadline: datetime | None = None, clock=None) -> dict:
     """One Claude call per target from stored facts only (no Parallel, no Blockscout); each line committed on its own.
-    "missing" gets enrich's full write (line, category, links, enriched_at); "cut" gets the line only."""
+    "missing" gets enrich's full write (line, category, links, enriched_at); "cut" gets the line only. Stops between
+    calls at `deadline`."""
     out = {"missing": 0, "cut": 0, "errors": 0}
-    for p, kind in targets:
+    for i, (p, kind) in enumerate(targets):
+        if _past(deadline, clock):
+            out["left_at_deadline"] = len(targets) - i
+            break
         enr = dict(p.enrichment or {})
         try:
             with engine.connect() as conn:
@@ -384,9 +400,12 @@ def write_what_lines(engine, claude, targets) -> dict:
     return out
 
 
-def write_blurbs(engine, claude, targets, now: datetime) -> dict:
+def write_blurbs(engine, claude, targets, now: datetime, deadline: datetime | None = None, clock=None) -> dict:
     out = {"blurbs": 0, "errors": 0}
-    for p, daily in targets:
+    for i, (p, daily) in enumerate(targets):
+        if _past(deadline, clock):
+            out["left_at_deadline"] = len(targets) - i
+            break
         try:
             with engine.connect() as conn:
                 bctx = signals._blurb_ctx(conn, p, daily)
@@ -464,7 +483,7 @@ def prose_plan(engine, meter: Meter, now: datetime, what: bool, blurbs: bool, li
 
 
 def prose(engine, ctx: RunContext, what: bool, blurbs: bool, limit: int | None, signals_limit: int,
-          stale_before: datetime) -> dict:
+          stale_before: datetime, deadline: datetime | None = None, clock=None) -> dict:
     claude = ctx.client("claude")
     if claude is None:
         raise RuntimeError("no ANTHROPIC_API_KEY")
@@ -472,12 +491,14 @@ def prose(engine, ctx: RunContext, what: bool, blurbs: bool, limit: int | None, 
     if what:
         with engine.connect() as conn:
             t = what_line_targets(conn)
-        out["what_lines"] = write_what_lines(engine, claude, t[:limit] if limit is not None else t)
-    if blurbs and not out.get("what_lines", {}).get("budget_stop"):
+        out["what_lines"] = write_what_lines(engine, claude, t[:limit] if limit is not None else t, deadline, clock)
+    stopped = out.get("what_lines", {})
+    if blurbs and not stopped.get("budget_stop") and not stopped.get("left_at_deadline"):
         with engine.connect() as conn:
             day = latest_day(conn)
             t, info = blurb_targets(conn, day, signals_limit, stale_before) if day else ([], {})
-        out["blurbs"] = {**write_blurbs(engine, claude, t[:limit] if limit is not None else t, ctx.now), **info}
+        out["blurbs"] = {**write_blurbs(engine, claude, t[:limit] if limit is not None else t, ctx.now, deadline, clock),
+                         **info}
     ctx.meter.flush()
     out["usd"] = round(ctx.meter.run_usd, 4)
     return out
@@ -584,13 +605,14 @@ def add_parsers(sub) -> None:
     b = sub.add_parser("backfill-days", help="free: GeckoTerminal daily candles into pool_snapshots for closed days")
     b.add_argument("--since", type=int, default=14, help=f"run days to cover (1..{MAX_SINCE}); writes since + 14 closed days")
     b.add_argument("--pools", type=int, default=None, help="pull at most N pools, busiest first (default all)")
-    b.add_argument("--stop-at", default="05:30", help="UTC HH:MM: stop between pools here so the 06:00 nightly gets the lock")
+    b.add_argument("--stop-at", default="05:30", help="UTC HH:MM before 06:00: stop between pools here so the nightly gets the lock")
     b.add_argument("--dry-run", action="store_true")
     common(b)
     r = sub.add_parser("rescore", help="free: score.run for stored run days, oldest first, after a backup")
     r.add_argument("--since", type=int, default=14, help=f"run days today-N .. today that have rows (1..{MAX_SINCE})")
     r.add_argument("--day", type=date.fromisoformat, default=None, help="one run day instead of --since")
     r.add_argument("--restore", action="store_true", help="put the pre-repair rows of those days back instead")
+    r.add_argument("--stop-at", default="05:30", help="UTC HH:MM before 06:00: stop between days here")
     r.add_argument("--dry-run", action="store_true")
     common(r)
     p = sub.add_parser("prose", help="PAID: Claude what_line / why_blurb rewrites from stored facts")
@@ -599,6 +621,7 @@ def add_parsers(sub) -> None:
     p.add_argument("--limit", type=int, default=None, help="at most N projects per kind, busiest first")
     p.add_argument("--max-usd", type=float, default=None, help="cap on this run's spend, on top of the daily/30-day budgets")
     p.add_argument("--signals-limit", type=int, default=50)
+    p.add_argument("--stop-at", default="05:30", help="UTC HH:MM before 06:00: stop between calls here")
     p.add_argument("--stale-before", type=datetime.fromisoformat, default=P8_MERGED_AT,
                    help="blurbs written before this UTC time are rewritten (default: package 8's merge)")
     g = p.add_mutually_exclusive_group(required=True)
@@ -613,7 +636,7 @@ def add_parsers(sub) -> None:
     a = sub.add_parser("all", help="the whole plan (--dry-run), or backfill-days, rescore, verify (and prose with a budget)")
     a.add_argument("--since", type=int, default=14)
     a.add_argument("--pools", type=int, default=None)
-    a.add_argument("--stop-at", default="05:30")
+    a.add_argument("--stop-at", default="05:30", help="UTC HH:MM before 06:00: every step stops here")
     a.add_argument("--sample", type=int, default=5)
     a.add_argument("--limit", type=int, default=None, help="prose: at most N projects per kind")
     a.add_argument("--prose-budget-usd", type=float, default=None, help="run prose too, spending at most this")
@@ -623,13 +646,31 @@ def add_parsers(sub) -> None:
     common(a)
 
 
+def _stop_time(hhmm: str) -> dtime:
+    h, m = (int(x) for x in hhmm.split(":"))
+    return dtime(h, m)
+
+
+def next_nightly(now: datetime) -> datetime:
+    """The 06:00 UTC run a repair must leave room for: today's until 30 minutes after it starts, then tomorrow's."""
+    n = datetime.combine(now.date(), NIGHTLY_AT, tzinfo=timezone.utc)
+    return n if now < n + NIGHTLY_GRACE else n + _D
+
+
 def deadline_at(hhmm: str | None, now: datetime) -> datetime | None:
-    """The next HH:MM UTC after `now`."""
+    """--stop-at on the day of the next nightly, so a start after it never rolls the deadline to tomorrow while the lock
+    is held through 06:00 (main refuses that start instead). None: no stop time."""
     if not hhmm:
         return None
-    h, m = (int(x) for x in hhmm.split(":"))
-    at = datetime.combine(now.date(), dtime(h, m), tzinfo=timezone.utc)
-    return at if at > now else at + _D
+    n = next_nightly(now)
+    stop = datetime.combine(n.date(), _stop_time(hhmm), tzinfo=timezone.utc)
+    return stop if stop <= n else stop - _D
+
+
+def in_blackout(hhmm: str | None, now: datetime) -> bool:
+    """now is between the stop time and 30 minutes after the nightly starts."""
+    stop = deadline_at(hhmm, now)
+    return stop is not None and stop <= now
 
 
 def _receipt(engine, name: str, started: datetime, rc: int, out: dict) -> None:
@@ -692,8 +733,21 @@ def main(args: argparse.Namespace, engine) -> int:
     if cmd == "prose" and not (args.what_lines or args.blurbs):
         log.error("prose: pass --what-lines and/or --blurbs")
         return 2
+    stop_at = getattr(args, "stop_at", None)
+    if stop_at:
+        try:
+            ok = _stop_time(stop_at) < NIGHTLY_AT
+        except ValueError:
+            ok = False
+        if not ok:
+            log.error("--stop-at must be HH:MM UTC before %s (the nightly), or empty for none", NIGHTLY_AT.strftime("%H:%M"))
+            return 2
     if getattr(args, "dry_run", False):
         return _dry_run(cmd, args, engine, now)
+    if in_blackout(stop_at, now):
+        log.error("%s UTC is between --stop-at %s and 30 minutes after the 06:00 nightly: start the repair after it",
+                  now.strftime("%H:%M"), stop_at)
+        return EXIT_PRECONDITION
     lock = db.try_run_lock(engine)
     if lock is None:
         log.error("another bait run holds the run lock (the nightly?); repair not started")
@@ -723,12 +777,25 @@ def _ctx(now: datetime, meter=None) -> RunContext:
     return RunContext(day=now.date(), now=now, meter=meter)
 
 
+def _incomplete(out: dict) -> bool:
+    """A step that stopped at the deadline: say so and let the caller exit EXIT_INCOMPLETE."""
+    left = out.get("left_at_deadline") or any(isinstance(v, dict) and v.get("left_at_deadline") for v in out.values())
+    if left:
+        print("INCOMPLETE: rerun to resume (stopped at --stop-at before the 06:00 UTC nightly)")
+    return bool(left)
+
+
 def _run(cmd: str, args, engine, now: datetime) -> int:
+    """One stop time for the whole command, checked between pools, days and calls, and before every step of `all`."""
     today = now.date()
+    deadline = deadline_at(getattr(args, "stop_at", None), now)
+    clock = lambda: _utcnow()   # noqa: E731  (late-bound: tests move the clock)
+
+    def finish(rc: int, out: dict) -> int:
+        return EXIT_INCOMPLETE if rc == 0 and _incomplete(out) else rc
+
     if cmd == "backfill-days":
-        rc, _ = _step(engine, "backfill-days", lambda: backfill(engine, _ctx(now), args.since, args.pools,
-                                                                deadline_at(args.stop_at, now)))
-        return rc
+        return finish(*_step(engine, "backfill-days", lambda: backfill(engine, _ctx(now), args.since, args.pools, deadline, clock)))
     if cmd == "rescore":
         with engine.connect() as conn:
             days = rescore_days(conn, today, args.since, args.day)
@@ -742,32 +809,45 @@ def _run(cmd: str, args, engine, now: datetime) -> int:
                 return {"restored": done}
             return _step(engine, "rescore-restore", go)[0]
         print(pending_note(engine, today, args.since if args.day is None else (today - args.day).days))
-        return _step(engine, "rescore", lambda: {"days": rescore(engine, days, now)})[0]
+        return finish(*_step(engine, "rescore", lambda: rescore(engine, days, now, deadline=deadline, clock=clock)))
     if cmd == "verify":
         return _step(engine, "verify", lambda: verify(engine, _ctx(now), args.sample, args.pools_per_project, args.seed))[0]
     if cmd == "prose":
         meter = CappedMeter(engine, args.max_usd)
         meter.step = "repair-prose"
-        return _step(engine, "prose", lambda: prose(engine, _ctx(now, meter), args.what_lines, args.blurbs, args.limit,
-                                                     args.signals_limit, as_utc(args.stale_before)))[0]
-    # all: the free steps, then prose only within an explicit budget
-    rc, out = _step(engine, "backfill-days", lambda: backfill(engine, _ctx(now), args.since, args.pools,
-                                                              deadline_at(args.stop_at, now)))
-    if rc or out.get("left_at_deadline"):
-        return rc
-    with engine.connect() as conn:
-        days = rescore_days(conn, today, args.since)
-    rc = _step(engine, "rescore", lambda: {"days": rescore(engine, days, now)})[0]
+        return finish(*_step(engine, "prose", lambda: prose(engine, _ctx(now, meter), args.what_lines, args.blurbs, args.limit,
+                                                            args.signals_limit, as_utc(args.stale_before), deadline, clock)))
+
+    # all: the free steps, then prose only within an explicit budget; the stop time is checked before every step
+    def late() -> bool:
+        if _past(deadline, clock):
+            print("INCOMPLETE: rerun to resume (stopped at --stop-at before the 06:00 UTC nightly)")
+            return True
+        return False
+
+    rc = finish(*_step(engine, "backfill-days", lambda: backfill(engine, _ctx(now), args.since, args.pools, deadline, clock)))
     if rc:
         return rc
+    if late():
+        return EXIT_INCOMPLETE
+    with engine.connect() as conn:
+        days = rescore_days(conn, today, args.since)
+    rc = finish(*_step(engine, "rescore", lambda: rescore(engine, days, now, deadline=deadline, clock=clock)))
+    if rc:
+        return rc
+    if late():
+        return EXIT_INCOMPLETE
     rc = _step(engine, "verify", lambda: verify(engine, _ctx(now), args.sample, 3, None))[0]
     if rc or args.prose_budget_usd is None:
         if not rc:
             print("prose not run: pass --prose-budget-usd X after the owner's go (see `repair all --dry-run`)")
         return rc
+    if late():
+        return EXIT_INCOMPLETE
     meter = CappedMeter(engine, args.prose_budget_usd)
     meter.step = "repair-prose"
-    return _step(engine, "prose", lambda: prose(engine, _ctx(now, meter), True, True, args.limit, 50, P8_MERGED_AT))[0]
+    return finish(*_step(engine, "prose", lambda: prose(engine, _ctx(now, meter), True, True, args.limit, 50, P8_MERGED_AT,
+                                                        deadline, clock)))
 
 
 def _dry_run(cmd: str, args, engine, now: datetime) -> int:

@@ -147,13 +147,13 @@ def test_rescore_backs_up_once_reports_the_top_10_change_and_restore_puts_the_ol
         _old_row(c, p, DAY)                                   # scored by the old code: spam, no window_end
         assert repair.rescore_days(c, DAY, since=14) == [DAY]
     lines = []
-    per = repair.rescore(engine, [DAY], NOW, echo=lines.append)
+    per = repair.rescore(engine, [DAY], NOW, echo=lines.append)["days"]
     assert per[DAY.isoformat()]["top10_in"] == ["riser"] and per[DAY.isoformat()]["backed_up"] == 1
     assert lines[0].startswith(f"{DAY}  projects 1  new 0  trending 1  wash 0") and "in riser" in lines[1]
     with engine.connect() as c:
         row = c.execute(sa.select(db.project_daily)).one()
     assert row.window_end == end and row.vol_7d == 140_000.0 and not row.is_spam and row.score_trending > 0
-    assert repair.rescore(engine, [DAY], NOW, echo=lines.append)[DAY.isoformat()]["backed_up"] == 0   # first copy kept
+    assert repair.rescore(engine, [DAY], NOW, echo=lines.append)["days"][DAY.isoformat()]["backed_up"] == 0   # first copy kept
     with engine.begin() as c:
         assert repair.restore_day(c, DAY) == 1
         assert repair.restore_day(c, DAY - D) is None
@@ -397,3 +397,52 @@ def test_repair_refuses_between_0530_and_0800_utc_until_todays_nightly_has_writt
     (tmp_path / "late").mkdir()
     url2, _ = _cli_db(tmp_path / "late", nightly_day=_today() - D)
     assert main(["repair", "rescore", "--database-url", url2]) == 0
+
+
+def test_the_stop_time_is_the_one_before_the_next_nightly_and_a_start_inside_it_is_refused(tmp_path, monkeypatch):
+    from bait.__main__ import main
+    t = _today()
+    at = lambda h, m=0, d=0: datetime.combine(t + d * D, dtime(h, m), tzinfo=timezone.utc)   # noqa: E731
+    assert repair.deadline_at("05:30", at(2)) == at(5, 30)
+    assert repair.deadline_at("05:30", at(23)) == at(5, 30, 1)
+    assert repair.deadline_at("05:30", at(6, 30)) == at(5, 30, 1)          # the nightly's first 30 minutes are over
+    assert [repair.in_blackout("05:30", at(h, m)) for h, m in ((5, 29), (5, 45), (6, 20), (6, 30))] == [False, True, True, False]
+    assert repair.deadline_at("", at(2)) is None and not repair.in_blackout("", at(5, 45))
+    url, e = _cli_db(tmp_path)                                             # today's nightly receipt exists
+    _at(monkeypatch, 5, 45)                                                # a start after the stop time: never rolls to tomorrow
+    assert main(["repair", "backfill-days", "--database-url", url]) == repair.EXIT_PRECONDITION
+    assert main(["repair", "rescore", "--stop-at", "05:00", "--database-url", url]) == repair.EXIT_PRECONDITION
+    _at(monkeypatch, 12)
+    assert main(["repair", "rescore", "--stop-at", "07:00", "--database-url", url]) == 2   # must be before 06:00
+    assert _receipts(e) == []
+
+
+def test_all_started_late_stops_before_rescore_once_the_deadline_has_passed(tmp_path, monkeypatch, capsys):
+    from bait.__main__ import main
+    t = _today()
+    clock = [datetime.combine(t, dtime(12), tzinfo=timezone.utc)]
+    monkeypatch.setattr(repair, "_utcnow", lambda: clock[0])
+
+    class SlowGT(FakeGT):                                                  # the backfill runs into the stop time
+        def gt(self, path):
+            clock[0] = datetime.combine(t + D, dtime(5, 31), tzinfo=timezone.utc)
+            return super().gt(path)
+
+    url, e = _cli_db(tmp_path)
+    monkeypatch.setattr(repair, "keyless_http", lambda ctx: SlowGT({"0xpc": {t - 3 * D: 123.0}}))
+    assert main(["repair", "all", "--since", "14", "--yes", "--database-url", url]) == repair.EXIT_INCOMPLETE
+    assert "INCOMPLETE: rerun to resume" in capsys.readouterr().out
+    assert [(r.notes, r.exit_code) for r in _receipts(e)] == [("repair backfill-days", 0)]     # rescore never started
+
+
+def test_rescore_and_prose_stop_between_items_at_the_deadline(engine):
+    with engine.begin() as c:
+        _prose_seed(c)
+        targets = repair.what_line_targets(c)
+    out = repair.rescore(engine, [DAY - D, DAY], NOW, echo=lambda s: None, deadline=NOW, clock=lambda: NOW)
+    assert out == {"days": {}, "left_at_deadline": 2}
+    claude = FakeClaude(repair.CappedMeter(None, None, budgets=Budgets(3.0, 40.0, {})))
+    out = repair.write_what_lines(engine, claude, targets, deadline=NOW, clock=lambda: NOW)
+    assert out["left_at_deadline"] == len(targets) and claude.what == []
+    out = repair.write_blurbs(engine, claude, [("p", "d")], NOW, deadline=NOW, clock=lambda: NOW)
+    assert out["left_at_deadline"] == 1 and claude.why == []
