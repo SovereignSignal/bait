@@ -45,3 +45,20 @@ test("hard cap evicts the oldest entry; invalidate clears by prefix", async () =
   c.invalidate();
   assert.equal(c.size(), 0);
 });
+
+test("a per-call ttl shortens one entry's lifetime, by number or by value", async () => {
+  let t = 0;
+  const c = createSwrCache<number>({ ttlMs: 1000, max: 10, now: () => t });
+  let n = 0;
+  await c.get("short", async () => ++n, 5);
+  await c.get("val", async () => ++n, (v) => (v === 2 ? 5 : 1000));
+  t = 6;
+  await c.get("short", async () => ++n);
+  await c.get("val", async () => ++n);
+  await tick();
+  assert.equal(n, 4);                                // both expired at t=6 and refreshed once
+  await c.get("long", async () => ++n);
+  t = 500;
+  await c.get("long", async () => ++n);
+  assert.equal(n, 5);                                // default ttl still applies
+});

@@ -8,7 +8,7 @@
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
 import { receiptRelevant } from "@/lib/relevance";
 import { resolveSymbols } from "@/lib/symbols";
-import { createSwrCache } from "@/lib/swr-cache";
+import { createSwrCache, type Ttl } from "@/lib/swr-cache";
 import { isUnlisted, oldUnlistedSlugPattern, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
@@ -98,11 +98,14 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
   } else {
     await refreshIfNewDay(db);
     // Unknown slugs never reach the cache: random URLs cannot fill it.
-    if (!(await getAllSlugs()).includes(slug)) return null;
-    const rows = await safe("getProject", () => cached(`project:${slug}`, () => loadFromDb(db, { slug, full: true })), []);
+    // (An empty list means an empty or failing database: fall through so a failure throws rather than 404s.)
+    const known = await getAllSlugs();
+    if (known.length && !known.includes(slug)) return null;
+    // No safe() here: a database error throws (Next keeps the last good page) instead of becoming a cached 404.
+    const rows = await cached(`project:${slug}`, () => loadFromDb(db, { slug, full: true }), degradedTtl);
     detail = rows[0] ?? null;
   }
-  if (!detail) return null;
+  if (!detail || detail.isSpam) return null;
   const rows = await getRows();
   const rank = applyTab(rows, { tab: "trending" }).find((x) => x.slug === slug)?.rank;
   return { ...detail, rank };
@@ -215,9 +218,14 @@ export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T):
 
 // ---------- one-hour stale-while-revalidate cache for the heavy reads (single replica on Railway) ----------
 const cache = createSwrCache<unknown>({ ttlMs: 3_600_000, max: 400 });
-function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  return cache.get(key, fn) as Promise<T>;
+function cached<T>(key: string, fn: () => Promise<T>, ttl?: Ttl<T>): Promise<T> {
+  return cache.get(key, fn as () => Promise<unknown>, ttl as Ttl<unknown> | undefined) as Promise<T>;
 }
+
+/** A load where a usage sub-query fell back to null (outage, or a table that is not there yet) is retried after 60 s, not 1 h. */
+type Loaded = ProjectDetail[] & { degraded?: boolean };
+const DEGRADED_TTL_MS = 60_000;
+const degradedTtl = (r: Loaded): number => (r.degraded ? DEGRADED_TTL_MS : 3_600_000);
 
 let lastDaySeen: string | null = null;
 let lastProbe = 0;
@@ -240,7 +248,7 @@ async function loadAll(): Promise<ProjectDetail[]> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_PROJECTS.map(derive) : [];
   await refreshIfNewDay(db);
-  return safe("loadAll", () => cached("loadAll", () => loadFromDb(db, { full: false })), []);
+  return safe("loadAll", () => cached("loadAll", () => loadFromDb(db, { full: false }), degradedTtl), []);
 }
 
 /** digests.body (pipeline shape) -> DigestView. Title and intro are rendered here, not stored. */
@@ -318,7 +326,7 @@ type SmartRow = { project_id: number; smart: unknown };
  * top pool and 24h usage. `full` adds pools, the daily volume series and top
  * wallets, and is only used for the project page.
  */
-async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promise<ProjectDetail[]> {
+async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promise<Loaded> {
   const latest = await latestDay(db);
   const projectRows = await db
     .select()
@@ -428,7 +436,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
     r.token1_symbol = r.token1_symbol ?? (r.token1_id ? sym({ chainId: Number(r.chain_id), address: r.token1_id }) : null);
   }
 
-  const out: ProjectDetail[] = [];
+  const out: Loaded = [];
+  out.degraded = (latest != null && prev1 != null && dayUsage === null) || statsUsage === null || smartUsage === null;
   for (const p of projectRows) {
     const d = dailyBy.get(p.id);
     // Registry hooks span ~22 chains; Bait covers the ten in CHAINS. Unknown ids would crash every CHAINS[...] lookup.
