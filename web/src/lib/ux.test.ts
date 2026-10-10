@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clip, dayLabel, deltaWords, fmtDelta, NONE, usd, usdWhole } from "./format";
-import { activePool, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric } from "./present";
+import { activePool, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric } from "./present";
 import { emptyCopy, moversFor, searchRows } from "./feed";
 import { liveDotOn, tradesNote } from "./trades";
 import { loadHookIndex, resetHookIndex } from "./hook-index";
@@ -124,4 +124,10 @@ test("a pool with unknown USD volume shows the swaps that make it active", () =>
   assert.match(poolVolume({ vol24h: null, tx7d: 66 }).note ?? "", /custom-accounting hook or unpriced swaps/);
   assert.deepEqual(poolVolume({ vol24h: null, tx7d: null }), { text: NONE });
   assert.deepEqual(poolVolume({ vol24h: 0, tx7d: 5 }), { text: "$0" });           // known zero stays $0
+});
+
+test("an audit link is only ever an http(s) URL", () => {
+  assert.equal(firstWebUrl(["javascript:alert(1)", "data:text/html,x", "https://x.org/audit.pdf"]), "https://x.org/audit.pdf");
+  assert.equal(firstWebUrl(["HTTP://x.org/a"]), "HTTP://x.org/a");
+  assert.equal(firstWebUrl([null, 3, "ftp://x"]), null);
 });
