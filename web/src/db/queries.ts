@@ -18,13 +18,14 @@ import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
-import { digestItem, toRow } from "@/lib/present";
+import { digestItem, hookKeys, toRow } from "@/lib/present";
 import type {
   Category,
   ChainId,
   DigestItem,
   DigestView,
   FeedQuery,
+  HookIndex,
   HookView,
   LeaderEntry,
   LeadersView,
@@ -68,7 +69,7 @@ function derive(p: ProjectDetail): ProjectDetail {
 }
 
 function rowOf(p: ProjectDetail): RowView {
-  return toRow(p, p.hooks.map((h) => h.address));
+  return toRow(p);
 }
 
 // ---------- public API ----------
@@ -77,6 +78,12 @@ function rowOf(p: ProjectDetail): RowView {
 export async function getRows(): Promise<RowView[]> {
   const all = await loadAll();
   return all.filter((p) => !p.isSpam).map(rowOf);
+}
+
+/** slug -> hook addresses for 0x search (GET /api/hooks): the same projects as getRows. */
+export async function getHookIndex(): Promise<HookIndex> {
+  const all = await loadAll();
+  return Object.fromEntries(all.filter((p) => !p.isSpam).map((p) => [p.slug, hookKeys(p.hooks.map((h) => h.address))]));
 }
 
 /** Tab-filtered projects (RSS uses the New tab). */

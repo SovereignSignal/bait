@@ -1,7 +1,7 @@
 // Tab / filter / ranking rules shared by the server (which project "/" selects)
 // and the client list (search, watchlist). Pure: no server-only imports.
 import { CHAINS, parseChainParam } from "./chains";
-import { CATEGORIES, CATEGORY_LABEL, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type RowView, type Tab } from "./types";
+import { CATEGORIES, CATEGORY_LABEL, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type HookIndex, type RowView, type Tab } from "./types";
 
 export const TRENDING_TOP_N = 20;
 export const TRENDING_MIN_VOL = 10_000;
@@ -66,7 +66,7 @@ function matches(p: FeedItem, q: FeedQuery): boolean {
 export function trendingOrder<T extends FeedItem>(all: T[]): T[] {
   return [...all]
     .filter((p) => !p.isWash && p.vol7d != null && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
-    .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd)
+    .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd || a.slug.localeCompare(b.slug))
     .slice(0, TRENDING_TOP_N);
 }
 
@@ -113,11 +113,12 @@ export function movers(all: RowView[], n = 10): RowView[] {
     .slice(0, n);
 }
 
-/** Client search: name substring or hook address prefix. */
-export function searchRows<T extends Pick<RowView, "name" | "hooks">>(rows: T[], q: string): T[] {
+/** Client search: name substring, or hook address prefix once the index (/api/hooks) has loaded. */
+export function searchRows<T extends Pick<RowView, "name" | "slug">>(rows: T[], q: string, hooks?: HookIndex): T[] {
   const s = q.trim().toLowerCase();
   if (!s) return rows;
-  return rows.filter((p) => p.name.toLowerCase().includes(s) || (s.startsWith("0x") && p.hooks.some((h) => h.startsWith(s))));
+  const byAddress = s.startsWith("0x") && hooks;
+  return rows.filter((p) => p.name.toLowerCase().includes(s) || (byAddress && (hooks[p.slug] ?? []).some((h) => h.startsWith(s))));
 }
 
 /** Movers for the strip: filtered by chain when one is selected, capped. `rows` is already in mover order. */

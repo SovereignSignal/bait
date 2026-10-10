@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clip, dayLabel, deltaWords, fmtDelta, NONE, usd } from "./format";
-import { rowLabel, rowMetric } from "./present";
-import { emptyCopy, moversFor } from "./feed";
+import { hookKeys, rowLabel, rowMetric } from "./present";
+import { emptyCopy, moversFor, searchRows } from "./feed";
 import { liveDotOn, tradesNote } from "./trades";
+import { loadHookIndex, resetHookIndex } from "./hook-index";
 
 test("usd: trimmed .0, B to one decimal, one missing glyph", () => {
   assert.deepEqual([usd(1000), usd(1040), usd(22_800), usd(10_000_000), usd(10_600_000), usd(1_210_000_000), usd(812), usd(-2500)],
@@ -66,4 +67,33 @@ test("the live dot is green only for an answering feed whose newest trade is und
   assert.equal(liveDotOn("upstream_error", [t("2026-10-10T11:59:00Z")], now), false);
   assert.equal(liveDotOn("ok", [], now), false);
   assert.equal(liveDotOn(undefined, [t("2026-10-10T11:59:00Z")], now), false);
+});
+
+test("0x search matches hook address prefixes once the index has loaded; names match without it", () => {
+  const rows = [{ slug: "a", name: "Angstrom" }, { slug: "b", name: "0xBet" }];
+  const index = { a: ["0x0d62529346ac2c61f5c0582210d01214687bc0cc"], b: [] };
+  assert.deepEqual(searchRows(rows, "0x0d62").map((r) => r.slug), []);             // index not loaded yet
+  assert.deepEqual(searchRows(rows, "0x0D62 ", index).map((r) => r.slug), ["a"]);
+  assert.deepEqual(searchRows(rows, "0xbe", index).map((r) => r.slug), ["b"]);      // a name match still counts
+  assert.deepEqual(searchRows(rows, "ang").map((r) => r.slug), ["a"]);
+});
+
+test("hookKeys: lowercase, deduplicated, capped at 8", () => {
+  const many = Array.from({ length: 12 }, (_, i) => `0xAB${i.toString(16).padStart(38, "0")}`);
+  assert.deepEqual(hookKeys(["0xAA", "0xaa", "0xBB"]), ["0xaa", "0xbb"]);
+  assert.equal(hookKeys(many).length, 8);
+});
+
+test("the hook index loads once, and a failed load is retried on the next call", async () => {
+  resetHookIndex();
+  let calls = 0;
+  const flaky = (async () => {
+    calls++;
+    return calls === 1 ? new Response("down", { status: 500 }) : Response.json({ a: ["0xaa"] });
+  }) as unknown as typeof fetch;
+  await assert.rejects(loadHookIndex(flaky));
+  assert.deepEqual(await loadHookIndex(flaky), { a: ["0xaa"] });
+  assert.deepEqual(await loadHookIndex(flaky), { a: ["0xaa"] });
+  assert.equal(calls, 2);
+  resetHookIndex();
 });

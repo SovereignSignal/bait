@@ -30,6 +30,14 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const onTerminal = isTerminalPath(pathname);
+  const pendingEnter = useRef(false);
+
+  useEffect(() => {
+    if (!pendingEnter.current || !t.topMatch) return;
+    pendingEnter.current = false;
+    router.push(t.topMatch);
+    input.current?.blur();
+  }, [t.topMatch, router]);
 
   useEffect(() => {
     if (t.focusTick > 0) input.current?.focus();
@@ -50,6 +58,7 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
   }, [t]);
 
   const onChange = (v: string) => {
+    pendingEnter.current = false;
     t.setQ(v);
     // The list lives on the terminal; searching from another page goes there.
     if (!onTerminal && v.trim()) router.push(`/${window.location.search}`);
@@ -69,10 +78,13 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
           value={t.q}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && t.topMatch) {
+            if (e.key !== "Enter") return;
+            if (t.topMatch) {
               e.preventDefault();
               router.push(t.topMatch);
               input.current?.blur();
+            } else if (/^0x/i.test(t.q.trim())) {
+              pendingEnter.current = true; // the address index may still be loading: go when the match appears
             }
           }}
           placeholder="Search hooks or 0x…"

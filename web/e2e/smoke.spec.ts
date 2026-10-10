@@ -80,6 +80,22 @@ for (const p of [{ slug: "stablepairhook", routing: "Not in app", swap: false },
   });
 }
 
+test("0x search: an address prefix finds its project, and Enter pressed while the index loads still goes there", async ({ page }) => {
+  const errs = watch(page);
+  // hold /api/hooks for a moment so the Enter lands before the index does
+  await page.route("**/api/hooks", async (route) => {
+    await new Promise((r) => setTimeout(r, 800));
+    await route.continue();
+  });
+  await page.goto("/");
+  if (phone()) await page.getByRole("button", { name: "Search", exact: true }).click(); // phones open search from the dock
+  const box = page.getByRole("searchbox", { name: "Search hooks, projects or addresses" });
+  await box.fill("0xb3ca29");
+  await box.press("Enter");
+  await expect(page).toHaveURL(/\/p\/hookrmodularhookv6/);
+  expect(errs).toEqual([]);
+});
+
 test("unknown project: 404 with a message", async ({ page }) => {
   expect((await page.goto("/p/no-such-hook"))?.status()).toBe(404);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("No project called 'no-such-hook'.");
