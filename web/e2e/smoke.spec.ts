@@ -96,6 +96,16 @@ test("0x search: an address prefix finds its project, and Enter pressed while th
   expect(errs).toEqual([]);
 });
 
+test("/p/angstrom: the audit badge links out, the summary says when it was written, the badges explain themselves", async ({ page }) => {
+  const errs = watch(page);
+  await page.goto("/p/angstrom");
+  await expect(page.getByTestId("badges").getByRole("link", { name: /Audit linked/ })).toHaveAttribute("href", "https://github.com/Uniswap/hooklist");
+  await expect(page.getByText("Written Oct 8; the figures above are current.")).toBeVisible();
+  await page.getByText("What these badges mean").click();
+  await expect(page.getByText("An audit link is published. It says nothing about scope or findings.").last()).toBeVisible();
+  expect(errs).toEqual([]);
+});
+
 test("unknown project: 404 with a message", async ({ page }) => {
   expect((await page.goto("/p/no-such-hook"))?.status()).toBe(404);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("No project called 'no-such-hook'.");

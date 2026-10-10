@@ -196,6 +196,7 @@ function build(raw: Raw, i: number): ProjectDetail {
     isFactory: false,
     whatLine: raw.what,
     whyBlurb: raw.why ?? "",
+    whyBlurbAt: raw.why ? "2026-10-08T06:20:00.000Z" : null,
     website: null,
     github: null,
     xHandle: null,
@@ -206,7 +207,7 @@ function build(raw: Raw, i: number): ProjectDetail {
     hooklisted: raw.hooklisted,
     upgradeable: raw.upg,
     metrics: { tvlUsd: raw.tvl, vol7d: raw.vol7, vol7dPrev: raw.prev, swaps7d: raw.txs * 7, poolsN: raw.pools, hooksN: raw.hooks },
-    signals: { smartMoneyLps: null, lastCommitAt: null, lastExaHitAt: null, routable: raw.routable, auditCount: raw.audited ? 1 : 0 },
+    signals: { smartMoneyLps: null, lastCommitAt: null, lastExaHitAt: null, routable: raw.routable, auditCount: raw.audited ? 1 : 0, auditUrl: raw.audited ? "https://github.com/Uniswap/hooklist" : null },
     receipts: (raw.rec ?? []).map(receipt),
     topPool: top ? { poolId: top.poolId, chainId: top.chainId, token0Symbol: top.token0Symbol, token1Symbol: top.token1Symbol, hookAddress: hookAddr } : null,
     usage: {
