@@ -2,6 +2,7 @@
 // List, movers and the back link read the URL on the client; on the statically rendered
 // project page they suspend and the fallback renders the default tab.
 import { Suspense } from "react";
+import type { Freshness } from "@/lib/health";
 import type { LaunchView, ProjectDetail, RowView } from "@/lib/types";
 import { Detail, EmptyDetail } from "./Detail";
 import { Footer } from "./Footer";
@@ -19,6 +20,7 @@ export function Terminal({
   emptyText,
   launches,
   launchesNow,
+  fresh,
 }: {
   rows: RowView[];
   moverRows: RowView[];
@@ -31,6 +33,8 @@ export function Terminal({
   /** "Just launched" panel on top of the New tab's list (only passed when the tab is New) */
   launches?: LaunchView[];
   launchesNow?: number;
+  /** age of the figures, from the run receipt and indexer state; null without a database */
+  fresh?: Freshness | null;
 }) {
   return (
     <div className={s.shell} data-view={view}>
@@ -48,13 +52,13 @@ export function Terminal({
               <BackLink />
             </Suspense>
           )}
-          {project ? <Detail p={project} now={now} /> : <EmptyDetail text={emptyText ?? "Nothing indexed yet."} />}
+          {project ? <Detail p={project} now={now} fresh={fresh} /> : <EmptyDetail text={emptyText ?? "Nothing indexed yet."} />}
         </section>
         <aside className={s.side} aria-label="Trade">
           {project && <TradePanel p={project} />}
         </aside>
       </main>
-      <Footer sample={sample} />
+      <Footer sample={sample} through={fresh?.through} />
     </div>
   );
 }

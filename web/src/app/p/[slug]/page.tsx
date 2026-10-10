@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { Terminal } from "@/components/Terminal";
+import { getFreshness } from "@/db/health";
 import { getAllSlugs, getProject, getRows, slugForAlias, usingFixtures } from "@/db/queries";
 import { SAMPLE_NOW } from "@/fixtures/sample";
 import { movers } from "@/lib/feed";
@@ -28,12 +29,12 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function ProjectPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [p, rows] = await Promise.all([getProject(slug), getRows()]);
+  const [p, rows, fresh] = await Promise.all([getProject(slug), getRows(), getFreshness()]);
   if (!p) {
     const moved = await slugForAlias(slug);   // renamed or merged since this link was shared
     if (moved) permanentRedirect(`/p/${moved}`);
     notFound();
   }
   const sample = usingFixtures();
-  return <Terminal rows={rows} moverRows={movers(rows, 60)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} />;
+  return <Terminal rows={rows} moverRows={movers(rows, 60)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} fresh={fresh} />;
 }

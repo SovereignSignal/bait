@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { explorerTxUrl } from "@/lib/chains";
 import { shortAddr, since, usd } from "@/lib/format";
-import { tradesNote, type TradesStatus } from "@/lib/trades";
+import { liveDotOn, tradesNote, type TradesStatus } from "@/lib/trades";
 import type { ChainId, TradeView } from "@/lib/types";
 import { WalletAvatar } from "./Avatar";
 import s from "./Detail.module.css";
@@ -63,7 +63,7 @@ export function LiveTrades({ chainId, chainSlug, poolId, pair }: { chainId: Chai
   return (
     <div ref={box} className={s.trades} aria-live="off">
       <div className={s.liveHead}>
-        <span className={s.liveDot} aria-hidden="true" />
+        <span className={`${s.liveDot} ${feed && liveDotOn(feed.status, feed.trades, now) ? "" : s.liveDotOff}`} aria-hidden="true" />
         Live trades · {pair}
       </div>
       {feed == null ? (
