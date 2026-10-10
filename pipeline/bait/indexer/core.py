@@ -161,6 +161,8 @@ class PoolResolver:
         self.pending.update(got)
         self.remember(got.values())
         found.update(got)
+        for i in got:
+            self.scanned.pop(i, None)                   # a found id keeps no stale cursor
 
     def resolve(self, hs: HyperSync, chain: IndexedChain, ids, floor: int, to_block: int, settings: Settings,
                 budget: int | None = None) -> dict[str, dict]:
@@ -183,15 +185,17 @@ class PoolResolver:
                 while cur < to_block:
                     if self.calls >= budget:
                         self._keep(got, found)
+                        self.chunk_calls = max(self.chunk_calls, self.calls - start)
                         for i in chunk:
                             if i not in got:
                                 self.scanned[i] = cur
-                        left = sum(1 for i in need if i not in found)
+                        left = sum(1 for i in need if i not in found and i not in self.absent)
                         raise LookupBudget(f"pool lookup budget spent ({self.calls} of {budget} calls), {left} ids left, "
                                            f"scan resumes at block {cur}")
                     logs, blocks, _, nb, _ = page(hs.query(initialize_by_id_query(chain.pool_manager, cur, to_block, chunk)))
                     self.calls += 1
                     if nb is None or nb <= cur:
+                        self._keep(got, found)                  # the chain errors this loop; what was found stays
                         raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={nb})")
                     for r in hooked_pools_from_page(chain.chain_id, logs, blocks):
                         got[r["pool_id"]] = r
