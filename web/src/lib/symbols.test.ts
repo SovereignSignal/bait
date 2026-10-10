@@ -29,3 +29,13 @@ test("resolveSymbols returns within the wait budget when lookups never settle", 
   assert.ok(Date.now() - t0 < 1600);
   assert.equal(lookup({ chainId: 1, address: "0x" + "ab".repeat(20) }), null);
 });
+
+test("the lookup names currency 0x0 as the chain's native token, without asking anyone", async () => {
+  const asked: unknown[] = [];
+  const spy = async (refs: unknown[]) => void asked.push(...refs);
+  const zero = "0x0000000000000000000000000000000000000000";
+  const lookup = await resolveSymbols([{ chainId: 4663, address: zero }, { chainId: 56, address: zero }], { waitMs: 50 }, { llama: spy, chain: spy });
+  assert.equal(lookup({ chainId: 4663, address: zero }), "ETH");
+  assert.equal(lookup({ chainId: 56, address: zero }), "BNB");
+  assert.equal(asked.length, 0);
+});

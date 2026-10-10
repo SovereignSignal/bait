@@ -603,7 +603,9 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${from7} and ${end}
       ) w on true
       where h.project_id = ${projectId} and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'
-      order by s.tvl_usd desc nulls last
+      -- active pools first, so the 50 rows hold them on a launchpad with hundreds of idle ones
+      order by (coalesce(s.tvl_usd, 0) > 0 or coalesce(s.volume_usd_day, 0) > 0 or coalesce(w.vol7d, 0) > 0 or coalesce(w.tx7d, 0) > 0) desc,
+               s.tvl_usd desc nulls last, s.volume_usd_day desc nulls last
       limit 50`),
     safe<unknown>(
       "pools:pool_stats",
