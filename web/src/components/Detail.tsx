@@ -236,7 +236,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
   const known = pools.filter((x) => knownChain(x.chainId));
   const active = known.filter(activePool);
   const shown = (active.length ? active : known).slice(0, POOLS_SHOWN);
-  const note = poolsNote(shown.length, active.length, Math.max(total, pools.length));
+  const note = poolsNote(shown.length, active.length, known.length, total);
   if (!shown.length) return <div className="mut">No pools indexed yet.</div>;
   return (
     <>
