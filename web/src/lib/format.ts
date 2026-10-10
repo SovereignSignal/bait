@@ -23,7 +23,7 @@ export function fmtDelta(d: number): string {
 
 /** The size of a week-over-week change for prose: "24%", "more than 999%". */
 export function deltaWords(d: number): string {
-  const a = Math.round(Math.abs(d));
+  const a = Math.abs(Math.round(d)); // the same rounding as fmtDelta, so tile and prose agree
   return a > 999 ? "more than 999%" : `${a}%`;
 }
 

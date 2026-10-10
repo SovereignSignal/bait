@@ -50,6 +50,7 @@ test("tradesNote separates nothing-traded from feed-unavailable", () => {
 test("a week-over-week change past +999% reads >999%, in tiles and in prose", () => {
   assert.deepEqual([fmtDelta(297_195), fmtDelta(999.4), fmtDelta(999.6), fmtDelta(-99.9)], [">999%", "+999%", ">999%", "-100%"]);
   assert.deepEqual([deltaWords(297_195), deltaWords(-24.4), deltaWords(13)], ["more than 999%", "24%", "13%"]);
+  assert.equal(deltaWords(-24.5), fmtDelta(-24.5).slice(1));   // prose and tile round the same way
 });
 
 test("dayLabel names the UTC day", () => {

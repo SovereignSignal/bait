@@ -248,7 +248,7 @@ export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T):
 const cache = createSwrCache<unknown>({ ttlMs: 3_600_000, max: 400 });
 // Pool probes get their own cache: a burst of unknown pool ids from /api/trades must never evict loadAll or the leaders.
 const poolKeyCache = createSwrCache<boolean>({ ttlMs: 600_000, max: 5_000 });
-function cached<T>(key: string, fn: () => Promise<T>, ttl?: Ttl<T>): Promise<T> {
+export function cached<T>(key: string, fn: () => Promise<T>, ttl?: Ttl<T>): Promise<T> {
   return cache.get(key, fn as () => Promise<unknown>, ttl as Ttl<unknown> | undefined) as Promise<T>;
 }
 

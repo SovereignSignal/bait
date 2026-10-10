@@ -4,6 +4,7 @@ import { desc, sql } from "drizzle-orm";
 import { runReceipts } from "@/db/schema";
 import { freshness, type Freshness, type HealthChain, type HealthReceipt } from "@/lib/health";
 import { getDb, type Db } from "./client";
+import { cached } from "./queries";
 
 type IndexerRow = {
   chain_id: number | string;
@@ -59,6 +60,9 @@ export async function readHealth(db: Db): Promise<{ receipt: HealthReceipt | nul
 export async function getFreshness(): Promise<Freshness | null> {
   const db = getDb();
   if (!db) return null;
-  const { receipt, chains, queryReasons } = await readHealth(db);
-  return queryReasons.length ? null : freshness({ receipt, chains }, new Date());
+  // cached a minute: dynamic pages render it on every request, and a chip should clear soon after health recovers
+  return cached("freshness", async () => {
+    const { receipt, chains, queryReasons } = await readHealth(db);
+    return queryReasons.length ? null : freshness({ receipt, chains }, new Date());
+  }, 60_000);
 }
