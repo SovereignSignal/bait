@@ -1,12 +1,13 @@
 import { getFeed, listDigests } from "@/db/queries";
 import { usd } from "@/lib/format";
+import { respond } from "@/lib/http";
 import { escXml as esc } from "@/lib/xml";
 
 export const dynamic = "force-dynamic";
 
 const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
 
-export async function GET() {
+export async function GET(req: Request) {
   const [digests, fresh] = await Promise.all([listDigests(12), getFeed({ tab: "new" })]);
   const newest = fresh.slice(0, 50);
   const items: string[] = [];
@@ -36,7 +37,5 @@ export async function GET() {
     items.join("") +
     `</channel></rss>`;
 
-  return new Response(xml, {
-    headers: { "Content-Type": "application/rss+xml; charset=utf-8", "Cache-Control": "public, max-age=3600" },
-  });
+  return respond(req, xml, { headers: { "Content-Type": "application/rss+xml; charset=utf-8", "Cache-Control": "public, max-age=3600" } });
 }

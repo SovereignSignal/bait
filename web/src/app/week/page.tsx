@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Footer } from "@/components/Footer";
 import { listDigests } from "@/db/queries";
+import { nextDigestDay } from "@/lib/format";
 import s from "./week.module.css";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,10 @@ export default async function WeeksPage() {
         </div>
         <section className="block">
           {all.length === 0 ? (
-            <p className="muted">No digests yet.</p>
+            <p className="muted">
+              The first digest lands {nextDigestDay()}, after the nightly run. Until then, <Link href="/">Trending</Link> shows what is
+              moving, and the <a href="/feed.xml">RSS feed</a> will carry each digest.
+            </p>
           ) : (
             <div className={s.weeks}>
               {all.map((d) => (
