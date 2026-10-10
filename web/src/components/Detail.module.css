@@ -43,9 +43,11 @@
 .blk { padding: 14px 16px; min-width: 0; }
 .tw { overflow-x: auto; }
 .table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 380px; }
-.table th { font-size: 11px; color: var(--fg3); font-weight: 500; text-align: right; padding: 4px 6px; }
+.table th { font-size: 11px; color: var(--fg3); font-weight: 500; text-align: right; padding: 4px 5px; }
 .table th:first-child, .table td:first-child { text-align: left; }
-.table td { padding: 8px 6px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.table td { padding: 8px 5px; border-top: 1px solid var(--line); text-align: right; white-space: nowrap; }
+/* the name column wraps (wallet labels, long pairs) so the numbers to its right fit the ~455px pane at 1280px */
+.table td:first-child { white-space: normal; }
 .table td a:hover { color: var(--pink2); }
 .stack { display: none; list-style: none; margin: 0; padding: 0; }
 .stack li { padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
@@ -80,7 +82,7 @@ a.trade:hover { background: var(--hover); }
 
 /* top wallets */
 .wallet { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.wallet .tTags { flex-wrap: nowrap; }
+.wallet .tTags { flex-wrap: wrap; }
 .bs { display: inline-flex; gap: 4px; }
 
 .why { font-size: 15px; line-height: 1.55; max-width: 70ch; text-wrap: pretty; }
