@@ -4,6 +4,8 @@
 // Cached in-process: hits for 24h, misses for 6h. Never throws; unresolved stays null and the UI shows a short address.
 
 // DefiLlama chain keys, mirroring pipeline/bait/indexer/chains.py.
+import { nativeSymbol } from "./chains";
+
 const LLAMA: Record<number, string> = {
   1: "ethereum", 10: "optimism", 56: "bsc", 130: "unichain", 137: "polygon", 143: "monad", 480: "wc", 1868: "soneium",
   4326: "megaeth", 4663: "robinhood", 8453: "base", 42161: "arbitrum", 42220: "celo", 43114: "avax", 57073: "ink", 7777777: "zora",
@@ -145,5 +147,6 @@ export async function resolveSymbols(
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([pending, new Promise<void>((res) => { timer = setTimeout(res, waitMs); })]);
   clearTimeout(timer);
-  return (t: TokenRef) => cache.get(key(t))?.sym ?? null;
+  // currency 0x0 is the chain's native token: named here, so every caller (pools, unnamed-project labels) gets it
+  return (t: TokenRef) => (t.address?.toLowerCase() === ZERO ? nativeSymbol(t.chainId) : (cache.get(key(t))?.sym ?? null));
 }

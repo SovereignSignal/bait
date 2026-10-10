@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clip, dayLabel, deltaWords, fmtDelta, NONE, usd } from "./format";
-import { hookKeys, rowLabel, rowMetric } from "./present";
+import { clip, dayLabel, deltaWords, fmtDelta, NONE, usd, usdWhole } from "./format";
+import { activePool, hookKeys, poolsNote, rowLabel, rowMetric } from "./present";
 import { emptyCopy, moversFor, searchRows } from "./feed";
 import { liveDotOn, tradesNote } from "./trades";
 import { loadHookIndex, resetHookIndex } from "./hook-index";
@@ -96,4 +96,23 @@ test("the hook index loads once, and a failed load is retried on the next call",
   assert.deepEqual(await loadHookIndex(flaky), { a: ["0xaa"] });
   assert.equal(calls, 2);
   resetHookIndex();
+});
+
+test("wallet volumes show whole dollars under $1M, so near-equal buys read as distinct", () => {
+  assert.deepEqual([usdWhole(22_126.39), usdWhole(22_009.46), usdWhole(812.6), usdWhole(2_400_000), usdWhole(null)], ["$22,126", "$22,009", "$813", "$2.4M", NONE]);
+  assert.deepEqual([usdWhole(999_999.6), usdWhole(-0.4)], [usd(999_999.6), "$0"]);   // the rounded value picks the format
+});
+
+test("pools: active first, and the note says the rest are idle only when they are", () => {
+  assert.equal(activePool({ tvlUsd: 0, vol24h: null }), false);
+  assert.equal(activePool({ tvlUsd: 0, vol24h: 12 }), true);
+  assert.equal(activePool({ tvlUsd: 0, vol24h: null, tx7d: 40 }), true);       // unknown USD volume, but it trades
+  assert.equal(activePool({ tvlUsd: 0, vol24h: 0, vol7d: 5_000 }), true);      // traded earlier in the week
+  assert.equal(poolsNote(1, 1, 47, 47), "46 more pools with no TVL or volume on record.");
+  assert.equal(poolsNote(8, 12, 47, 47), "Top 8 of 47 pools.");
+  assert.equal(poolsNote(1, 1, 50, 2400), "Top 1 of 2,400 pools.");             // pools past the 50 loaded were never looked at
+  assert.equal(poolsNote(1, 1, 3, 9), "Top 1 of 9 pools.");                    // the total counts chains Bait does not track
+  assert.equal(poolsNote(8, 0, 30, 30), "No pool has TVL or volume on record; showing 8 of 30.");
+  assert.equal(poolsNote(2, 2, 3, 3), "1 more pool with no TVL or volume on record.");
+  assert.equal(poolsNote(5, 5, 5, 5), null);
 });

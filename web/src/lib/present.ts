@@ -116,3 +116,20 @@ export function digestItem(
 ): DigestItem {
   return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
 }
+
+/** A pool with any sign of use: TVL, volume in the day or the week, swaps, or wallets. A null volume is unknown (a custom-
+ * accounting hook, unpriced swaps), not zero, so it neither proves nor rules out use. */
+export function activePool(x: { tvlUsd: number | null; vol24h: number | null; vol7d?: number | null; tx7d?: number | null; wallets24h?: number | null }): boolean {
+  return (x.tvlUsd ?? 0) > 0 || (x.vol24h ?? 0) > 0 || (x.vol7d ?? 0) > 0 || (x.tx7d ?? 0) > 0 || (x.wallets24h ?? 0) > 0;
+}
+
+/** The note under the pools table. It calls pools idle only when every pool not shown was loaded and looked at: the
+ * project total counts pools on chains Bait does not track and past the 50 rows the page loads. */
+export function poolsNote(shown: number, active: number, loaded: number, total: number): string | null {
+  const all = Math.max(total, loaded);
+  const rest = all - shown;
+  if (rest <= 0) return null;
+  if (active === 0) return `No pool has TVL or volume on record; showing ${shown} of ${int(all)}.`;
+  if (active > shown || all > loaded) return `Top ${shown} of ${int(all)} pools.`;
+  return `${int(rest)} more pool${rest === 1 ? "" : "s"} with no TVL or volume on record.`;
+}
