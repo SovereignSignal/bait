@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Terminal } from "@/components/Terminal";
 import { getProject, getRows, usingFixtures } from "@/db/queries";
+import { getFreshness } from "@/db/health";
 import { getLaunches } from "@/db/radar";
 import { SAMPLE_NOW } from "@/fixtures/sample";
 import { applyTab, movers, parseFeedQuery } from "@/lib/feed";
@@ -26,7 +27,7 @@ export async function generateMetadata({ searchParams }: { searchParams: Promise
 export default async function TerminalPage({ searchParams }: { searchParams: Promise<Search> }) {
   const q = parseFeedQuery(await searchParams);
   // The New tab carries the "Just launched" feed (v4_pools); other tabs skip the read.
-  const [rows, launches] = await Promise.all([getRows(), q.tab === "new" ? getLaunches(20) : Promise.resolve(undefined)]);
+  const [rows, launches, fresh] = await Promise.all([getRows(), q.tab === "new" ? getLaunches(20) : Promise.resolve(undefined), getFreshness()]);
   const first = applyTab(rows, q)[0];
   const project = first ? await getProject(first.slug) : null;
   const sample = usingFixtures();
@@ -41,6 +42,7 @@ export default async function TerminalPage({ searchParams }: { searchParams: Pro
       emptyText={rows.length ? "Pick a project from the list to see its pools, wallets and live trades." : "Nothing indexed yet. The first pipeline run fills this in."}
       launches={launches}
       launchesNow={Date.now()}
+      fresh={fresh}
     />
   );
 }

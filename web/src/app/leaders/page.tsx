@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ProjectAvatar } from "@/components/Avatar";
 import { Footer } from "@/components/Footer";
+import { getFreshness } from "@/db/health";
 import { getLeaders, usingFixtures } from "@/db/queries";
 import { int, usd } from "@/lib/format";
 import { categoryShort, chainNames } from "@/lib/present";
@@ -50,7 +51,7 @@ function Board({ title, note, entries, fmt, empty }: { title: string; note: stri
 }
 
 export default async function LeadersPage() {
-  const L = await getLeaders();
+  const [L, fresh] = await Promise.all([getLeaders(), getFreshness()]);
   const t = L.totals;
   return (
     <>
@@ -84,7 +85,7 @@ export default async function LeadersPage() {
           {L.smartMoney.length > 0 && <Board title="Most smart money" note="distinct wallets, 24h" entries={L.smartMoney} fmt={int} empty="" />}
         </div>
       </main>
-      <Footer sample={usingFixtures()} />
+      <Footer sample={usingFixtures()} through={fresh?.through} />
     </>
   );
 }

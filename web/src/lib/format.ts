@@ -14,9 +14,22 @@ export function usd(n: number | null | undefined): string {
   return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
 }
 
-/** "+24%" / "-8%": the one week-over-week format. */
+/** "+24%" / "-8%": the one week-over-week format. Past +999% the figure only says "from almost nothing" (a $1.5K week
+ * then a $4M one reads +297195%), so it is shown as ">999%". */
 export function fmtDelta(d: number): string {
+  if (Math.round(d) > 999) return ">999%";
   return `${d >= 0 ? "+" : "-"}${Math.abs(Math.round(d))}%`;
+}
+
+/** The size of a week-over-week change for prose: "24%", "more than 999%". */
+export function deltaWords(d: number): string {
+  const a = Math.abs(Math.round(d)); // the same rounding as fmtDelta, so tile and prose agree
+  return a > 999 ? "more than 999%" : `${a}%`;
+}
+
+/** "2026-10-10" -> "Oct 10" (the day is UTC). */
+export function dayLabel(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 /** At most `max` chars including the ellipsis, cut at the last word boundary. */
