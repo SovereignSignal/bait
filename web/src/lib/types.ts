@@ -235,10 +235,12 @@ export interface RowView {
   tvlUsd: number;
   routable: Eligibility;
   audited: boolean;
-  /** hook addresses (lowercase, capped) for address-prefix search */
-  hooks: string[];
   rank?: number;
 }
+
+/** slug -> hook addresses (lowercase, capped), for 0x search. Served by /api/hooks, not shipped with the rows: random hex
+ * does not compress and was half of the home page's transfer. */
+export type HookIndex = Record<string, string[]>;
 
 export interface LeaderEntry {
   row: RowView;

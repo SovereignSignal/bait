@@ -2,13 +2,13 @@
 // The terminal's left column and the movers strip. Rows ship to the client once;
 // tab / category / chain come from the URL, search and watchlist from TerminalProvider.
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
 import { applyTab, availableCategories, byVol7d, emptyCopy, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
 import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
-import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
+import { CATEGORY_SHORT, TABS, type FeedQuery, type HookIndex, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
 import { StarIcon } from "./Icons";
 import { JustLaunched } from "./JustLaunched";
@@ -16,6 +16,28 @@ import { useTerminal } from "./TerminalProvider";
 import s from "./Terminal.module.css";
 
 const DEFAULT_QUERY: FeedQuery = { tab: "trending" };
+
+let hookIndexLoad: Promise<HookIndex> | null = null;
+
+/** The hook address index, fetched once per page load and only when a search starts with "0x". */
+function useHookIndex(wanted: boolean): HookIndex | undefined {
+  const [index, setIndex] = useState<HookIndex>();
+  useEffect(() => {
+    if (!wanted || index) return;
+    let live = true;
+    hookIndexLoad ??= fetch("/api/hooks")
+      .then((r) => (r.ok ? (r.json() as Promise<HookIndex>) : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .catch((e) => {
+        hookIndexLoad = null; // the next 0x keystroke retries
+        throw e;
+      });
+    hookIndexLoad.then((x) => live && setIndex(x)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [wanted, index]);
+  return index;
+}
 
 export function useFeedQuery(): FeedQuery {
   return parseFeedQuery(useSearchParams());
@@ -56,7 +78,8 @@ function ProjectListView({ rows, selected, view, now, query, launches, launchesN
   let list: Array<RowView & { rank?: number }> = watching
     ? rows.filter((r) => t.watchlist.includes(r.slug)).sort(byVol7d)
     : applyTab(rows, searching ? { ...query, tab: "all" } : query);
-  list = searchRows(list, t.q);
+  const hookIndex = useHookIndex(t.q.trim().toLowerCase().startsWith("0x"));
+  list = searchRows(list, t.q, hookIndex);
   const topHref = searching && list[0] ? projectHref(list[0].slug, query) : null;
   const { setTopMatch } = t;
   useEffect(() => {
