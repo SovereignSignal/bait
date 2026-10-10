@@ -78,7 +78,7 @@ export interface PoolView {
   fee: number; // PoolKey.fee; 8388608 (0x800000) means dynamic
   tickSpacing: number;
   createdAt: string; // ISO
-  tvlUsd: number;
+  tvlUsd: number | null; // null = unknown (no GeckoTerminal reserve, unpriced tokens), never shown as $0
   /** null when the pool's on-chain volume is unknown (NULL cumulative volume) */
   vol7d: number | null;
   /** swaps over the 7 closed UTC days; null unless all 7 are known */

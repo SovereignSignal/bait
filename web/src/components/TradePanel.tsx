@@ -41,14 +41,16 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
     link && top
       ? (() => {
           const elig = top.eligibility;
-          const tvl = top.tvlUsd ?? 0;
-          const ok = elig === "eligible" && tvl >= 1000 && s0 !== "?" && s1 !== "?";
+          const tvl = top.tvlUsd; // null = unknown, never $0: it still holds the Swap button back, it is not "no liquidity"
+          const ok = elig === "eligible" && tvl != null && tvl >= 1000 && s0 !== "?" && s1 !== "?";
           const reason =
             elig === "ineligible"
               ? "This hook does not route in the Uniswap app; trading happens through the project's own interface."
               : elig === "unknown"
                 ? "Routing in the Uniswap app is unknown for this pool."
-                : tvl < 1000
+                : tvl == null
+                  ? "This pool's liquidity is unknown, so Bait does not send you to swap here."
+                  : tvl < 1000
                   ? `No liquidity in this pool (${tvl < 1 ? "$0" : "under $1K"} TVL). Volume may not be organic.`
                   : "One of the tokens could not be identified.";
           return { ok, reason, label: ok ? "Swap on Uniswap" : "View pool on Uniswap" };
