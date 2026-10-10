@@ -78,6 +78,8 @@ class HyperSync:
         self.retries = retries
         self.sleep = sleep
         self.deadline = DEADLINE if deadline is None else deadline
+        self.units = 0                                  # rate-limit units spent (x-ratelimit-cost summed over 200s)
+        self.remaining: int | None = None               # x-ratelimit-remaining of the last 200, per 60 s window
         self.calls = 0
 
     def _headers(self) -> dict:
@@ -103,6 +105,8 @@ class HyperSync:
                     wait = float(reset) if reset else 10.0
                 except ValueError:
                     wait = 10.0
+                log.info("%s%s rate limited (HTTP 429): waiting %.0fs for the window to reset", self.url, path,
+                         min(max(wait, 1.0), 60.0))
                 self.sleep(min(max(wait, 1.0), 60.0))
                 last = RuntimeError(f"{self.url} HTTP 429")
                 continue
@@ -112,8 +116,18 @@ class HyperSync:
                 continue
             if r.status_code >= 400:
                 raise RuntimeError(f"{self.url}{path} HTTP {r.status_code}: {r.text[:300]}")
+            self._account(r.headers)
             return r.json()
         raise RuntimeError(f"{self.url}{path} failed after {self.retries} attempts: {last}")
+
+    def _account(self, headers) -> None:
+        """HyperSync meters a token in units per 60 s window (x-ratelimit-cost/-remaining on every /query answer)."""
+        try:
+            self.units += int(headers.get("x-ratelimit-cost", 0))
+            if headers.get("x-ratelimit-remaining") is not None:
+                self.remaining = int(headers["x-ratelimit-remaining"])
+        except ValueError:
+            pass
 
     def height(self) -> int:
         return int(num(self._do("GET", "/height")["height"]))

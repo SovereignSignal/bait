@@ -796,6 +796,47 @@ def test_lookup_budget_holds_the_swap_page_for_the_next_loop(engine):
     assert state.swap_block == 3100 and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
 
 
+def test_a_lookup_cut_by_the_budget_resumes_where_it_stopped_next_loop():
+    """Live 2026-10-10: after the prune, BNB's lookup floor was 44M blocks below the page and one 500-id chunk needed ~70
+    calls, each ~45 s, with the budget checked only between chunks: the whole loop waited on one chain. Now the budget
+    bounds every call and a cut chunk carries its scan cursor to the next loop."""
+    fake = FakeHyperSync(span=100)                   # 100 blocks per answer: [1000, 1700) is 7 calls
+    hs = _hs(fake)
+    resolver = core.PoolResolver()
+    fake.inits.append(init_log(LAUNCH, ZERO, USDC, HOOK, 1600))
+    s = core.Settings()
+    froms = lambda: [json.loads(r.content)["from_block"] for r in fake.requests]
+    resolver.start_loop()
+    with pytest.raises(core.LookupBudget, match=r"3 of 3 calls.*1 ids left.*resumes at block 1300"):
+        resolver.resolve(hs, BASE, {LAUNCH}, 1000, 1700, s, budget=3)
+    assert froms() == [1000, 1100, 1200] and resolver.scanned == {LAUNCH: 1300}
+    resolver.start_loop()
+    with pytest.raises(core.LookupBudget, match=r"resumes at block 1600"):
+        resolver.resolve(hs, BASE, {LAUNCH}, 1000, 1750, s, budget=3)        # the page end moved; the scan carries on
+    assert froms()[3:] == [1300, 1400, 1500]
+    resolver.start_loop()
+    with pytest.raises(core.LookupBudget, match=r"1 ids left.*resumes at block 1100"):
+        resolver.resolve(hs, BASE, {LAUNCH, PB}, 1000, 1750, s, budget=3)    # PB is new and starts at the floor
+    assert froms()[6:9] == [1600, 1700, 1000]                                # the chunk closest to done goes first
+    assert LAUNCH in resolver.pending and resolver.scanned == {PB: 1100}     # LAUNCH found and settled; PB cut after 1 call
+    resolver.start_loop()
+    assert resolver.resolve(hs, BASE, {PB}, 1000, 1750, s, budget=10) == {} and PB in resolver.absent and not resolver.scanned
+    assert froms()[9] == 1100                                                # PB resumed, not restarted
+    resolver.start_loop()
+    resolver.resolve(hs, BASE, {PB}, 900, 1750, s, budget=10)                 # a lower floor forgets absent and cursors
+    assert froms()[-9] == 900 and PB in resolver.absent
+
+
+def test_rate_limit_units_are_accounted_from_the_response_headers():
+    def served(request):
+        return httpx.Response(200, json={"data": [], "archive_height": 5, "next_block": 5},
+                              headers={"x-ratelimit-cost": "1000", "x-ratelimit-remaining": "12000"})
+    hs = HyperSync(BASE.hypersync, "t", httpx.Client(transport=httpx.MockTransport(served)))
+    hs.query({"from_block": 0, "to_block": 5}); hs.query({"from_block": 0, "to_block": 5})
+    assert (hs.units, hs.remaining) == (2000, 12000)
+    assert (_hs(FakeHyperSync()).units, _hs(FakeHyperSync()).remaining) == (0, None)   # no headers: nothing claimed
+
+
 def test_late_row_and_its_swaps_count_once_when_two_indexers_race(engine, monkeypatch):
     fake = _launchpad_fake()
     core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=33, pools_per_hook=1), now=NOW)
