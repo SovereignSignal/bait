@@ -66,7 +66,7 @@ function matches(p: FeedItem, q: FeedQuery): boolean {
 export function trendingOrder<T extends FeedItem>(all: T[]): T[] {
   return [...all]
     .filter((p) => !p.isWash && p.vol7d != null && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
-    .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd)
+    .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd || a.slug.localeCompare(b.slug))
     .slice(0, TRENDING_TOP_N);
 }
 
