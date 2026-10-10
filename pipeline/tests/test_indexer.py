@@ -214,6 +214,28 @@ def test_request_shape_and_auth_error():
         bad.height()
 
 
+def test_a_request_that_never_answers_is_cut_at_the_wall_clock_deadline_and_retried():
+    """Seen live 2026-10-10: one /query sat 40 minutes on attempt 0 because the socket kept receiving bytes with no
+    response in them, so the 60 s idle timeout never fired. The deadline is wall clock, independent of idle time."""
+    import time
+    calls = []
+
+    def hang(request):
+        calls.append(time.monotonic())
+        time.sleep(5)                       # interrupted by the deadline: the request never completes on its own
+        return httpx.Response(200, json={"height": 1})
+    slept = []
+    hs = HyperSync(BASE.hypersync, "t", httpx.Client(transport=httpx.MockTransport(hang)), retries=2, sleep=slept.append,
+                   deadline=0.2)
+    t0 = time.monotonic()
+    with pytest.raises(RuntimeError, match="failed after 2 attempts.*deadline"):
+        hs.height()
+    assert len(calls) == 2 and time.monotonic() - t0 < 2 and len(slept) == 2
+    ok = HyperSync(BASE.hypersync, "t", httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"height": 7}))),
+                   deadline=0.2)
+    assert ok.height() == 7                 # the timer is cleared after each call: a fast request is not affected
+
+
 # ------------------------------------------------------------------ full sync, modes, resume
 
 @pytest.mark.parametrize("settings", [core.Settings(), core.Settings(topic_chunk=1), core.Settings(topic_filter_max=1)],
