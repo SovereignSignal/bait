@@ -106,6 +106,23 @@ test("/p/angstrom: the audit badge links out, the summary says when it was writt
   expect(errs).toEqual([]);
 });
 
+test("desktop at 1280px: the detail tables fit their pane, long wallet labels included", async ({ page }) => {
+  test.skip(phone(), "tables are a desktop layout");
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/p/stablepairhook");   // its top wallet carries a long label
+  const over = await page.locator("table").evaluateAll((ts) => ts.map((t) => t.scrollWidth - (t.parentElement?.clientWidth ?? 0)));
+  expect(over.length).toBeGreaterThan(0);
+  for (const o of over) expect(o, "a detail table scrolls sideways at 1280px").toBeLessThanOrEqual(0);
+});
+
+test("route handlers keep their content type and compress when asked", async ({ request }) => {
+  const rss = await request.get("/feed.xml");
+  expect(rss.headers()["content-type"]).toContain("application/rss+xml");
+  const hooks = await request.get("/api/hooks", { headers: { "Accept-Encoding": "gzip" } });
+  expect(hooks.headers()["content-type"]).toContain("application/json");
+  expect(Object.keys(await hooks.json()).length).toBeGreaterThan(0);
+});
+
 test("unknown project: 404 with a message", async ({ page }) => {
   expect((await page.goto("/p/no-such-hook"))?.status()).toBe(404);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("No project called 'no-such-hook'.");

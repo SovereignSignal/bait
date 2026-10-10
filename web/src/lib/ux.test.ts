@@ -4,7 +4,7 @@ import { clip, dayLabel, deltaWords, fmtDelta, nextDigestDay, NONE, usd, usdWhol
 import { activePool, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric } from "./present";
 import { emptyCopy, moversFor, searchRows } from "./feed";
 import { liveDotOn, tradesNote } from "./trades";
-import { respond } from "./http";
+import { respond, respondJson } from "./http";
 import { gunzipSync } from "node:zlib";
 import { loadHookIndex, resetHookIndex } from "./hook-index";
 
@@ -138,6 +138,7 @@ test("nextDigestDay names the coming Monday in UTC", () => {
   assert.equal(nextDigestDay(Date.parse("2026-10-10T20:00:00Z")), "Monday, Oct 12");   // Saturday
   assert.equal(nextDigestDay(Date.parse("2026-10-11T23:59:00Z")), "Monday, Oct 12");   // Sunday
   assert.equal(nextDigestDay(Date.parse("2026-10-12T03:00:00Z")), "today");
+  assert.equal(nextDigestDay(Date.parse("2026-10-12T12:00:00Z")), "Monday, Oct 19");   // past the deadline: that run did not write one
   assert.equal(nextDigestDay(Date.parse("2026-10-13T03:00:00Z")), "Monday, Oct 19");
 });
 
@@ -150,4 +151,5 @@ test("route responses are gzipped when accepted and worth it, plain otherwise", 
   assert.equal(respond(req(), big, { headers: {} }).headers.get("content-encoding"), null);
   assert.equal(respond(req("gzip"), "tiny", { headers: {} }).headers.get("content-encoding"), null);
   assert.equal(respond(req("gzip"), big, { status: 404, headers: {} }).status, 404);
+  assert.equal(respondJson(req(), { a: 1 }).headers.get("content-type"), "application/json");
 });

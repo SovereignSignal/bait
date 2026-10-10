@@ -82,7 +82,9 @@ a.trade:hover { background: var(--hover); }
 
 /* top wallets */
 .wallet { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.wallet .tTags { flex-wrap: wrap; }
+/* label pills are .b (nowrap globally): let a long one wrap inside the table cell too, not only on phones */
+.wallet .tTags { min-width: 0; }
+.wallet .tTags > span { white-space: normal; overflow-wrap: anywhere; }
 .bs { display: inline-flex; gap: 4px; }
 
 .why { font-size: 15px; line-height: 1.55; max-width: 70ch; text-wrap: pretty; }

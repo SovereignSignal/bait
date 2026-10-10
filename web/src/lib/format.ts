@@ -34,10 +34,14 @@ export function deltaWords(d: number): string {
   return a > 999 ? "more than 999%" : `${a}%`;
 }
 
-/** The digest's next run day from `now` (UTC): "today" on a Monday, else "Monday, Oct 12". */
+const DIGEST_DEADLINE_HOUR_UTC = 8; // the Monday 06:00 UTC run writes it; health expects the run done by 08:00
+
+/** The digest's next run day from `now` (UTC): "today" on a Monday before the deadline, else "Monday, Oct 12". After the
+ * deadline an empty week means that run did not write one, so the next chance is a week out. */
 export function nextDigestDay(now = Date.now()): string {
   const d = new Date(now);
-  const ahead = (8 - d.getUTCDay()) % 7; // days until Monday (getUTCDay: 0 = Sunday)
+  let ahead = (8 - d.getUTCDay()) % 7; // days until Monday (getUTCDay: 0 = Sunday)
+  if (ahead === 0 && d.getUTCHours() >= DIGEST_DEADLINE_HOUR_UTC) ahead = 7;
   if (ahead === 0) return "today";
   const mon = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + ahead));
   return `Monday, ${mon.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`;
