@@ -116,3 +116,16 @@ export function digestItem(
 ): DigestItem {
   return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
 }
+
+/** A pool with TVL or 24h volume on record. Launchpad hooks carry dozens of pools that never traded. */
+export function activePool(x: { tvlUsd: number | null; vol24h: number | null }): boolean {
+  return (x.tvlUsd ?? 0) > 0 || (x.vol24h ?? 0) > 0;
+}
+
+/** The pools note under the table: how many more there are and, when the rest are idle, that they are. */
+export function poolsNote(shown: number, active: number, total: number): string | null {
+  const rest = total - shown;
+  if (rest <= 0) return null;
+  if (active > shown) return `Top ${shown} of ${int(total)} pools by TVL.`;
+  return `${int(rest)} more pool${rest === 1 ? "" : "s"} with no TVL or volume on record.`;
+}

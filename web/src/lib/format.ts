@@ -14,6 +14,12 @@ export function usd(n: number | null | undefined): string {
   return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
 }
 
+/** Whole dollars under $1M ("$22,126"), compact above: for rows whose values sit close together. */
+export function usdWhole(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return NONE;
+  return Math.abs(n) >= 1e6 ? usd(n) : `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString("en-US")}`;
+}
+
 /** "+24%" / "-8%": the one week-over-week format. Past +999% the figure only says "from almost nothing" (a $1.5K week
  * then a $4M one reads +297195%), so it is shown as ">999%". */
 export function fmtDelta(d: number): string {

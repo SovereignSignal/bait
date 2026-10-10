@@ -1,9 +1,9 @@
 // Project detail column (server): header, stats, daily volume, pools, activity, top wallets, why.
 import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { weekDelta } from "@/lib/feed";
-import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd } from "@/lib/format";
+import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { categoryLine, chainNames, walletsText, washLine } from "@/lib/present";
+import { activePool, categoryLine, chainNames, poolsNote, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
 import { LiveTrades } from "./LiveTrades";
@@ -233,7 +233,10 @@ function Bars({ series }: { series: (number | null)[] }) {
 }
 
 function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
-  const shown = pools.filter((x) => knownChain(x.chainId)).slice(0, POOLS_SHOWN);
+  const known = pools.filter((x) => knownChain(x.chainId));
+  const active = known.filter(activePool);
+  const shown = (active.length ? active : known).slice(0, POOLS_SHOWN);
+  const note = poolsNote(shown.length, active.length, Math.max(total, pools.length));
   if (!shown.length) return <div className="mut">No pools indexed yet.</div>;
   return (
     <>
@@ -283,11 +286,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
           </li>
         ))}
       </ul>
-      {Math.max(total, pools.length) > shown.length && (
-        <div className={s.more}>
-          Top {shown.length} of {int(Math.max(total, pools.length))} pools by TVL.
-        </div>
-      )}
+      {note && <div className={s.more}>{note}</div>}
     </>
   );
 }
@@ -356,7 +355,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
     <div className={`panel ${s.blk}`}>
       <div className={s.h3row}>
         <h2>Top wallets</h2>
-        {p.topWallets.length > 0 && <span>by 24h volume in the busiest pools</span>}
+        {p.topWallets.length > 0 && <span>by volume in the latest ~300 trades of each busy pool</span>}
       </div>
       {p.topWallets.length === 0 ? (
         <div className="mut">No wallet data for this project yet. It usually fills in within a day.</div>
@@ -379,7 +378,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
                     <td>
                       <WalletWho w={w} />
                     </td>
-                    <td className="num">{usd(w.volumeUsd)}</td>
+                    <td className="num">{usdWhole(w.volumeUsd)}</td>
                     <td className="num">{int(w.trades)}</td>
                     <td className="num">
                       {w.buys != null || w.sells != null ? (
@@ -404,7 +403,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
             <li key={`${w.chainId}:${w.address}`}>
               <WalletWho w={w} />
               <div className={`${s.stackSub} num`}>
-                {usd(w.volumeUsd)} · {int(w.trades)} trades · {int(w.buys ?? 0)}/{int(w.sells ?? 0)} · {w.lastTradeAt ? `${since(w.lastTradeAt, now)} ago` : NONE}
+                {usdWhole(w.volumeUsd)} · {int(w.trades)} trade{w.trades === 1 ? "" : "s"} · {int(w.buys ?? 0)}/{int(w.sells ?? 0)} · {w.lastTradeAt ? `${since(w.lastTradeAt, now)} ago` : NONE}
               </div>
             </li>
           ))}

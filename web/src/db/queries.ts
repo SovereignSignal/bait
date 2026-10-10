@@ -15,7 +15,7 @@ import { getDb, type Db } from "./client";
 import * as t from "./schema";
 import { SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
 import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
-import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
+import { CHAINS, knownChain, nansenCovers, nativeSymbol } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
 import { digestItem, hookKeys, toRow } from "@/lib/present";
@@ -652,10 +652,12 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
       ...(p.token1Symbol || !p.token1 ? [] : [{ chainId: p.chainId, address: p.token1 }]),
     ]),
   );
+  // currency 0x0 is the chain's native token (ETH on Robinhood), never a lookup
+  const symOf = (chainId: ChainId, a: string): string | null => (/^0x0{40}$/i.test(a) ? nativeSymbol(chainId) : sym({ chainId, address: a }));
   return out.map((p) => ({
     ...p,
-    token0Symbol: p.token0Symbol ?? (p.token0 ? sym({ chainId: p.chainId, address: p.token0 }) : null),
-    token1Symbol: p.token1Symbol ?? (p.token1 ? sym({ chainId: p.chainId, address: p.token1 }) : null),
+    token0Symbol: p.token0Symbol ?? (p.token0 ? symOf(p.chainId, p.token0) : null),
+    token1Symbol: p.token1Symbol ?? (p.token1 ? symOf(p.chainId, p.token1) : null),
   }));
 }
 
