@@ -15,7 +15,7 @@ import { getDb, type Db } from "./client";
 import * as t from "./schema";
 import { SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
 import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
-import { CHAINS, knownChain, nansenCovers, nativeSymbol } from "@/lib/chains";
+import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
 import { digestItem, hookKeys, toRow } from "@/lib/present";
@@ -603,7 +603,9 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${from7} and ${end}
       ) w on true
       where h.project_id = ${projectId} and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'
-      order by s.tvl_usd desc nulls last
+      -- active pools first, so the 50 rows hold them on a launchpad with hundreds of idle ones
+      order by (coalesce(s.tvl_usd, 0) > 0 or coalesce(s.volume_usd_day, 0) > 0 or coalesce(w.vol7d, 0) > 0 or coalesce(w.tx7d, 0) > 0) desc,
+               s.tvl_usd desc nulls last, s.volume_usd_day desc nulls last
       limit 50`),
     safe<unknown>(
       "pools:pool_stats",
@@ -652,12 +654,10 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
       ...(p.token1Symbol || !p.token1 ? [] : [{ chainId: p.chainId, address: p.token1 }]),
     ]),
   );
-  // currency 0x0 is the chain's native token (ETH on Robinhood), never a lookup
-  const symOf = (chainId: ChainId, a: string): string | null => (/^0x0{40}$/i.test(a) ? nativeSymbol(chainId) : sym({ chainId, address: a }));
   return out.map((p) => ({
     ...p,
-    token0Symbol: p.token0Symbol ?? (p.token0 ? symOf(p.chainId, p.token0) : null),
-    token1Symbol: p.token1Symbol ?? (p.token1 ? symOf(p.chainId, p.token1) : null),
+    token0Symbol: p.token0Symbol ?? (p.token0 ? sym({ chainId: p.chainId, address: p.token0 }) : null),
+    token1Symbol: p.token1Symbol ?? (p.token1 ? sym({ chainId: p.chainId, address: p.token1 }) : null),
   }));
 }
 
