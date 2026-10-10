@@ -2,13 +2,14 @@
 // The terminal's left column and the movers strip. Rows ship to the client once;
 // tab / category / chain come from the URL, search and watchlist from TerminalProvider.
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { loadHookIndex } from "@/lib/hook-index";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
 import { applyTab, availableCategories, byVol7d, emptyCopy, feedHref, moversFor, parseFeedQuery, projectHref, searchRows } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
 import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
-import { CATEGORY_SHORT, TABS, type FeedQuery, type LaunchView, type RowView } from "@/lib/types";
+import { CATEGORY_SHORT, TABS, type FeedQuery, type HookIndex, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
 import { StarIcon } from "./Icons";
 import { JustLaunched } from "./JustLaunched";
@@ -16,6 +17,24 @@ import { useTerminal } from "./TerminalProvider";
 import s from "./Terminal.module.css";
 
 const DEFAULT_QUERY: FeedQuery = { tab: "trending" };
+
+/** The hook address index for 0x search: requested when a query starts with "0x", again on a later keystroke if the last
+ * request failed. `loading` is true while an address query waits for it. */
+function useHookIndex(q: string): { index?: HookIndex; loading: boolean } {
+  const wanted = q.trim().toLowerCase().startsWith("0x");
+  const [index, setIndex] = useState<HookIndex>();
+  useEffect(() => {
+    if (!wanted || index) return;
+    let live = true;
+    loadHookIndex()
+      .then((x) => live && setIndex(x))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [wanted, index, q]);
+  return { index, loading: wanted && !index };
+}
 
 export function useFeedQuery(): FeedQuery {
   return parseFeedQuery(useSearchParams());
@@ -56,7 +75,8 @@ function ProjectListView({ rows, selected, view, now, query, launches, launchesN
   let list: Array<RowView & { rank?: number }> = watching
     ? rows.filter((r) => t.watchlist.includes(r.slug)).sort(byVol7d)
     : applyTab(rows, searching ? { ...query, tab: "all" } : query);
-  list = searchRows(list, t.q);
+  const hooks = useHookIndex(t.q);
+  list = searchRows(list, t.q, hooks.index);
   const topHref = searching && list[0] ? projectHref(list[0].slug, query) : null;
   const { setTopMatch } = t;
   useEffect(() => {
@@ -104,7 +124,7 @@ function ProjectListView({ rows, selected, view, now, query, launches, launchesN
       )}
       {(watching || searching) && (
         <div className={s.listHead}>
-          <span>{watching ? `Watchlist · ${list.length}` : `${list.length} match${list.length === 1 ? "" : "es"} for “${t.q.trim()}”`}</span>
+          <span>{watching ? `Watchlist · ${list.length}` : hooks.loading && list.length === 0 ? `Looking up “${t.q.trim()}”…` : `${list.length} match${list.length === 1 ? "" : "es"} for “${t.q.trim()}”`}</span>
           <button type="button" onClick={() => (watching ? t.setWatchOnly(false) : t.setQ(""))}>
             {watching ? "Show all" : "Clear"}
           </button>
@@ -116,6 +136,8 @@ function ProjectListView({ rows, selected, view, now, query, launches, launchesN
           <div className="empty">
             {watching ? (
               "Star a project to keep it here. Saved on this device only."
+            ) : searching && hooks.loading ? (
+              "Loading hook addresses…"
             ) : searching ? (
               "Try a token symbol or 0x address."
             ) : rows.length ? (
