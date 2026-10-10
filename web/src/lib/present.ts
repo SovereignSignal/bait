@@ -117,11 +117,15 @@ export function digestItem(
   return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
 }
 
-/** The 24h volume cell: dollars when known; for a pool whose USD volume is unknown but that swapped this week, the swap
- * count (its tokens have no price); else the missing glyph. */
+/** The 24h volume cell: dollars when known; for a pool whose USD volume is unknown (custom accounting, unpriced swaps)
+ * but that swapped this week, the swap count, a lower bound; else the missing glyph. */
 export function poolVolume(x: { vol24h: number | null; tx7d: number | null }): { text: string; note?: string } {
   if (x.vol24h != null) return { text: usd(x.vol24h) };
-  if ((x.tx7d ?? 0) > 0) return { text: `${int(x.tx7d)} swap${x.tx7d === 1 ? "" : "s"}/7d`, note: "USD volume unknown: the pool's tokens have no price" };
+  if ((x.tx7d ?? 0) > 0)
+    return {
+      text: `${int(x.tx7d)} swap${x.tx7d === 1 ? "" : "s"}/7d`,
+      note: "USD volume unknown (a custom-accounting hook or unpriced swaps). At least this many swaps over the last 7 closed days.",
+    };
   return { text: usd(null) };
 }
 

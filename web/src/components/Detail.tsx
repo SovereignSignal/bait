@@ -232,14 +232,15 @@ function Bars({ series }: { series: (number | null)[] }) {
   );
 }
 
-function PoolVolume({ x }: { x: PoolView }) {
+/** In the table the reason is a tooltip; the phone stack has no hover, so it says it inline and drops the "24h" label. */
+function PoolVolume({ x, stacked = false }: { x: PoolView; stacked?: boolean }) {
   const v = poolVolume(x);
-  return v.note ? (
+  if (!v.note) return <>{stacked ? `24h ${v.text}` : v.text}</>;
+  return (
     <span className="mut" title={v.note}>
       {v.text}
+      {stacked && " (USD unknown)"}
     </span>
-  ) : (
-    <>{v.text}</>
   );
 }
 
@@ -294,7 +295,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
               · {CHAINS[x.chainId]?.name ?? x.chainId} · {feeLabel(x.fee)}
             </span>
             <div className={`${s.stackSub} num`}>
-              TVL {usd(x.tvlUsd)} · 24h <PoolVolume x={x} /> · {walletsText(x.wallets24h, x.walletsExact)} wallets
+              TVL {usd(x.tvlUsd)} · <PoolVolume x={x} stacked /> · {walletsText(x.wallets24h, x.walletsExact)} wallets
             </div>
           </li>
         ))}

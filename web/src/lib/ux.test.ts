@@ -121,7 +121,7 @@ test("a pool with unknown USD volume shows the swaps that make it active", () =>
   assert.deepEqual(poolVolume({ vol24h: 13_543_022, tx7d: 3742 }), { text: "$13.5M" });
   assert.equal(poolVolume({ vol24h: null, tx7d: 66 }).text, "66 swaps/7d");
   assert.equal(poolVolume({ vol24h: null, tx7d: 1 }).text, "1 swap/7d");
-  assert.ok(poolVolume({ vol24h: null, tx7d: 66 }).note);
+  assert.match(poolVolume({ vol24h: null, tx7d: 66 }).note ?? "", /custom-accounting hook or unpriced swaps/);
   assert.deepEqual(poolVolume({ vol24h: null, tx7d: null }), { text: NONE });
   assert.deepEqual(poolVolume({ vol24h: 0, tx7d: 5 }), { text: "$0" });           // known zero stays $0
 });
