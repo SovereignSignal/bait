@@ -637,7 +637,7 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         fee: Number(r.fee ?? 0),
         tickSpacing: Number(r.tick_spacing ?? 0),
         createdAt: r.created_at ? new Date(r.created_at).toISOString() : "",
-        tvlUsd: num(r.tvl_usd) ?? 0,
+        tvlUsd: num(r.tvl_usd),
         vol7d: vol7 == null ? null : Math.max(0, vol7),
         tx7d: num(r.tx7d),
         vol24h: vol24 == null ? null : Math.max(0, vol24),

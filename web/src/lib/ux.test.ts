@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clip, dayLabel, deltaWords, fmtDelta, NONE, usd, usdWhole } from "./format";
-import { activePool, hookKeys, poolsNote, rowLabel, rowMetric } from "./present";
+import { activePool, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric } from "./present";
 import { emptyCopy, moversFor, searchRows } from "./feed";
 import { liveDotOn, tradesNote } from "./trades";
 import { loadHookIndex, resetHookIndex } from "./hook-index";
@@ -115,4 +115,13 @@ test("pools: active first, and the note says the rest are idle only when they ar
   assert.equal(poolsNote(8, 0, 30, 30), "No pool has TVL or volume on record; showing 8 of 30.");
   assert.equal(poolsNote(2, 2, 3, 3), "1 more pool with no TVL or volume on record.");
   assert.equal(poolsNote(5, 5, 5, 5), null);
+});
+
+test("a pool with unknown USD volume shows the swaps that make it active", () => {
+  assert.deepEqual(poolVolume({ vol24h: 13_543_022, tx7d: 3742 }), { text: "$13.5M" });
+  assert.equal(poolVolume({ vol24h: null, tx7d: 66 }).text, "66 swaps/7d");
+  assert.equal(poolVolume({ vol24h: null, tx7d: 1 }).text, "1 swap/7d");
+  assert.ok(poolVolume({ vol24h: null, tx7d: 66 }).note);
+  assert.deepEqual(poolVolume({ vol24h: null, tx7d: null }), { text: NONE });
+  assert.deepEqual(poolVolume({ vol24h: 0, tx7d: 5 }), { text: "$0" });           // known zero stays $0
 });

@@ -117,6 +117,14 @@ export function digestItem(
   return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
 }
 
+/** The 24h volume cell: dollars when known; for a pool whose USD volume is unknown but that swapped this week, the swap
+ * count (its tokens have no price); else the missing glyph. */
+export function poolVolume(x: { vol24h: number | null; tx7d: number | null }): { text: string; note?: string } {
+  if (x.vol24h != null) return { text: usd(x.vol24h) };
+  if ((x.tx7d ?? 0) > 0) return { text: `${int(x.tx7d)} swap${x.tx7d === 1 ? "" : "s"}/7d`, note: "USD volume unknown: the pool's tokens have no price" };
+  return { text: usd(null) };
+}
+
 /** A pool with any sign of use: TVL, volume in the day or the week, swaps, or wallets. A null volume is unknown (a custom-
  * accounting hook, unpriced swaps), not zero, so it neither proves nor rules out use. */
 export function activePool(x: { tvlUsd: number | null; vol24h: number | null; vol7d?: number | null; tx7d?: number | null; wallets24h?: number | null }): boolean {
