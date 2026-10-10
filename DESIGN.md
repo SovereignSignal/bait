@@ -406,3 +406,30 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
 - **Spend.** Paid POSTs retry only on connect errors and 429; a response lost after sending is recorded as ambiguous
   spend.
 - **Out of scope:** a teams alias map (FablesRamp, FablesRampETH, FablesRWA stay separate cards).
+
+## Update 2026-10-10: the live layout, freshness, payload, indexer resilience
+
+This section supersedes the visual and page parts of "UI direction (2026-10-07)"; the rules there (pink for the one
+action and smart money, semantic green and amber) still hold.
+
+- **Layout.** A dark terminal, not a light 480px column: three panes on desktop, the project list (340px), the project
+  detail (flexible) and the pool and trade side panel (380px), max 1520px wide. Below 1180px the side panel drops;
+  at 820px and under it is one column, list or detail by route, with the dock at the bottom. Theme tokens live in
+  `web/src/app/globals.css` (`--panel`, `--fg2`, `--amber`, ...).
+- **Freshness.** The project header says "Figures through <D-1>, updated nightly": the run dated D scores the closed UTC
+  day D-1. When `/api/health` fails it adds one amber chip, a pipeline problem first ("Nightly update delayed" or
+  "Nightly update incomplete"), else "Indexer catching up"; a swap-lag warning alone shows none. The footer names the
+  same day. One pure function decides (`lib/health.freshness`) over the same reads as `/api/health` (`db/health.ts`),
+  cached 60 s. The Live trades dot is green only when the feed answered and its newest trade is under an hour old.
+- **Stat tiles** follow the pane by container query (6 columns from 720px, 3 by default, 2 under 420px) and never
+  ellipsize a value. Week over week above +999% reads ">999%" (prose: "more than 999%"); weeks under $1K are no basis.
+- **Payload.** Every non-spam project ships with the page as a list row (1,658 on 2026-10-10), so rows stay lean:
+  whole dollars, no hook addresses. `GET /api/hooks` serves the address index; the list fetches it the first time a
+  search starts with "0x".
+- **Indexer resilience.** Every HyperSync request has a wall-clock deadline (`HYPERSYNC_DEADLINE`, 120 s), since the
+  idle timeout cannot end a request whose socket stays fed. Pool lookups spend at most their budget per chain per loop,
+  checked before every call, and a cut scan resumes from its block next loop; the per-page log line shows rate-limit
+  units spent and left. A prune lowers a hook's lookup floor to its oldest deleted pool, so the first loops after one
+  pay off long scans in budgeted slices (BNB and Robinhood after 2026-10-09: a few hours behind head, health ok).
+- **Builds.** Base images come from ECR Public (`public.ecr.aws/docker/library/...`), and Dockerfiles carry no
+  `# syntax=` line: Railway's builders could not reach Docker Hub on 2026-10-09.
