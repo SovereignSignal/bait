@@ -113,7 +113,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
         </div>
         {fresh?.through && (
           <p className={s.fresh} data-testid="freshness">
-            <span>Figures through {dayLabel(fresh.through)} (nightly run)</span>
+            <span>Figures through {dayLabel(fresh.through)}, updated nightly</span>
             {fresh.note && <span className="b b-a">{FRESH_NOTE[fresh.note]}</span>}
           </p>
         )}

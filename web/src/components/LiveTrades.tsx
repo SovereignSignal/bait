@@ -25,9 +25,9 @@ export function LiveTrades({ chainId, chainSlug, poolId, pair }: { chainId: Chai
       const body = (await res.json()) as { trades?: TradeView[]; status?: TradesStatus };
       const trades = Array.isArray(body.trades) ? body.trades : [];
       const failed = body.status === "rate_limited" || body.status === "upstream_error";
-      setFeed((cur) => (failed && cur?.trades.length ? cur : { trades, status: body.status ?? "ok" }));
+      setFeed((cur) => (failed && cur?.trades.length ? { ...cur, status: body.status ?? "upstream_error" } : { trades, status: body.status ?? "ok" }));
     } catch {
-      setFeed((cur) => (cur?.trades.length ? cur : { trades: [], status: "upstream_error" }));
+      setFeed((cur) => (cur?.trades.length ? { ...cur, status: "upstream_error" } : { trades: [], status: "upstream_error" }));
     }
     setNow(Date.now());
   }, [chainSlug, poolId]);
