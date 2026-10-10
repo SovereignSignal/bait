@@ -506,6 +506,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
         isFactory: p.isFactory,
         whatLine: p.whatLine ?? "",
         whyBlurb: p.whyBlurb ?? "",
+        whyBlurbAt: p.blurbAt ? new Date(p.blurbAt).toISOString() : null,
         website: p.website,
         github: p.github,
         xHandle: p.xHandle,
@@ -530,6 +531,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
           lastExaHitAt: exa?.latest ?? null,
           routable: "unknown", // derive() computes it from hooks and pools
           auditCount: auditUrls.size,
+          auditUrl: [...auditUrls].find((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u)) ?? null,
         },
         receipts: recs,
         topPool:
