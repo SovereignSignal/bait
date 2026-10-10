@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clip, dayLabel, deltaWords, fmtDelta, NONE, usd, usdWhole } from "./format";
+import { clip, dayLabel, deltaWords, fmtDelta, nextDigestDay, NONE, usd, usdWhole } from "./format";
 import { activePool, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric } from "./present";
 import { emptyCopy, moversFor, searchRows } from "./feed";
 import { liveDotOn, tradesNote } from "./trades";
+import { respond } from "./http";
+import { gunzipSync } from "node:zlib";
 import { loadHookIndex, resetHookIndex } from "./hook-index";
 
 test("usd: trimmed .0, B to one decimal, one missing glyph", () => {
@@ -130,4 +132,22 @@ test("an audit link is only ever an http(s) URL", () => {
   assert.equal(firstWebUrl(["javascript:alert(1)", "data:text/html,x", "https://x.org/audit.pdf"]), "https://x.org/audit.pdf");
   assert.equal(firstWebUrl(["HTTP://x.org/a"]), "HTTP://x.org/a");
   assert.equal(firstWebUrl([null, 3, "ftp://x"]), null);
+});
+
+test("nextDigestDay names the coming Monday in UTC", () => {
+  assert.equal(nextDigestDay(Date.parse("2026-10-10T20:00:00Z")), "Monday, Oct 12");   // Saturday
+  assert.equal(nextDigestDay(Date.parse("2026-10-11T23:59:00Z")), "Monday, Oct 12");   // Sunday
+  assert.equal(nextDigestDay(Date.parse("2026-10-12T03:00:00Z")), "today");
+  assert.equal(nextDigestDay(Date.parse("2026-10-13T03:00:00Z")), "Monday, Oct 19");
+});
+
+test("route responses are gzipped when accepted and worth it, plain otherwise", async () => {
+  const big = "x".repeat(5000), req = (enc?: string) => new Request("http://t/", { headers: enc ? { "accept-encoding": enc } : {} });
+  const z = respond(req("gzip, br"), big, { headers: { "Content-Type": "text/plain" } });
+  assert.equal(z.headers.get("content-encoding"), "gzip");
+  assert.equal(gunzipSync(Buffer.from(await z.arrayBuffer())).toString(), big);
+  assert.equal(z.headers.get("vary"), "Accept-Encoding");
+  assert.equal(respond(req(), big, { headers: {} }).headers.get("content-encoding"), null);
+  assert.equal(respond(req("gzip"), "tiny", { headers: {} }).headers.get("content-encoding"), null);
+  assert.equal(respond(req("gzip"), big, { status: 404, headers: {} }).status, 404);
 });

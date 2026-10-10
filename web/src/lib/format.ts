@@ -34,6 +34,15 @@ export function deltaWords(d: number): string {
   return a > 999 ? "more than 999%" : `${a}%`;
 }
 
+/** The digest's next run day from `now` (UTC): "today" on a Monday, else "Monday, Oct 12". */
+export function nextDigestDay(now = Date.now()): string {
+  const d = new Date(now);
+  const ahead = (8 - d.getUTCDay()) % 7; // days until Monday (getUTCDay: 0 = Sunday)
+  if (ahead === 0) return "today";
+  const mon = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + ahead));
+  return `Monday, ${mon.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })}`;
+}
+
 /** "2026-10-10" -> "Oct 10" (the day is UTC). */
 export function dayLabel(day: string): string {
   return new Date(`${day}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });

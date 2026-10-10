@@ -1,6 +1,7 @@
 // Live recent trades for one pool, from GeckoTerminal (keyless), with wallet_labels joined.
 // Never throws: any upstream error, 429 or bad input is an empty list with an explicit status. Only pools Bait knows are proxied.
 import { getWalletLabels, isKnownPool } from "@/db/queries";
+import { respondJson } from "@/lib/http";
 import { createSwrCache } from "@/lib/swr-cache";
 import { createTokenBucket } from "@/lib/token-bucket";
 import { CHAINS, parseChainParam } from "@/lib/chains";
@@ -33,20 +34,20 @@ const cache = createSwrCache<Payload>({ ttlMs: TTL_MS, max: 500 });
 const gtBucket = createTokenBucket({ capacity: 20, refillPerSec: 20 / 60 });
 class RateLimited extends Error {}
 
-export async function GET(_req: Request, { params }: { params: Promise<{ chain: string; pool: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ chain: string; pool: string }> }) {
   const { chain, pool } = await params;
   const chainId = parseChainParam(chain);
   const poolId = pool.toLowerCase();
-  if (!chainId || !CHAINS[chainId] || !/^0x[0-9a-f]{40,64}$/.test(poolId)) return json({ trades: [], status: "unknown_pool" }, 404, NO_STORE);
+  if (!chainId || !CHAINS[chainId] || !/^0x[0-9a-f]{40,64}$/.test(poolId)) return json(req, { trades: [], status: "unknown_pool" }, 404, NO_STORE);
 
   const key = `${chainId}:${poolId}`;
-  if (!(await isKnownPool(chainId, poolId))) return json({ trades: [], status: "unknown_pool" }, 404, NO_STORE);
+  if (!(await isKnownPool(chainId, poolId))) return json(req, { trades: [], status: "unknown_pool" }, 404, NO_STORE);
 
   try {
     const value = await cache.get(key, () => load(chainId, poolId), (v) => (v.status === "ok" ? TTL_MS : ERROR_TTL_MS));
-    return json(value);
+    return json(req, value);
   } catch (e) {
-    if (e instanceof RateLimited) return json({ trades: [], status: "rate_limited" }, 503, NO_STORE);
+    if (e instanceof RateLimited) return json(req, { trades: [], status: "rate_limited" }, 503, NO_STORE);
     throw e;
   }
 }
@@ -91,6 +92,6 @@ async function load(chainId: ChainId, poolId: string): Promise<Payload> {
   }
 }
 
-function json(p: Payload, status = 200, cacheControl = "public, max-age=60, s-maxage=120"): Response {
-  return Response.json(p, { status, headers: { "Cache-Control": cacheControl } });
+function json(req: Request, p: Payload, status = 200, cacheControl = "public, max-age=60, s-maxage=120"): Response {
+  return respondJson(req, p, { status, headers: { "Cache-Control": cacheControl } });
 }
