@@ -6,6 +6,8 @@ INDEXER_INTERVAL, INDEXER_CHAINS (comma slugs or ids), INDEXER_MAX_PAGES, INDEXE
 INDEXER_TOPIC_CHUNK, INDEXER_RPC_MAX_WINDOWS, INDEXER_POOLS_PER_HOOK (v4_pools rows per hook; past it pools are counted),
 INDEXER_POOL_LOOKUPS (HyperSync calls per chain per loop to find pools past the cap that swap; times
 INDEXER_POOL_LOOKUPS_CATCHUP, 3, while the swap cursor is more than 100K blocks behind),
+HYPERSYNC_DEADLINE (wall-clock seconds per HyperSync request, 120; the idle timeout alone cannot end a request whose
+socket stays fed),
 INDEXER_LATE_INSERT_MIN_USD (smallest priced swap that makes such a pool a row), INDEXER_SAMPLED_POOLS_PER_HOOK (second cap).
 """
 from __future__ import annotations

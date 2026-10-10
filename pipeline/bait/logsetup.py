@@ -19,6 +19,8 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure(name: str = "bait") -> None:
+    if hasattr(sys.stdout, "reconfigure"):     # stdout to a pipe (Railway) is block-buffered: lines surfaced only when
+        sys.stdout.reconfigure(line_buffering=True)   # 8 KB filled or at exit, which hid every warning on 2026-10-10
     handler = logging.StreamHandler(sys.stdout)
     if os.environ.get("BAIT_LOG_FORMAT", "json") == "text":
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
