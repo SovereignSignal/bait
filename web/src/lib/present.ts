@@ -40,8 +40,15 @@ export function rowMetric(r: { vol24h: number | null; vol7d: number | null }, us
 
 const HOOK_SEARCH_CAP = 8;
 
-/** ProjectSummary -> the light row the client list ships with. */
-export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
+/** Hook addresses for 0x search: lowercase, deduplicated, capped. */
+export function hookKeys(addresses: string[]): string[] {
+  return [...new Set(addresses.map((a) => a.toLowerCase()))].slice(0, HOOK_SEARCH_CAP);
+}
+
+const dollars = (n: number | null): number | null => (n == null ? null : Math.round(n));
+
+/** ProjectSummary -> the light row the client list ships with, 1,600+ of them per page: whole dollars, no hook list. */
+export function toRow(p: ProjectSummary): RowView {
   return {
     slug: p.slug,
     name: p.name,
@@ -53,14 +60,13 @@ export function toRow(p: ProjectSummary, hookAddresses: string[]): RowView {
     firstSeenAt: p.firstSeenAt,
     isNew: p.isNew,
     isWash: p.isWash,
-    scoreTrending: p.scoreTrending,
-    vol7d: p.metrics.vol7d,
-    vol7dPrev: p.metrics.vol7dPrev,
-    vol24h: p.usage.vol24h,
-    tvlUsd: p.metrics.tvlUsd,
+    scoreTrending: Math.round(p.scoreTrending * 1000) / 1000,
+    vol7d: dollars(p.metrics.vol7d),
+    vol7dPrev: dollars(p.metrics.vol7dPrev),
+    vol24h: dollars(p.usage.vol24h),
+    tvlUsd: Math.round(p.metrics.tvlUsd),
     routable: p.signals.routable,
     audited: p.signals.auditCount > 0,
-    hooks: [...new Set(hookAddresses.map((a) => a.toLowerCase()))].slice(0, HOOK_SEARCH_CAP),
     rank: p.rank,
   };
 }
