@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clip, fmtDelta, NONE, usd } from "./format";
+import { clip, dayLabel, deltaWords, fmtDelta, NONE, usd } from "./format";
 import { rowLabel, rowMetric } from "./present";
 import { emptyCopy, moversFor } from "./feed";
-import { tradesNote } from "./trades";
+import { liveDotOn, tradesNote } from "./trades";
 
 test("usd: trimmed .0, B to one decimal, one missing glyph", () => {
   assert.deepEqual([usd(1000), usd(1040), usd(22_800), usd(10_000_000), usd(10_600_000), usd(1_210_000_000), usd(812), usd(-2500)],
@@ -45,4 +45,25 @@ test("tradesNote separates nothing-traded from feed-unavailable", () => {
   assert.equal(tradesNote("rate_limited", 0), "Trade feed unavailable, retrying in 60s.");
   assert.equal(tradesNote("unknown_pool", 0), "No live trade data for this pool.");
   assert.equal(tradesNote("upstream_error", 3), null);
+});
+
+test("a week-over-week change past +999% reads >999%, in tiles and in prose", () => {
+  assert.deepEqual([fmtDelta(297_195), fmtDelta(999.4), fmtDelta(999.6), fmtDelta(-99.9)], [">999%", "+999%", ">999%", "-100%"]);
+  assert.deepEqual([deltaWords(297_195), deltaWords(-24.4), deltaWords(13)], ["more than 999%", "24%", "13%"]);
+  assert.equal(deltaWords(-24.5), fmtDelta(-24.5).slice(1));   // prose and tile round the same way
+});
+
+test("dayLabel names the UTC day", () => {
+  assert.equal(dayLabel("2026-10-10"), "Oct 10");
+  assert.equal(dayLabel("2026-01-01"), "Jan 1");
+});
+
+test("the live dot is green only for an answering feed whose newest trade is under an hour old", () => {
+  const now = Date.parse("2026-10-10T12:00:00Z");
+  const t = (iso: string) => ({ ts: iso });
+  assert.equal(liveDotOn("ok", [t("2026-10-10T11:10:00Z"), t("2026-10-09T15:00:00Z")], now), true);
+  assert.equal(liveDotOn("ok", [t("2026-10-09T15:00:00Z")], now), false);          // 21h old: not live
+  assert.equal(liveDotOn("upstream_error", [t("2026-10-10T11:59:00Z")], now), false);
+  assert.equal(liveDotOn("ok", [], now), false);
+  assert.equal(liveDotOn(undefined, [t("2026-10-10T11:59:00Z")], now), false);
 });

@@ -23,6 +23,39 @@ const SWAP_LAG_WARN_BLOCKS = 50_000;
 // Soft errors no longer change the pipeline exit code (a completed run exits 0), so health is where they surface.
 const SOFT_ERRORS_FAIL = 10;
 
+export interface Freshness {
+  through: string | null; // YYYY-MM-DD: the last closed UTC day the nightly figures cover
+  note: "run_late" | "run_failed" | "catching_up" | null; // why figures may be behind, when health fails
+}
+
+const DAY_MS = 86_400_000;
+const FIRST_REAL_DAY = "2020-01-01"; // a repair receipt written before any nightly carries 1970-01-01
+
+/** What a visitor is told about data age. The run dated D scores the closed day D-1, so the figures run through D-1.
+ * When health fails, the reason class: a pipeline problem outranks indexer lag, since it is what dates the figures. */
+export function freshness(input: HealthInput, now: Date): Freshness {
+  const v = evaluateHealth(input, now);
+  const day = input.receipt?.day;
+  const through = day && day >= FIRST_REAL_DAY ? new Date(Date.parse(`${day}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10) : null;
+  const has = (...prefixes: string[]) => v.reasons.some((r) => prefixes.some((p) => r.startsWith(p)));
+  const note = v.ok
+    ? null
+    : has("no pipeline run receipt", "last pipeline receipt")
+      ? "run_late"
+      : has("pipeline run ")
+        ? "run_failed"
+        : has("chain ", "indexer")
+          ? "catching_up"
+          : null;
+  return { through, note };
+}
+
+export const FRESH_NOTE: Record<NonNullable<Freshness["note"]>, string> = {
+  run_late: "Nightly update delayed",
+  run_failed: "Nightly update incomplete",
+  catching_up: "Indexer catching up",
+};
+
 export function evaluateHealth(input: HealthInput, now: Date): { ok: boolean; reasons: string[]; warnings: string[] } {
   const reasons: string[] = [];
   const warnings: string[] = [];

@@ -1,7 +1,7 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
 import { CHAINS } from "./chains";
 import { weekDelta } from "./feed";
-import { clip, fmtDelta, int, usd } from "./format";
+import { clip, deltaWords, fmtDelta, int, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
@@ -77,7 +77,7 @@ export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNe
   const d = weekDelta(r);
   if (r.isWash) parts.push("wash-like volume");
   else if (r.isNew) parts.push("new");
-  else if (d != null) parts.push(`${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))} percent`);
+  else if (d != null) parts.push(`${d >= 0 ? "up" : "down"} ${deltaWords(d).replace("%", " percent")}`);
   return parts.join(", ");
 }
 
