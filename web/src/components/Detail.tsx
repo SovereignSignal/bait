@@ -1,7 +1,8 @@
 // Project detail column (server): header, stats, daily volume, pools, activity, top wallets, why.
 import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { weekDelta } from "@/lib/feed";
-import { ago, age, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd } from "@/lib/format";
+import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd } from "@/lib/format";
+import { FRESH_NOTE, type Freshness } from "@/lib/health";
 import { categoryLine, chainNames, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
@@ -24,7 +25,7 @@ function poolPair(x: PoolView): string {
   return pair(x.token0Symbol, x.token1Symbol, x.token0, x.token1);
 }
 
-export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
+export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh?: Freshness | null }) {
   const d = weekDelta(p.metrics);
   const u = p.usage;
   const stats: Array<{ k: string; v: string; cls?: string; title?: string }> = [
@@ -46,7 +47,7 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
     p.whyBlurb ||
     (p.metrics.vol7d == null ? `The last 7 days' volume through this hook's ${pools} is unknown.` : null) ||
     `${usd(p.metrics.vol7d)} traded through this hook in the last 7 days across ${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}${
-      d != null ? `, ${d >= 0 ? "up" : "down"} ${Math.abs(Math.round(d))}% on the week` : ""
+      d != null ? `, ${d >= 0 ? "up" : "down"} ${deltaWords(d)} on the week` : ""
     }.`;
 
   return (
@@ -100,14 +101,22 @@ export function Detail({ p, now }: { p: ProjectDetail; now: number }) {
             {chainNames(p.chains, " · ")}
           </div>
         </div>
-        <div className={s.stats}>
-          {stats.map((x) => (
-            <div key={x.k} className={s.stat} title={x.title}>
-              <div className={s.k}>{x.k}</div>
-              <div className={`${s.val} num ${x.cls ?? ""}`}>{x.v}</div>
-            </div>
-          ))}
+        <div className={s.statsBox}>
+          <div className={s.stats}>
+            {stats.map((x) => (
+              <div key={x.k} className={s.stat} title={x.title}>
+                <div className={s.k}>{x.k}</div>
+                <div className={`${s.val} num ${x.cls ?? ""}`}>{x.v}</div>
+              </div>
+            ))}
+          </div>
         </div>
+        {fresh?.through && (
+          <p className={s.fresh} data-testid="freshness">
+            <span>Figures through {dayLabel(fresh.through)} (nightly run)</span>
+            {fresh.note && <span className="b b-a">{FRESH_NOTE[fresh.note]}</span>}
+          </p>
+        )}
       </div>
 
       <div className={`panel ${s.chart}`}>
@@ -299,7 +308,7 @@ function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
     out.push({
       cls: d > 0 ? "b-g" : "b-r",
       label: d > 0 ? "Volume up" : "Volume down",
-      text: `${Math.abs(Math.round(d))}% week over week, ${usd(p.metrics.vol7d)} in 7 days`,
+      text: `${deltaWords(d)} week over week, ${usd(p.metrics.vol7d)} in 7 days`,
     });
   }
   if (busy && busy.vol24h != null) {

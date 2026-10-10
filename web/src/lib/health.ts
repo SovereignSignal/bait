@@ -23,6 +23,23 @@ const SWAP_LAG_WARN_BLOCKS = 50_000;
 // Soft errors no longer change the pipeline exit code (a completed run exits 0), so health is where they surface.
 const SOFT_ERRORS_FAIL = 10;
 
+export interface Freshness {
+  through: string | null; // YYYY-MM-DD of the last nightly run
+  note: "catching_up" | "run_late" | null; // why figures may be behind, when health fails
+}
+
+/** What a visitor is told about data age: the day of the last nightly run and, when health fails, the reason class. */
+export function freshness(input: HealthInput, now: Date): Freshness {
+  const v = evaluateHealth(input, now);
+  const indexer = v.reasons.some((r) => r.startsWith("chain ") || r.startsWith("indexer"));
+  return { through: input.receipt?.day ?? null, note: v.ok ? null : indexer ? "catching_up" : "run_late" };
+}
+
+export const FRESH_NOTE: Record<NonNullable<Freshness["note"]>, string> = {
+  catching_up: "Indexer catching up",
+  run_late: "Nightly update delayed",
+};
+
 export function evaluateHealth(input: HealthInput, now: Date): { ok: boolean; reasons: string[]; warnings: string[] } {
   const reasons: string[] = [];
   const warnings: string[] = [];

@@ -11,10 +11,15 @@
 .star:hover { background: var(--hover); color: var(--fg); }
 .star[aria-pressed="true"] { color: var(--amber); }
 
-.stats { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 8px; padding: 0 16px 16px; }
+/* Columns follow the pane, not the viewport: the detail pane is ~490px wide on a 1280px screen. */
+.statsBox { container: stats / inline-size; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; padding: 0 16px 16px; }
+@container stats (min-width: 720px) { .stats { grid-template-columns: repeat(6, minmax(0,1fr)); } }
+@container stats (max-width: 419px) { .stats { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+.fresh { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -6px 16px 14px; font-size: 12px; color: var(--fg3); }
 .stat { padding: 10px 12px; border-radius: 12px; background: var(--panel2); min-width: 0; }
 .k { font-size: 11px; color: var(--fg2); font-weight: 500; }
-.val { font-size: 16px; font-weight: 700; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.val { font-size: 16px; font-weight: 700; margin-top: 2px; overflow-wrap: anywhere; } /* never ellipsize a number */
 
 .chart { padding: 14px 16px 10px; }
 .chart h2, .blk h2 { margin: 0 0 8px; font-size: 13px; color: var(--fg2); font-weight: 600; }
@@ -51,6 +56,7 @@
 .trades { display: flex; flex-direction: column; }
 .liveHead { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg2); font-weight: 600; padding-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .liveDot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--greenbg); flex: 0 0 auto; }
+.liveDotOff { background: var(--fg3); box-shadow: none; }
 .tradesNote { font-size: 13px; padding: 8px 0; }
 .tradeList { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .trade { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-top: 1px solid var(--line); border-radius: 0; font-size: 13px; }
@@ -79,11 +85,7 @@ a.trade:hover { background: var(--hover); }
 
 .emptyDetail { padding: 32px 16px; text-align: center; color: var(--fg2); }
 
-@media (max-width: 1180px) {
-  .stats { grid-template-columns: repeat(3, minmax(0,1fr)); }
-}
 @media (max-width: 820px) {
-  .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .head { flex-wrap: nowrap; gap: 12px; }
   .head h1 { font-size: 20px; }
   .where { display: none; }
