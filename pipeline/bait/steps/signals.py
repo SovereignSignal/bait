@@ -130,7 +130,7 @@ def _blurb_ctx(conn, p, daily) -> dict:
         "name": p.name, "category": p.category, "what_line": p.what_line,
         "metrics": {
             "windows": f"closed UTC days ending {daily.window_end}: 24h = that day; 7d = it and the 6 days before; "
-                       "prev_7d = the 7 days before those. A null count is unknown: do not quote it.",
+                       "prev_7d = the 7 days before those. A null count is unknown.",
             "tvl_usd": daily.tvl_usd, "vol_24h": daily.vol_24h, "vol_7d": daily.vol_7d, "vol_7d_prev": daily.vol_7d_prev,
             "swaps_24h": daily.swaps_24h, "swaps_7d": daily.swaps_7d, "wallets_24h": daily.wallets_24h,
             "wallets_24h_kind": None if daily.wallets_24h is None else (

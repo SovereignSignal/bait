@@ -40,6 +40,12 @@ export function rowMetric(r: { vol24h: number | null; vol7d: number | null }, us
 
 const HOOK_SEARCH_CAP = 8;
 
+/** The first http(s) URL among published audit links; anything else (javascript:, data:, bare text) is not a link. */
+export function firstWebUrl(urls: Iterable<unknown>): string | null {
+  for (const u of urls) if (typeof u === "string" && /^https?:\/\//i.test(u)) return u;
+  return null;
+}
+
 /** Hook addresses for 0x search: lowercase, deduplicated, capped. */
 export function hookKeys(addresses: string[]): string[] {
   return [...new Set(addresses.map((a) => a.toLowerCase()))].slice(0, HOOK_SEARCH_CAP);

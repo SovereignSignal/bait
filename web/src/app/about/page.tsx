@@ -18,24 +18,28 @@ export default function AboutPage() {
             Identity comes from the public <a className="inline" href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">hooklist</a> registry and from the chain:
             a hook that is not in the registry is found from its pools, and its permissions come from the bits in its address. Usage comes from
             Bait&apos;s own indexer, which reads every hooked Uniswap v4 pool and the last 14 days of swaps on 16 chains through Envio
-            HyperSync, priced with DefiLlama. GeckoTerminal adds pool TVL and its own rolling 24-hour figures, and public RPC nodes fill gaps.
-            Figures are closed UTC days, refreshed by a nightly run; a project page says which day its figures run through. Contract names come
+            HyperSync, valued at current DefiLlama prices. Where the indexer has not caught up, or a hook keeps its own accounting,
+            GeckoTerminal&apos;s daily figures stand in. GeckoTerminal also supplies pool TVL and rolling 24-hour figures, and public RPC nodes
+            resolve hooks and read their bytecode. The feed covers ten of those chains; the rest appear under Just launched. Figures are
+            closed UTC days, refreshed by a nightly run; a project page says which day its figures run through. Contract names come
             from Blockscout, Sourcify and Routescan. Links come from Exa, last 30 days. Team, site and audit details for new projects come from
             Parallel. The one-line &quot;what it does&quot; and the two-sentence &quot;why people care&quot; are written by Claude from those sources,
             rewritten only when the signals change; the page shows when.
           </p>
           <h3>Activity</h3>
           <p>
-            Buys, sells and top wallets come from GeckoTerminal&apos;s latest ~300 trades in each of the busiest pools, once a day, and distinct
-            wallet counts from the indexer. The live trade feed on a project page reads GeckoTerminal&apos;s recent trades for the project&apos;s
+            Buys and sells are GeckoTerminal&apos;s rolling 24-hour counts. Top wallets come from GeckoTerminal&apos;s latest ~300 trades in each
+            of Bait&apos;s 30 busiest pools, once a day. Distinct wallet counts come from the indexer where it has caught up, otherwise from those
+            trades; a &quot;≤&quot; marks an upper bound. The live trade feed on a project page reads GeckoTerminal&apos;s recent trades for the project&apos;s
             busiest pool, hides trades under $10, and refreshes every minute while you watch. Wallet labels and the &quot;Smart money&quot; pill are
             Nansen labels collected until October 2026; they are no longer updated.
           </p>
           <h3>Grouping</h3>
           <p>
-            Thousands of hook addresses collapse into projects. A name is only a candidate: hooks join one project on evidence, the same
-            bytecode (not a shared proxy) or the same deployer (not a factory). Hooks with generic names, such as template defaults, stay
-            apart. Factories that deploy one hook per pool are one card with the hook count as a stat. Renamed and merged projects keep their
+            Thousands of hook addresses collapse into projects. Hooks that share a hooklist name are one project, unless unrelated teams share
+            that name (deployer clashes on one chain and no shared bytecode). A verified contract name is only a candidate: those hooks join on
+            evidence, the same bytecode (not a shared proxy) or the same deployer (not a factory). Hooks with generic names, such as template
+            defaults, stay apart. The few left with only a description are classified once by a small model. Factories that deploy one hook per pool are one card with the hook count as a stat. Renamed and merged projects keep their
             old links.
           </p>
           <h3>Categories</h3>
@@ -49,14 +53,11 @@ export default function AboutPage() {
               <b>New</b>: project first seen within 7 days, and either a pool above $1K TVL or at least 10 swaps in the week.
             </li>
             <li>
-              <b>Trending</b>: 7-day volume of at least $10K and no wash-like volume. Score is <code>log1p(vol_7d) × clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)</code>,
+              <b>Trending</b>: 7-day volume of at least $10K, at least $1K the week before, first seen over a week ago, and no wash-like volume. Score is <code>log1p(vol_7d) × clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)</code>,
               so growth counts more than size; tie-break on TVL. Top 20.
             </li>
             <li>
               <b>In Uniswap app</b>: at least one pool our rule below says the app will route to. Audit status is a separate badge.
-            </li>
-            <li>
-              <b>Alive</b>: a GitHub commit or a web mention in the last 30 days.
             </li>
             <li>
               <b>Hidden from All</b>: no pools, or every pool under $100 TVL with fewer than 10 swaps lifetime, unless the project moved $1M or more.
@@ -68,14 +69,15 @@ export default function AboutPage() {
           <h2>Wash-like volume</h2>
           <p>
             A project gets the red &quot;Wash-like volume&quot; badge when pools carrying at least half its volume match one of these rules. It stays in All
-            with its page, and never reaches Trending, New, movers, Leaders or the weekly digest.
+            with its page, and never reaches Trending, New, In Uniswap app, movers, Leaders or the weekly digest.
           </p>
           <ul>
-            <li><b>Few wallets</b>: $250K or more in a day through 25 wallets or fewer, or $1M in a week through 10 or fewer, when the pool also shows volume far above its liquidity, no liquidity, or symmetric trading.</li>
+            <li><b>Few wallets</b>: $250K or more in a day through 25 wallets or fewer, or $1M in a week through 10 or fewer, when the pool also shows 7-day volume over 50 times a known TVL, no liquidity, or symmetric trading; or $1M carried by 10 swaps or fewer.</li>
             <li><b>Concentrated</b>: $1M or more in a week carried by at most two wallets.</li>
             <li><b>Volume far above liquidity</b>: 7-day volume over 300 times a known TVL, with fewer than 50 wallets.</li>
             <li><b>No liquidity</b>: $1M or more in a week through a pool with at most $1K of known TVL and fewer than 50 wallets.</li>
             <li><b>Symmetric</b>: the top wallets each buy and sell equally and carry most of the pool&apos;s volume (bots trading with themselves).</li>
+            <li><b>Unverified</b>: $1M or more through pools too small to list, with no wallet data to check who moved it.</li>
           </ul>
           <p className="muted">
             Wallet counts are lower bounds and unknown TVL is never treated as zero. A private or RFQ hook with few counterparties and real
@@ -99,7 +101,7 @@ export default function AboutPage() {
           <ul>
             <li>Hooks are third-party code in the swap path. Nothing here is audited by us.</li>
             <li>Flags and properties are shown as published in the hooklist registry. We do not verify them against bytecode.</li>
-            <li>&quot;Audited&quot; means an audit link is published. It is not a statement about the audit&apos;s scope or findings.</li>
+            <li>&quot;Audit linked&quot; means an audit link is published. It is not a statement about the audit&apos;s scope or findings.</li>
             <li>Smart-money counts are Nansen labels on addresses that interacted with a project&apos;s top pools. They are not investment signals.</li>
             <li>Figures come from Bait&apos;s indexer and public APIs and can lag or be wrong when a source stalls; a project page says which day its figures run through. Metrics are USD estimates.</li>
             <li>Bait is a personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</li>
