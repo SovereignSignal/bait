@@ -124,7 +124,10 @@ class PoolResolver:
     """Keys of hooked pools that are not v4_pools rows (past their hook's cap, or pruned), for when one of them swaps.
     One per chain, kept by the Runner across loops. First `recent` (rows this process left out of v4_pools, the newest
     RECENT_MAX), then one HyperSync Initialize query by pool id (topic1) over [floor, page end) per `topic_chunk` ids, at
-    most `pool_lookups` calls per loop (a chunk that started finishes). A swap page with ids left unresolved is not
+    most `pool_lookups` calls per loop, checked before every call. A chunk cut by the budget records how far each of
+    its ids was scanned (`scanned`) and resumes there next loop, so a deep floor (a prune lowers it to the oldest
+    deleted pool: 44M blocks on BNB on 2026-10-10, ~70 calls of ~45 s each) costs a bounded slice of every loop instead
+    of the whole loop. A swap page with ids left unresolved is not
     committed: its swaps are never dropped, and what was learned carries over to the next loop. This is also the defence
     against a hook filled to its cap with junk pools: a later real pool is a row from its first swap on. `pending` keeps
     what lookups found for the page being resolved, out of reach of `recent`'s eviction (Initialize pages can push more
@@ -139,6 +142,7 @@ class PoolResolver:
         self.pending: dict[str, dict] = {}              # looked up for the page not yet committed
         self.absent: set[str] = set()
         self.absent_floor: int | None = None
+        self.scanned: dict[str, int] = {}              # id -> block its scan reached when the budget cut the chunk
         self.calls = 0                                  # this loop's lookup calls
         self.asked = 0                                  # this loop's ids that needed a lookup
         self.chunk_calls = 0                            # this loop's most calls for one chunk
@@ -152,34 +156,55 @@ class PoolResolver:
     def start_loop(self) -> None:
         self.calls = self.asked = self.chunk_calls = 0
 
+    def _keep(self, got: dict, found: dict) -> None:
+        """What a scan found so far is kept even when the chunk is cut: pending for this page, recent across pages."""
+        self.pending.update(got)
+        self.remember(got.values())
+        found.update(got)
+        for i in got:
+            self.scanned.pop(i, None)                   # a found id keeps no stale cursor
+
     def resolve(self, hs: HyperSync, chain: IndexedChain, ids, floor: int, to_block: int, settings: Settings,
                 budget: int | None = None) -> dict[str, dict]:
         """-> {pool_id: v4_pools row} for the ids that are hooked pools. A swap at a block below to_block means the pool
         was initialized below it, so one scan of [floor, to_block) settles every id it asked for."""
         if self.absent_floor is None or floor < self.absent_floor:
             self.absent.clear()
+            self.scanned.clear()                        # a lower floor means an unscanned older range for everyone
             self.absent_floor = floor
         found = {i: self.pending.get(i) or self.recent[i] for i in ids if i in self.pending or i in self.recent}
         need = sorted(i for i in ids if i not in found and i not in self.absent)
         budget = settings.pool_lookups if budget is None else budget
         self.asked += len(need)
-        for k in range(0, len(need), settings.topic_chunk):
-            if self.calls >= budget:
-                raise LookupBudget(f"pool lookup budget spent ({self.calls} of {budget} calls), {len(need) - k} ids left")
-            chunk, got, cur, start = need[k:k + settings.topic_chunk], {}, floor, self.calls
-            while cur < to_block:
-                logs, blocks, _, nb, _ = page(hs.query(initialize_by_id_query(chain.pool_manager, cur, to_block, chunk)))
-                self.calls += 1
-                if nb is None or nb <= cur:
-                    raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={nb})")
-                for r in hooked_pools_from_page(chain.chain_id, logs, blocks):
-                    got[r["pool_id"]] = r
-                cur = nb
-            self.chunk_calls = max(self.chunk_calls, self.calls - start)
-            self.pending.update(got)
-            self.remember(got.values())
-            found.update(got)
-            self.absent.update(i for i in chunk if i not in got)
+        groups: dict[int, list[str]] = {}               # resume block -> ids; ids cut last loop carry on from their block
+        for i in need:
+            groups.setdefault(self.scanned.get(i, floor), []).append(i)
+        for start_block, group in sorted(groups.items(), reverse=True):   # closest to done first: finishing frees ids
+            for k in range(0, len(group), settings.topic_chunk):
+                chunk, got, cur, start = group[k:k + settings.topic_chunk], {}, start_block, self.calls
+                while cur < to_block:
+                    if self.calls >= budget:
+                        self._keep(got, found)
+                        self.chunk_calls = max(self.chunk_calls, self.calls - start)
+                        for i in chunk:
+                            if i not in got:
+                                self.scanned[i] = cur
+                        left = sum(1 for i in need if i not in found and i not in self.absent)
+                        raise LookupBudget(f"pool lookup budget spent ({self.calls} of {budget} calls), {left} ids left, "
+                                           f"scan resumes at block {cur}")
+                    logs, blocks, _, nb, _ = page(hs.query(initialize_by_id_query(chain.pool_manager, cur, to_block, chunk)))
+                    self.calls += 1
+                    if nb is None or nb <= cur:
+                        self._keep(got, found)                  # the chain errors this loop; what was found stays
+                        raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={nb})")
+                    for r in hooked_pools_from_page(chain.chain_id, logs, blocks):
+                        got[r["pool_id"]] = r
+                    cur = nb
+                self.chunk_calls = max(self.chunk_calls, self.calls - start)
+                self._keep(got, found)
+                self.absent.update(i for i in chunk if i not in got)
+                for i in chunk:
+                    self.scanned.pop(i, None)
         if len(self.absent) > self.ABSENT_MAX:
             self.absent.clear()
         return found
@@ -369,7 +394,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             late: dict[str, dict] = {}
             unknown = ids - set(known)
             if floor is not None and unknown:      # some may be hooked pools past the cap: find their keys
-                calls, asked = resolver.calls, resolver.asked
+                calls, asked, units = resolver.calls, resolver.asked, hs.units
                 try:
                     late = resolver.resolve(hs, chain, unknown, floor, nb, settings, budget)
                 except LookupBudget as e:
@@ -377,8 +402,9 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
                     break
                 finally:
                     if resolver.asked > asked:
-                        log.info("chain=%s swap page %d-%d unknown=%d lookups: ids=%d calls=%d (loop %d of %d)", chain.slug,
-                                 swap_from, nb, len(unknown), resolver.asked - asked, resolver.calls - calls, resolver.calls, budget)
+                        log.info("chain=%s swap page %d-%d unknown=%d lookups: ids=%d calls=%d (loop %d of %d) units=%d left=%s",
+                                 chain.slug, swap_from, nb, len(unknown), resolver.asked - asked, resolver.calls - calls,
+                                 resolver.calls, budget, hs.units - units, hs.remaining if hs.remaining is not None else "?")
                 known.update({p: (r["currency0"], r["currency1"]) for p, r in late.items()})
             aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
             rows, adds = _admit_late(engine, chain, late, agg, settings, st) if late else ([], {})
