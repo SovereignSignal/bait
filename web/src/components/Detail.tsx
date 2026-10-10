@@ -41,6 +41,24 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     // the closed UTC day, from score: no longer GeckoTerminal's rolling buys + sells
     { k: "Swaps 24h", v: int(u.tx24h) },
   ];
+  const badges: Array<{ cls: string; label: string; why: string; href?: string }> = [
+    ...(p.isWash ? [{ cls: "b-r", label: "Wash-like volume", why: washLine(p.washReason) }] : []),
+    p.hooklisted
+      ? { cls: "b-v", label: "✓ Hooklist", why: "Listed in the Uniswap hooklist, the public registry of v4 hooks." }
+      : { cls: "b-n", label: "Not in hooklist", why: "Found on-chain from its pools; not in the hooklist registry." },
+    ...(p.signals.routable === "eligible" ? [{ cls: "b-g", label: "In Uniswap app", why: "At least one pool should route in the Uniswap app. A rule, not a guarantee." }] : []),
+    ...(p.signals.routable === "ineligible" ? [{ cls: "b-n", label: "Not in app", why: "The Uniswap app will not route swaps through this hook." }] : []),
+    ...(p.signals.routable === "unknown" ? [{ cls: "b-n", label: "Routing unknown", why: "Not enough data to say whether the app routes through this hook." }] : []),
+    p.signals.auditCount > 0
+      ? { cls: "b-g", label: "Audit linked", why: "An audit link is published. It says nothing about scope or findings.", href: p.signals.auditUrl ?? undefined }
+      : { cls: "b-n", label: "No audit", why: "No audit link found." },
+    ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
+    ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
+    ...(!p.isNew && p.rank ? [{ cls: "b-a", label: `#${p.rank} trending`, why: "Rank by 7-day volume growth among projects with at least $10K in 7 days." }] : []),
+    ...(u.smartWallets != null && u.smartWallets > 0
+      ? [{ cls: "b-p", label: `◆ ${u.smartWallets} smart wallet${u.smartWallets === 1 ? "" : "s"}`, why: "Wallets Nansen labelled as smart money (labels collected until October 2026) traded here in the last day." }]
+      : []),
+  ];
   const busy = busiestPool(p);
   const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
@@ -62,35 +80,30 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
             </div>
             {p.whatLine && <p className={s.what}>{p.whatLine}</p>}
             <div className={s.badges} data-testid="badges">
-              {p.isWash && (
-                <span className="b b-r" title={washLine(p.washReason)}>
-                  Wash-like volume
-                </span>
-              )}
-              {p.hooklisted ? (
-                <span className="b b-v" title="Listed in the Uniswap hooklist, the public registry of v4 hooks.">✓ Hooklist</span>
-              ) : (
-                <span className="b b-n" title="Found on-chain from its pools; not in the hooklist registry.">Not in hooklist</span>
-              )}
-              {p.signals.routable === "eligible" && (
-                <span className="b b-g" title="At least one pool should route in the Uniswap app. A rule, not a guarantee.">In Uniswap app</span>
-              )}
-              {p.signals.routable === "ineligible" && <span className="b b-n" title="The Uniswap app will not route swaps through this hook.">Not in app</span>}
-              {p.signals.routable === "unknown" && <span className="b b-n" title="Not enough data to say whether the app routes through this hook.">Routing unknown</span>}
-              {p.signals.auditCount > 0 ? (
-                <span className="b b-g" title="An audit link is published. It says nothing about scope or findings.">Audit linked</span>
-              ) : (
-                <span className="b b-n" title="No audit link found.">No audit</span>
-              )}
-              {p.upgradeable && <span className="b b-a" title="The owner can change this hook's code. Read it before you trade.">Upgradeable</span>}
-              {p.isNew && <span className="b b-p" title="First seen in the last 7 days.">New · {ago(p.firstSeenAt, now)}</span>}
-              {!p.isNew && p.rank && <span className="b b-a" title="Rank by 7-day volume growth.">#{p.rank} trending</span>}
-              {u.smartWallets != null && u.smartWallets > 0 && (
-                <span className="b b-p" title="Wallets Nansen labels as smart money traded here in the last day.">
-                  ◆ {u.smartWallets} smart wallet{u.smartWallets === 1 ? "" : "s"}
-                </span>
+              {badges.map((b) =>
+                b.href ? (
+                  <a key={b.label} className={`b ${b.cls}`} title={b.why} href={b.href} target="_blank" rel="noopener nofollow">
+                    {b.label} ↗
+                  </a>
+                ) : (
+                  <span key={b.label} className={`b ${b.cls}`} title={b.why}>
+                    {b.label}
+                  </span>
+                ),
               )}
             </div>
+            {/* the titles above are hover-only; this works on touch and keyboard */}
+            <details className={s.badgeHelp}>
+              <summary>What these badges mean</summary>
+              <dl>
+                {badges.map((b) => (
+                  <div key={b.label}>
+                    <dt>{b.label}</dt>
+                    <dd>{b.why}</dd>
+                  </div>
+                ))}
+              </dl>
+            </details>
             <div className={s.whereSub}>
               {categoryLine(p)} · {chainNames(p.chains, " · ")}
             </div>
@@ -152,6 +165,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       <div className={`panel ${s.blk}`}>
         <h2>Why people care</h2>
         <div className={s.why}>{why}</div>
+        {p.whyBlurb && p.whyBlurbAt && <div className={`${s.whyAt} mut3`}>Written {dayLabel(p.whyBlurbAt.slice(0, 10))}; the figures above are current.</div>}
         {p.receipts.length > 0 && (
           <div className={s.recs}>
             {p.receipts.slice(0, 6).map((r) => (

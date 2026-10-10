@@ -110,6 +110,11 @@ function ProjectListView({ rows, selected, view, now, query, launches, launchesN
           <span className="num">{t.watchlist.length}</span>
         </button>
       </nav>
+      {!watching && !searching && query.tab === "trending" && (
+        <p className={s.rankNote}>
+          Ranked by 7-day volume growth; wash-like volume never ranks. <Link href="/about#scoring">How</Link>
+        </p>
+      )}
       {!watching && (
         <div className={s.cats} role="group" aria-label="Category">
           <Link className={s.chip} aria-current={!query.category} href={feedHref({ ...query, category: undefined })}>

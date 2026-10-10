@@ -6,6 +6,15 @@
 .what { margin: 6px 0 0; font-size: 15px; line-height: 1.45; color: var(--fg2); max-width: 70ch; text-wrap: pretty; }
 .whereSub { display: none; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.badges a.b { text-decoration: none; }
+.badges a.b:hover { text-decoration: underline; }
+.badgeHelp { margin-top: 6px; font-size: 12px; color: var(--fg2); }
+.badgeHelp summary { cursor: pointer; color: var(--fg3); min-height: 24px; display: inline-flex; align-items: center; }
+.badgeHelp dl { margin: 6px 0 0; display: grid; gap: 4px; }
+.badgeHelp dl div { display: grid; grid-template-columns: minmax(96px, max-content) 1fr; gap: 8px; }
+.badgeHelp dt { font-weight: 600; color: var(--fg); }
+.badgeHelp dd { margin: 0; }
+.whyAt { margin-top: 6px; font-size: 12px; }
 .where { font-size: 12px; text-align: right; color: var(--fg2); }
 .star { display: inline-grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; color: var(--fg3); flex: 0 0 auto; }
 .star:hover { background: var(--hover); color: var(--fg); }
