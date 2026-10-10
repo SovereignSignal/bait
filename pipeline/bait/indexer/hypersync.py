@@ -14,7 +14,11 @@ and block timestamps. GET /height -> {"height": H}.
 from __future__ import annotations
 
 import logging
+import os
+import signal
+import threading
 import time
+from contextlib import contextmanager
 from typing import Iterable
 
 import httpx
@@ -26,6 +30,39 @@ log = logging.getLogger("bait.indexer")
 LOG_FIELDS = ["block_number", "log_index", "transaction_hash", "topic0", "topic1", "topic2", "topic3", "data"]
 BLOCK_FIELDS = ["number", "timestamp"]
 MAX_NUM_LOGS = 20_000
+DEADLINE = float(os.environ.get("HYPERSYNC_DEADLINE", "") or 120)   # wall-clock seconds per request (HyperSync answers in ~1-10 s)
+if not (0 <= DEADLINE <= 3600):
+    raise ValueError(f"HYPERSYNC_DEADLINE must be 0..3600 seconds, got {DEADLINE}")
+
+
+class RequestDeadline(RuntimeError):
+    pass
+
+
+@contextmanager
+def _deadline(seconds: float):
+    """Wall-clock cap on one blocking call. httpx's timeout is idle time per socket read: a server that keeps the socket
+    fed with bytes that are not a response never trips it (seen 2026-10-10: one /query pending 40 minutes on attempt 0,
+    the chain and every chain after it frozen). SIGALRM interrupts the read and raises here (PEP 475), so the call ends;
+    httpcore drops the half-used connection. Main thread only (the indexer is single-threaded); elsewhere, no cap.
+    Accepted cost of raising from a signal handler: the raise can land inside a few bytecodes of httpcore's own lock
+    handling and leave that lock held, after which every request on the shared client blocks until the deadline and the
+    chains sit at ERR until a restart. The window is microscopic; if every chain errors with "deadline" at once, restart."""
+    if seconds <= 0 or threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def _raise(signum, frame):
+        raise RequestDeadline(f"no response within the {seconds:g} s deadline")
+    prev = signal.signal(signal.SIGALRM, _raise)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        yield
+    finally:
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:                       # a signal landing inside setitimer(0) must not leave _raise installed
+            signal.signal(signal.SIGALRM, prev)
 
 
 class HyperSyncAuthError(RuntimeError):
@@ -33,12 +70,14 @@ class HyperSyncAuthError(RuntimeError):
 
 
 class HyperSync:
-    def __init__(self, url: str, token: str, client: httpx.Client, retries: int = 5, sleep=time.sleep):
+    def __init__(self, url: str, token: str, client: httpx.Client, retries: int = 5, sleep=time.sleep,
+                 deadline: float | None = None):
         self.url = url.rstrip("/")
         self.token = token
         self.client = client
         self.retries = retries
         self.sleep = sleep
+        self.deadline = DEADLINE if deadline is None else deadline
         self.calls = 0
 
     def _headers(self) -> dict:
@@ -49,9 +88,11 @@ class HyperSync:
         for attempt in range(self.retries):
             self.calls += 1
             try:
-                r = self.client.request(method, self.url + path, json=body, headers=self._headers(), timeout=60)
-            except httpx.HTTPError as e:
+                with _deadline(self.deadline):
+                    r = self.client.request(method, self.url + path, json=body, headers=self._headers(), timeout=60)
+            except (httpx.HTTPError, RequestDeadline) as e:
                 last = e
+                log.warning("%s%s attempt %d of %d failed: %s", self.url, path, attempt + 1, self.retries, e)
                 self.sleep(min(2 ** attempt, 30))
                 continue
             if r.status_code in (401, 403):
