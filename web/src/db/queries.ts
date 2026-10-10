@@ -18,7 +18,7 @@ import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
-import { digestItem, hookKeys, toRow } from "@/lib/present";
+import { digestItem, firstWebUrl, hookKeys, toRow } from "@/lib/present";
 import type {
   Category,
   ChainId,
@@ -506,6 +506,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
         isFactory: p.isFactory,
         whatLine: p.whatLine ?? "",
         whyBlurb: p.whyBlurb ?? "",
+        whyBlurbAt: p.blurbAt?.toISOString() ?? null,
         website: p.website,
         github: p.github,
         xHandle: p.xHandle,
@@ -530,6 +531,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
           lastExaHitAt: exa?.latest ?? null,
           routable: "unknown", // derive() computes it from hooks and pools
           auditCount: auditUrls.size,
+          auditUrl: firstWebUrl(auditUrls),
         },
         receipts: recs,
         topPool:

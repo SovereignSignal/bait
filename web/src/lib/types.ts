@@ -155,6 +155,8 @@ export interface SignalsView {
   lastExaHitAt: string | null;
   routable: Eligibility;
   auditCount: number;
+  /** first published audit link (http/https only) */
+  auditUrl?: string | null;
 }
 
 export interface Metrics {
@@ -176,6 +178,8 @@ export interface ProjectSummary {
   isFactory: boolean;
   whatLine: string;
   whyBlurb: string;
+  /** when whyBlurb was written (ISO); it is rewritten only when signals change */
+  whyBlurbAt?: string | null;
   website: string | null;
   github: string | null;
   xHandle: string | null;
