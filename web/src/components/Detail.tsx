@@ -3,7 +3,7 @@ import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from 
 import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, poolsNote, walletsText, washLine } from "@/lib/present";
+import { activePool, categoryLine, chainNames, poolsNote, poolVolume, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
 import { LiveTrades } from "./LiveTrades";
@@ -232,6 +232,18 @@ function Bars({ series }: { series: (number | null)[] }) {
   );
 }
 
+/** In the table the reason is a tooltip; the phone stack has no hover, so it says it inline and drops the "24h" label. */
+function PoolVolume({ x, stacked = false }: { x: PoolView; stacked?: boolean }) {
+  const v = poolVolume(x);
+  if (!v.note) return <>{stacked ? `24h ${v.text}` : v.text}</>;
+  return (
+    <span className="mut" title={v.note}>
+      {v.text}
+      {stacked && " (USD unknown)"}
+    </span>
+  );
+}
+
 function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
   const known = pools.filter((x) => knownChain(x.chainId));
   const active = known.filter(activePool);
@@ -262,7 +274,9 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
                 </td>
                 <td>{CHAINS[x.chainId]?.name ?? x.chainId}</td>
                 <td className="num">{usd(x.tvlUsd)}</td>
-                <td className="num">{usd(x.vol24h)}</td>
+                <td className="num">
+                  <PoolVolume x={x} />
+                </td>
                 <td className="num">{walletsText(x.wallets24h, x.walletsExact)}</td>
                 <td>{feeLabel(x.fee)}</td>
               </tr>
@@ -281,7 +295,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
               · {CHAINS[x.chainId]?.name ?? x.chainId} · {feeLabel(x.fee)}
             </span>
             <div className={`${s.stackSub} num`}>
-              TVL {usd(x.tvlUsd)} · 24h {usd(x.vol24h)} · {walletsText(x.wallets24h, x.walletsExact)} wallets
+              TVL {usd(x.tvlUsd)} · <PoolVolume x={x} stacked /> · {walletsText(x.wallets24h, x.walletsExact)} wallets
             </div>
           </li>
         ))}
