@@ -1,6 +1,7 @@
 """Step 4 (group): hooks -> projects. Rule 1 hooklist name (generic names excluded; a same-chain verified-name project
-is adopted only with evidence), rule 2 code_hash or deployer, rule 3 Claude for the long tail. Flagged hooks are
-regrouped first; moved and renamed projects leave aliases. is_factory when a project has > 20 hooks."""
+is adopted only with evidence), rule 2 code_hash or deployer, rule 2b bytecode template (code_shape) on one chain, rule 3
+Claude for the long tail. Flagged hooks are regrouped first; moved and renamed projects leave aliases. is_factory when a
+project has > 20 hooks."""
 from __future__ import annotations
 
 import os
@@ -9,7 +10,8 @@ import time
 import sqlalchemy as sa
 
 from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow
-from ..rules import SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, proxy_flag, slugify, useful_name
+from ..rules import (SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, proxy_flag, shape_evidence, slugify,
+                     useful_name)
 from . import RunContext, log
 from .names import add_alias, backfill_unlisted_aliases, detach_project, hook_rows, retire_project, unique_slug
 
@@ -19,7 +21,7 @@ FACTORY_MIN_HOOKS = 21
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"by_name": 0, "by_code": 0, "by_deployer": 0, "by_claude": 0, "created": 0, "unassigned": 0,
            "code_fetched": 0, "factories": 0, "split": 0, "promoted": 0, "moved": 0, "retired": 0, "adopted": 0,
-           "code_refreshed": 0, "code_missing": 0}
+           "code_refreshed": 0, "code_missing": 0, "shapes_filled": 0, "by_shape": 0, "shape_merged": 0}
     out["flags_backfilled"] = backfill_address_flags(conn)
     _refresh_code_facts(conn, ctx, out)
     out["aliases_backfilled"] = backfill_unlisted_aliases(conn, ctx.now)
@@ -27,6 +29,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     splits = _split_generic(conn, ctx, generic) + _split_proxy_families(conn, ctx)
     out["split"] = len(splits)
     _regroup(conn, ctx, out, generic)
+    _fill_shapes(conn, ctx, out)
+    _merge_shape_families(conn, ctx, out)
     unassigned = _unassigned(conn)
 
     # Rule 1: hooklist name -> curated project, else a same-chain verified-name project with evidence, else a new one.
@@ -78,7 +82,30 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 _assign(conn, m, pid)
             out["created"] += 1
             out["by_code"] += len(members)
-        unassigned = still
+        # Rule 2b: same bytecode template on one chain (only immutables differ): join its project, or form a family.
+        targets = _shape_targets(conn)
+        fam = {}
+        rest = []
+        for h in still:
+            k = shape_evidence(h)
+            if k and (pid := targets.get(k)):
+                _assign(conn, h, pid)
+                out["by_shape"] += 1
+            elif k:
+                fam.setdefault(k, []).append(h)
+            else:
+                rest.append(h)
+        for members in fam.values():
+            if len(members) < 2:
+                rest += members
+                continue
+            first = sorted(m.address for m in members)[0]
+            pid = _create_project(conn, ctx, f"Unlisted hook family {first[:6]}…", None, None)
+            for m in members:
+                _assign(conn, m, pid)
+            out["created"] += 1
+            out["by_shape"] += len(members)
+        unassigned = sorted(rest, key=lambda h: (h.chain_id, h.address))
 
     # Rule 3: Claude classification for the long tail (nameless hooks or names that matched nothing).
     if unassigned:
@@ -339,6 +366,126 @@ def _split_generic(conn, ctx, generic: set[str]) -> list[dict]:
     if snaps:
         log.info("group: split %d projects keyed on a template or proxy name", len(snaps))
     return snaps
+
+
+def _shape_max() -> int:
+    try:
+        return max(0, int(os.environ.get("SHAPE_MAX", "") or 3000))
+    except ValueError:
+        return 3000
+
+
+def _rpc_shapes(ctx, rows, deadline: float) -> dict:
+    """{(chain_id, address): code_shape | None} from public-RPC eth_getCode (keyless chains). None = no code there."""
+    if os.environ.get("KEYLESS", "1") == "0":
+        return {}
+    from .. import keyless as K
+    from .snapshot import keyless_http
+    net_by_chain = {cid: net for net, (cid, *_rest) in K.CHAINS.items()}
+    by_net: dict[str, set[str]] = {}
+    for r in rows:
+        if net := net_by_chain.get(r.chain_id):
+            by_net.setdefault(net, set()).add(r.address)
+    if not by_net:
+        return {}
+    try:
+        got = K.code_shapes(keyless_http(ctx), by_net, deadline=deadline)
+    except Exception as e:
+        log.warning("group: code shape lookup failed: %s", e)
+        return {}
+    return {(K.CHAINS[net][0], addr): v for (net, addr), v in got.items()}
+
+
+def _fill_shapes(conn, ctx, out: dict) -> None:
+    """code_shape for non-proxy hooks without one: unassigned hooks first, then the newest. SHAPE_MAX (3000) per run
+    within REHASH_BUDGET_S; hooks an RPC does not answer are asked again next run, "" marks a hook with no code left."""
+    cap = _shape_max()
+    if cap == 0:
+        return
+    todo = conn.execute(sa.select(hooks.c.address, hooks.c.chain_id)
+                        .where(hooks.c.code_shape.is_(None), hooks.c.code_hash.is_not(None), hooks.c.is_proxy.is_(False))
+                        .order_by(hooks.c.project_id.is_not(None), hooks.c.first_seen_at.desc(), hooks.c.chain_id,
+                                  hooks.c.address)
+                        .limit(cap)).all()
+    if not todo:
+        return
+    got = _rpc_shapes(ctx, todo, time.monotonic() + _refresh_budget_s())
+    for r in todo:
+        key = (r.chain_id, r.address)
+        if key in got:
+            conn.execute(sa.update(hooks).values(code_shape=got[key] or "")
+                         .where(hooks.c.address == r.address, hooks.c.chain_id == r.chain_id))
+            out["shapes_filled"] += 1
+    log.info("group: code shapes for %d of %d hooks", out["shapes_filled"], len(todo))
+
+
+def _unlisted(name: str) -> bool:
+    return name.startswith("Unlisted hook")
+
+
+def _shape_groups(conn) -> dict[str, dict[int, sa.Row]]:
+    """(chain:shape) -> {project_id: a row} over auto-named projects. Curated projects never take part."""
+    groups: dict[str, dict[int, sa.Row]] = {}
+    for r in conn.execute(
+            sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.code_shape, hooks.c.code_hash, hooks.c.is_proxy,
+                      hooks.c.proxy_kind, hooks.c.project_id, projects.c.name.label("pname"), projects.c.norm_name.label("pnorm"))
+            .join(projects, projects.c.id == hooks.c.project_id)
+            .where(hooks.c.code_shape.is_not(None), hooks.c.code_shape != "")
+            .order_by(hooks.c.project_id)):
+        if (k := shape_evidence(r)) and _provisional(r.pname, r.pnorm):
+            groups.setdefault(k, {}).setdefault(r.project_id, r)
+    return groups
+
+
+def _shape_target(projs: dict[int, sa.Row]) -> int | None:
+    """Where a template's unnamed hooks belong: its one verified-name project, else its oldest unlisted family, else its
+    oldest unlisted project. Two verified names on one template are two teams: their unnamed siblings stay apart from
+    both and only fold among themselves."""
+    named = [pid for pid, r in projs.items() if not _unlisted(r.pname)]
+    if len(named) == 1:
+        return named[0]
+    unl = [(not r.pname.startswith("Unlisted hook family"), pid) for pid, r in projs.items() if _unlisted(r.pname)]
+    return min(unl)[1] if unl else None
+
+
+def _shape_targets(conn) -> dict[str, int]:
+    return {k: pid for k, projs in _shape_groups(conn).items() if (pid := _shape_target(projs)) is not None}
+
+
+def _merge_shape_families(conn, ctx, out: dict) -> None:
+    """Rule 2b across time: unlisted projects whose hooks share a bytecode template on one chain are one launchpad's
+    per-token deployments. They fold into _shape_target; a single unlisted target becomes "Unlisted hook family 0x…".
+    Named projects never move. Old slugs redirect."""
+    into: dict[int, int] = {}
+
+    def live(pid: int) -> int:
+        while pid in into:
+            pid = into[pid]
+        return pid
+
+    renamed = set()
+    for k, projs in _shape_groups(conn).items():
+        target = _shape_target(projs)
+        if target is None:
+            continue
+        target = live(target)
+        movers = sorted({live(pid) for pid, r in projs.items() if _unlisted(r.pname)} - {target})
+        for pid in movers:
+            retire_project(conn, pid, into=target, reason="regroup:code_shape", now=ctx.now)
+            into[pid] = target
+            out["shape_merged"] += 1
+        if movers and target not in renamed:
+            renamed.add(target)
+            p = conn.execute(sa.select(projects).where(projects.c.id == target)).one()
+            if _unlisted(p.name) and not p.name.startswith("Unlisted hook family"):
+                first = conn.execute(sa.select(sa.func.min(hooks.c.address)).where(hooks.c.project_id == target)).scalar_one()
+                name = f"Unlisted hook family {first[:6]}…"
+                slug = unique_slug(conn, name, target)
+                conn.execute(sa.update(projects).values(name=name, slug=slug).where(projects.c.id == target))
+                if slug != p.slug:
+                    add_alias(conn, p.slug, target, "renamed", ctx.now)
+    if out["shape_merged"]:
+        log.info("group: folded %d unlisted projects into bytecode-template families", out["shape_merged"])
 
 
 def _join_targets(conn) -> tuple[dict, dict]:

@@ -4,7 +4,7 @@ import { isSlugShaped, isUnlisted, unlistedLabel } from "./unlisted";
 
 test("unlisted names get the busiest pair", () => {
   assert.equal(unlistedLabel("Unlisted hook 0x7bc2…2aec", "WETH", "USDC"), "WETH/USDC hook · 0x7bc2…2aec");
-  assert.equal(unlistedLabel("Unlisted hook family 0x4103…", "ETH", "OBH"), "ETH/OBH hook · 0x4103…");
+  assert.equal(unlistedLabel("Unlisted hook family 0x4103…", "ETH", "OBH"), "ETH/OBH hook family · 0x4103…");
 });
 
 test("named projects and missing symbols are left alone", () => {

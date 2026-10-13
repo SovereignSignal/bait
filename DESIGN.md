@@ -387,6 +387,15 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
   verdict wins when given. ERC-1967 proxy bytecode is shared by unrelated deployments, so a code_hash is evidence only
   when `is_proxy` is false or the hook is an EIP-1167 clone (its hash embeds the implementation); unknown is not. Auto-named projects that joined proxies by
   bytecode were split, and their generic stored contract names looked up again (proxies resolve to implementations).
+- **Bytecode template families (rule 2b, 2026-10-13).** Launchpads deploy one hook per token from generated source, so
+  every member has its own code_hash (immutables, metadata) and each landed as its own "Unlisted hook" card: 856 of
+  5,633 projects were New on 10/13, 726 of them unnamed, mostly Robinhood and Ethereum memecoin hooks. `hooks.code_shape`
+  (`rules.code_shape`) is sha256 of the runtime without CBOR metadata and with PUSH32 operands zeroed; selectors and
+  constant addresses stay. Same shape on one chain, non-proxy, is evidence. Unlisted projects fold into the template's
+  one verified-name project, else its oldest unlisted family ("Unlisted hook family 0x…"); two verified names on one
+  template stay apart, curated projects never take part, old slugs redirect. New hooks join their template's project or
+  form a family. Shapes come from public-RPC eth_getCode, `SHAPE_MAX` (3,000) per run, unassigned first. Dry run on live
+  data: 1,385 unlisted projects into 184 families; 451 of the 856 New projects folded away.
 - **Regroup.** Ingest flags a grouped hook (`hooks.regroup`) when the hooklist names or lists it; a code-hash write flags
   it too. The group step moves it into the curated project with that name, or renames its auto-named project in place,
   then pulls same non-proxy bytecode out of auto-named projects. Curated projects never give hooks up.

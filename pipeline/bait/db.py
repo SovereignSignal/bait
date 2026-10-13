@@ -69,6 +69,7 @@ hooks = sa.Table(
     sa.Column("is_proxy", sa.Boolean),         # from the bytecode (EIP-1967 slot / EIP-1167 clone) or explorer; NULL = unknown
     sa.Column("proxy_kind", sa.Text),          # eip1167 | eip1967 | explorer | unknown; an eip1167 clone's hash is evidence
     sa.Column("pools_total", sa.BigInteger),   # every pool initialized through it (step onchain, 0013); NULL = not indexed
+    sa.Column("code_shape", sa.Text),          # rules.code_shape: bytecode with immutables zeroed; same-chain template family (0014)
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), index=True),
     sa.Column("first_seen_at", TS, nullable=False),
 )
@@ -413,6 +414,7 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("project_daily", "wash_reason", "text"),
     ("v4_pools", "sampled", "boolean NOT NULL DEFAULT false"),
     ("hooks", "pools_total", "bigint"),
+    ("hooks", "code_shape", "text"),
 ]
 
 

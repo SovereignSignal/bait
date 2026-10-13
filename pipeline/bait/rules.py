@@ -192,6 +192,43 @@ def code_hash(code_hex: str | None) -> str | None:
         return None
 
 
+def code_shape(code_hex: str | None) -> str | None:
+    """Bytecode template fingerprint: "0x" + sha256 of the runtime with the trailing CBOR metadata removed and every PUSH32
+    operand zeroed. Solidity writes immutables as PUSH32, so one launchpad's per-token hooks (same source, different
+    constructor arguments, one metadata hash per generated file) share a shape while their code_hash differs. Function
+    selectors (PUSH4) and constant addresses (PUSH20) stay, so different code never shares one. None for no code."""
+    s = (code_hex or "").strip().lower().removeprefix("0x")
+    try:
+        code = bytes.fromhex(s)
+    except ValueError:
+        return None
+    if not code:
+        return None
+    if len(code) >= 2:                                   # solc appends CBOR metadata, then its length in 2 bytes
+        n = int.from_bytes(code[-2:], "big")
+        if 0 < n + 2 <= len(code) and code[-n - 2] in (0xA1, 0xA2, 0xA3):
+            code = code[:-n - 2]
+    out, i = bytearray(), 0
+    while i < len(code):
+        op = code[i]
+        out.append(op)
+        i += 1
+        if 0x60 <= op <= 0x7F:                           # PUSH1..PUSH32
+            n = op - 0x5F
+            arg = code[i:i + n]
+            out += bytes(len(arg)) if n == 32 else arg
+            i += n
+    return "0x" + hashlib.sha256(bytes(out)).hexdigest()
+
+
+def shape_evidence(r) -> str | None:
+    """(chain, code_shape) when the shape can join hooks: the same conditions as code_evidence (proxy bytecode is shared
+    by unrelated deployments), and only on one chain, where a template's immutables are the only thing that differs."""
+    if not getattr(r, "code_shape", None) or code_evidence(r) is None:
+        return None
+    return f"{r.chain_id}:{r.code_shape}"
+
+
 def score_trending(vol_7d: float, vol_7d_prev: float) -> float:
     """DESIGN.md: Trending needs vol_7d >= $10k; score = log1p(vol_7d) * clamp(vol_7d / max(prev, 1000), 0.5, 10)."""
     if vol_7d < 10_000 or vol_7d_prev < 1_000:
