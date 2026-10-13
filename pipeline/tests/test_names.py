@@ -5,7 +5,7 @@ import pytest
 import sqlalchemy as sa
 
 from bait import db
-from bait.clients.contract_names import ContractNames, useful_name
+from bait.clients.contract_names import ContractNames, LookupTransient, useful_name
 from bait.steps import names
 from tests.conftest import DAY, NOW, insert_hook, insert_project
 
@@ -313,3 +313,41 @@ def test_explorers_never_downgrade_a_proxy(conn, ctx):
     names.run(conn, ctx, {})
     row = conn.execute(sa.select(db.hooks.c.is_proxy, db.hooks.c.proxy_kind).where(db.hooks.c.address == A(50))).one()
     assert tuple(row) == (True, "eip1967")
+
+
+class _Seq(_Http):
+    """Answers each URL fragment from a queue, so a 429 can clear on retry."""
+    def get(self, url, params=None):
+        self.urls.append(url)
+        for frag, q in self.routes.items():
+            if frag in url:
+                return q.pop(0) if len(q) > 1 else q[0]
+        return _Resp(404, {})
+
+
+def test_sourcify_429_waits_and_asks_again_then_counts_transient(monkeypatch):
+    from bait.clients import contract_names as cn_mod
+    slept = []
+    monkeypatch.setattr(cn_mod.time, "sleep", slept.append)
+    ok = {"compilation": {"name": "PacedHook"}}
+    h = _Seq({"sourcify.dev": [_Resp(429, {}), _Resp(429, {}), _Resp(200, ok)]})
+    assert ContractNames(None, http_client=h).lookup(1, A(1))[:2] == ("PacedHook", "sourcify")
+    assert [s for s in slept if s >= 1] == [2.0, 5.0]
+    h = _Seq({"sourcify.dev": [_Resp(429, {})]})                       # still limited after both waits: transient
+    c = ContractNames(None, http_client=h)
+    with pytest.raises(LookupTransient):
+        c.lookup(1, A(2))
+    assert c.outcomes["sourcify:error"] == 1 and sum("sourcify" in u for u in h.urls) == 3
+
+
+def test_sourcify_calls_are_spaced_across_workers(monkeypatch):
+    from bait.clients import contract_names as cn_mod
+    clock = [100.0]
+    slept = []
+    monkeypatch.setattr(cn_mod.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(cn_mod.time, "sleep", slept.append)
+    c = ContractNames(None, http_client=_Http({}))
+    for _ in range(4):
+        c._pace("sourcify.dev")
+    c._pace("eth.blockscout.com")                                         # other hosts are not paced
+    assert slept == [0.25, 0.5, 0.75]
