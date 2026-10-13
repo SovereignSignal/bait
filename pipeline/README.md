@@ -243,7 +243,7 @@ Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_Q
 
 Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30), `ACTIVITY_WASH_POOLS` (24h-wash
 candidates fetched as well, for the symmetric-trader check; default 10),
-`ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 40), Keyless source:
+`ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 20), Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP` (pools past it get yesterday's volume from the rolling 24h,
 marked `estimated`).
@@ -300,7 +300,8 @@ written on its own connection so it survives a rolled-back step), and hard budge
 | `SPEND_DAILY_USD` | 3.00 | All providers, UTC day. `0` = hold: paid calls skipped, free steps still run. |
 | `SPEND_MONTHLY_USD` | 40.00 | All providers, rolling 30 days. |
 | `SPEND_DAILY_USD_<PROVIDER>` / `SPEND_MONTHLY_USD_<PROVIDER>` | unset | Optional per provider (`ANTHROPIC`, `PARALLEL`, `EXA`). |
-| `ENRICH_MAX` | 40 | Projects enriched (Parallel core + Sonnet) per run; live-pool projects only. |
+| `ENRICH_MAX` | 20 | Projects enriched (Parallel core + Sonnet) per run; live-pool projects only. 20 fits the $40/30-day budget (~$1.25 a night all in). |
+| `SHAPE_MAX` | 3000 | Hooks whose bytecode template (`code_shape`) the group step fetches per run, free public RPC. |
 | `GROUP_CLAUDE_MAX` | 100 | Haiku classifications per run; bare-address hooks are never sent. |
 | `RADAR_EXA_QUERIES` / `RADAR_CLASSIFY_MAX` | 6 / 30 | Radar Exa searches and Haiku classifications per run. |
 
