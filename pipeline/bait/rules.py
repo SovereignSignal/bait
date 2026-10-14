@@ -223,7 +223,7 @@ def is_spam(pool_stats: list[tuple[float, int]], volume: float = 0.0) -> bool:
 # --- wash rules (DESIGN.md "Wash rules"). A project is wash-like for a reason when the pools that rule flags carry
 # >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
 # "unverified" is not a rule: a project that only escaped the spam rule by moving >= $1M and has no wallet data at all.
-WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "unverified")
+WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified")
 WASH_SHARE = 0.5
 WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
 
@@ -340,6 +340,31 @@ def is_symmetric(top: list[tuple[float, int, int]], vol_24h: float | None) -> bo
     pattern = len(t) >= SYMMETRIC_MIN_WALLETS or all(b >= SYMMETRIC_MIN_ROUND_TRIPS for _, b, _ in t)
     return (len(t) >= 2 and pattern and all(b == s and b > 0 for _, b, s in t)
             and sum(v for v, _, _ in t) > SYMMETRIC_SHARE * vol_24h)
+
+
+# One trade size across a pool: fresh wallets each making one trade of the same dollar size. 10/13: Hookr MOW/WETH on
+# Robinhood, top 10 wallets each one buy of $22,450-$22,515 (0.3% apart) and $17.1M from 809 wallets in 24h ($21.1K each).
+# A launch that caps buys gives a uniform top too, but its many smaller buyers pull the pool's per-wallet average well
+# under the cap, so the average must sit near the uniform size as well.
+UNIFORM_MIN_WALLETS = 8
+UNIFORM_MAX_SPREAD = 1.03           # largest / smallest of the top wallets' volumes
+UNIFORM_MIN_AVG_SHARE = 0.8         # pool volume per wallet, against the top wallets' median size
+UNIFORM_MIN_VOL = 1_000_000
+
+
+def is_uniform(top: list[tuple[float, int, int]], vol_24h: float | None, wallets_24h: int | None) -> bool:
+    """top: (volume_usd, buys, sells) per wallet. wallets_24h: distinct wallets, else buyers + sellers (an upper bound,
+    which only lowers the average: the safe side)."""
+    if not vol_24h or vol_24h < UNIFORM_MIN_VOL or not wallets_24h:
+        return False
+    t = sorted(top, key=lambda x: -x[0])[:SYMMETRIC_TOP]
+    if len(t) < UNIFORM_MIN_WALLETS or not all(b + s == 1 for _, b, s in t):
+        return False
+    sizes = sorted(v for v, _, _ in t)
+    if sizes[0] <= 0 or sizes[-1] / sizes[0] > UNIFORM_MAX_SPREAD:
+        return False
+    median = sizes[len(sizes) // 2]
+    return vol_24h / wallets_24h >= UNIFORM_MIN_AVG_SHARE * median
 
 
 def is_alive(last_commit_at: datetime | None, latest_exa_hit: datetime | None, now: datetime) -> bool:
