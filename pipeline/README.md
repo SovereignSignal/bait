@@ -81,7 +81,8 @@ With `KEYLESS=0` and no keys the step only prunes.
 `v4_pools` (hooked pools only), `pool_daily_onchain` (never pruned: kept for all-time and monthly totals; `unpriced_swaps`
 counts swaps with no priced side), `pool_wallet_day` (30 days kept), `indexer_state` (per-chain cursors; `swap_block_time` =
 block time the swap cursor reached), `hook_pool_counts` (hooks past the per-hook cap: true pool count, late rows, folded
-usage). Additive changes: `../db/migrations/0010_indexer_safety.sql`, `../db/migrations/0013_pool_cap.sql`.
+usage), `pool_lookup_queue` (pool ids a swap page could not place yet, with the block range they are owed). Additive
+changes: `../db/migrations/0010_indexer_safety.sql`, `../db/migrations/0013_pool_cap.sql`, `../db/migrations/0015_lookup_queue.sql`.
 
 - **Engine:** Envio HyperSync JSON API over httpx (`indexer/hypersync.py`), `POST https://<chain>.hypersync.xyz/query`
   with `Authorization: Bearer $HYPERSYNC_API_TOKEN`, paginated by `next_block`; `GET /height` for the head. 16 chains:
@@ -93,16 +94,30 @@ usage). Additive changes: `../db/migrations/0010_indexer_safety.sql`, `../db/mig
 - **Per-hook cap:** a hook keeps at most `INDEXER_POOLS_PER_HOOK` (2,000) `v4_pools` rows, the first to arrive (a launchpad
   makes one pool per coin). Past that its Initialize logs only add to `hook_pool_counts.pools_total`, which is every pool of
   the hook, stored or not; the check runs in the page's transaction, and only blocks after the counter's `last_block` count,
-  so a page seen twice counts once. On a chain with a capped hook the swap phase always scans; a swap of a pool id that is
-  not a row is resolved from the process's memory or one HyperSync Initialize query by pool id (topic1), at most
-  `INDEXER_POOL_LOOKUPS` (10) calls per chain per loop, every paged call counted (times `INDEXER_POOL_LOOKUPS_CATCHUP`, 3,
-  while the swap cursor is more than 100K blocks behind). A page with ids left unresolved is not committed and waits for
-  the next loop, so no swap is skipped; what its lookups found waits in a `pending` map until the page commits. Each swap
-  page with lookups logs `unknown=` and the ids and calls it took. The pool becomes a row (`sampled = true`) when it has a priced swap of at least
+  so a page seen twice counts once. On a chain with a capped hook the swap phase always scans. A swap page never waits
+  for pool lookups (until 2026-10-14 it did, and Base sat 708K blocks behind): it counts the pools it can place (rows, and
+  keys of capped pools this process holds) and queues every other pool id that is not known unhooked in
+  `pool_lookup_queue` with the block range its swaps were left out of, in the page's transaction. After the pages,
+  `settle_queue` works the queue: one HyperSync Initialize query by pool id (topic1) over `[floor, newest owed block)` per
+  `INDEXER_LOOKUP_CHUNK` (2,000) ids, at most `INDEXER_POOL_LOOKUPS` (10) calls per chain per loop, every paged call counted
+  (times `INDEXER_POOL_LOOKUPS_CATCHUP`, 3, while the swap cursor is more than 100K blocks behind); a cut scan resumes from
+  its block next loop, and ids queued meanwhile go in the next scan together. An unhooked id is deleted from the queue. A
+  hooked one has its swaps in its own range re-read (a Swap query by pool id) and counted in one transaction with its
+  delete, behind a compare-and-set on the unchanged swap cursor; ids found but not yet counted wait in a `held` map, and
+  pages keep owing them until then. So no swap is skipped or counted twice, across restarts too (the queue is in
+  Postgres). If HyperSync refuses a lookup body (HTTP 4xx), the process halves the chunk (down to 100) and carries on.
+  `backfilled` flips only when both cursors are at the head and no queued id owes swaps from before the block where the
+  swap cursor first reached it (ids queued at the live edge later do not hold it: on Base one scan spans several loops);
+  the nightly step treats a day as final only when no queued id owes swaps from before its end. The resolver asks the
+  oldest owed ids first. Logs: `swap page A-B unknown= late= queued=` per page that
+  queued ids, `lookup queue N -> M ids: settled hooked= unhooked= owed_swaps= asked= calls= of B` per loop, and
+  `swap catch-up: block A -> B (+N in P pages), L behind` while a chain is more than 100K blocks behind. The pool becomes
+  a row (`sampled = true`) when it has a priced swap of at least
   `INDEXER_LATE_INSERT_MIN_USD` ($10) and the hook has fewer than `INDEXER_SAMPLED_POOLS_PER_HOOK` (1,000) such rows
   (`sampled_total`). Otherwise its swaps and wallets are folded, per day, onto the hook's aggregate pool id `hook:<address>`
   in `pool_daily_onchain` / `pool_wallet_day`, and into `hook_pool_counts.swaps_total` / `volume_usd_total`. Heartbeat:
-  `capped=`, `late=`, `folded=`, `lookups=`, `unknown=`, `chunk_calls=` per chain when non-zero. A chain with a capped hook
+  `capped=`, `late=`, `folded=`, `lookups=`, `unknown=`, `chunk_calls=`, `queued=`, `owed=`, `backlog=` per chain when
+  non-zero. A chain with a capped hook
   always scans swaps, so a cap at or below `INDEXER_TOPIC_FILTER_MAX` moves a small chain to scan mode once one hook
   reaches it.
 - **Swap:** only hooked pools, from the first block of the UTC day 14 days back (found by binary search on HyperSync
@@ -144,7 +159,8 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
    pool, and `activity` and the web's per-pool lists skip it. Its volume counts in the project's totals but not in
    `score_trending`: no wash rule can judge folded pools.
 3. Usage, only for chains whose `indexer_state.backfilled` is true and `updated_at` is within `ONCHAIN_MAX_STALE_HOURS`
-   (6) and `swap_block_time` has passed the end of the reference day (the 7-day wash rule uses the same chains): pools with `pool_daily_onchain` rows in day-14..day get one `pool_snapshots` row per day from `start`
+   (6) and `swap_block_time` has passed the end of the reference day and no `pool_lookup_queue` id owes swaps from before
+   that end (the 7-day wash rule uses the same chains): pools with `pool_daily_onchain` rows in day-14..day get one `pool_snapshots` row per day from `start`
    (`volume_usd_day`, `tx_count_day`; the legacy cumulative columns zero-seeded the day before), replacing the pool's
    rows from `start` on; older rows and the seed day's daily values are kept so a past day can be re-scored (TVL keeps the
    latest GeckoTerminal/subgraph reserve, the indexer does not compute TVL), and `pool_stats(day)` `vol_24h` /
@@ -243,7 +259,7 @@ Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_Q
 
 Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30), `ACTIVITY_WASH_POOLS` (24h-wash
 candidates fetched as well, for the symmetric-trader check; default 10),
-`ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 40), Keyless source:
+`ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 20), Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP` (pools past it get yesterday's volume from the rolling 24h,
 marked `estimated`).
@@ -251,7 +267,8 @@ marked `estimated`).
 Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs), `INDEXER_INTERVAL`
 (seconds per loop, 60), `INDEXER_CHAINS` (comma slugs or ids, default all 16), `INDEXER_MAX_PAGES` (40),
 `INDEXER_TOPIC_FILTER_MAX` (2000), `INDEXER_TOPIC_CHUNK` (500), `INDEXER_RPC_MAX_WINDOWS` (30), `INDEXER_POOLS_PER_HOOK`
-(2000; 0 = no new caps), `INDEXER_POOL_LOOKUPS` (10, at least 1), `INDEXER_POOL_LOOKUPS_CATCHUP` (3), `INDEXER_LATE_INSERT_MIN_USD` (10),
+(2000; 0 = no new caps), `INDEXER_POOL_LOOKUPS` (10, at least 1), `INDEXER_POOL_LOOKUPS_CATCHUP` (3), `INDEXER_LOOKUP_CHUNK`
+(2000, pool ids per lookup query), `INDEXER_LATE_INSERT_MIN_USD` (10),
 `INDEXER_SAMPLED_POOLS_PER_HOOK` (1000). Step `onchain`:
 `ONCHAIN_MAX_NEW_HOOKS` (500), `ONCHAIN_MAX_STALE_HOURS` (6), `DISK_LIMIT_GB` (50; nightly `pg_database_size` line,
 warning at 60%).
@@ -300,7 +317,8 @@ written on its own connection so it survives a rolled-back step), and hard budge
 | `SPEND_DAILY_USD` | 3.00 | All providers, UTC day. `0` = hold: paid calls skipped, free steps still run. |
 | `SPEND_MONTHLY_USD` | 40.00 | All providers, rolling 30 days. |
 | `SPEND_DAILY_USD_<PROVIDER>` / `SPEND_MONTHLY_USD_<PROVIDER>` | unset | Optional per provider (`ANTHROPIC`, `PARALLEL`, `EXA`). |
-| `ENRICH_MAX` | 40 | Projects enriched (Parallel core + Sonnet) per run; live-pool projects only. |
+| `ENRICH_MAX` | 20 | Projects enriched (Parallel core + Sonnet) per run; live-pool projects only. 20 fits the $40/30-day budget (~$1.25 a night all in). |
+| `SHAPE_MAX` | 3000 | Hooks whose bytecode template (`code_shape`) the group step fetches per run, free public RPC: unassigned first, then same-team (rule 4) candidates, then the newest. |
 | `GROUP_CLAUDE_MAX` | 100 | Haiku classifications per run; bare-address hooks are never sent. |
 | `RADAR_EXA_QUERIES` / `RADAR_CLASSIFY_MAX` | 6 / 30 | Radar Exa searches and Haiku classifications per run. |
 

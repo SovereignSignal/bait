@@ -1,6 +1,7 @@
 "use client";
 // "Just launched": the latest hooked pool initializations (v4_pools) across chains. Server-rendered with the
-// latest 20, then refreshed from /api/launches every 60s while on screen and the tab is visible.
+// latest 20 (fetched on mount instead when the New tab was opened on the client), then refreshed from /api/launches
+// every 60s while on screen and the tab is visible.
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { anyChainColor, anyChainName, anyExplorerTxUrl } from "@/lib/chains";
@@ -17,7 +18,8 @@ export function JustLaunched({
   compact = false,
   chainId,
 }: {
-  initial: LaunchView[];
+  /** the server's latest 20; undefined when the New tab was picked on the client, which then loads them at once */
+  initial?: LaunchView[];
   /** server render time, so the first client render matches */
   now: number;
   /** the New tab's list column: tighter box and a link to /building */
@@ -25,7 +27,8 @@ export function JustLaunched({
   /** the terminal's chain filter, when set */
   chainId?: number;
 }) {
-  const [all, setLaunches] = useState(initial);
+  const [all, setLaunches] = useState(initial ?? []);
+  const [ready, setReady] = useState(initial != null);
   const launches = chainId ? all.filter((l) => l.chainId === chainId) : all;
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(serverNow);
@@ -33,7 +36,9 @@ export function JustLaunched({
   const onScreen = useRef(true);
   const lastLoad = useRef(Date.now());
 
-  useEffect(() => setLaunches(initial), [initial]);
+  useEffect(() => {
+    if (initial) setLaunches(initial);
+  }, [initial]);
 
   const load = useCallback(async () => {
     lastLoad.current = Date.now();
@@ -44,11 +49,17 @@ export function JustLaunched({
     } catch {
       /* keep what we have */
     }
+    setReady(true);
     setNow(Date.now());
   }, []);
+  const needsLoad = useRef(initial == null);
 
   useEffect(() => {
     setNow(Date.now());
+    if (needsLoad.current) {
+      needsLoad.current = false;
+      load();
+    }
     const visible = () => document.visibilityState === "visible" && onScreen.current;
     const tick = setInterval(() => {
       if (visible()) load();
@@ -81,7 +92,9 @@ export function JustLaunched({
         Just launched · new hooked pools
         {compact && <Link href="/building#launches">All launches →</Link>}
       </div>
-      {launches.length === 0 && all.length > 0 ? (
+      {!ready ? (
+        <div className={s.note}>Loading the latest launches…</div>
+      ) : launches.length === 0 && all.length > 0 ? (
         <div className={s.note}>None of the latest {all.length} hooked pool launches are on this chain.</div>
       ) : launches.length === 0 ? (
         <div className={s.note}>

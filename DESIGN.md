@@ -71,7 +71,8 @@ afterRemoveLiquidityReturnsDelta AND not dynamicFee. Published rule, no list exi
 1. same normalized name -> same project
 2. same code_hash (eth_getCode via Blockscout) -> same project
 3. remaining long tail: one-time Claude classification (Haiku 4.5) into project + category
-4. factories flagged is_factory; card shows "748 hooks" as a stat, one card
+4. one team's projects merge: same name stem plus a shared signal (see "Same-team merge", 2026-10-14)
+5. factories flagged is_factory; card shows "748 hooks" as a stat, one card
 
 Categories: dynamic-fee, launchpad, orders (limit/TWAMM), lp-management,
 compliance, oracle, mev-lvr, lending, gaming-nft, other.
@@ -91,6 +92,12 @@ to the day they belong to; the row for D itself is the running day and is never 
 is a rolling window ending at run time: it is `pool_stats.vol_24h_rolling` (the pace line) and, only for pools past the
 OHLCV cap, D-1's volume marked `estimated`. Swap counts are NULL unless every day is known; wallets are distinct across
 a project's pools on ready chains, otherwise an upper bound (`wallets_exact = false`, shown as "≤").
+
+**Labels (2026-10-14).** The UI never calls the closed day "24h": the project page names it ("Vol Oct 12", "Wallets Oct 12",
+bars dated through Oct 12 UTC) and compact rows say "1d" next to "7d". The Uniswap app's pool "Past day" is a rolling 24 h
+ending when you look, so it differs from Bait's closed day by up to two days of trading. Checked on Aegis USD₮0/USDC (Ink,
+0xfff5…1805): Bait $292.3K for Oct 12 = GeckoTerminal's Oct 12 candle $292.3K = on-chain $292.8K (664 Swap logs, one leg);
+the app read $35.8K at about 01:00 UTC Oct 14, matching the on-chain rolling 24 h then. Not double-counted.
 
 - New: project first_seen <= 7d AND (max pool TVL > $1k OR swaps_7d >= 10, counted over the known days, a lower bound)
 - Trending: vol_7d >= $10k; score = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)
@@ -119,7 +126,7 @@ against the same Postgres before cron fires.
 
 ## Frontend
 
-Next.js App Router on Railway, Drizzle -> Postgres, ISR revalidate 1h.
+Next.js App Router on Railway, Drizzle -> Postgres, ISR revalidate 1h (project and week pages 10 min, 2026-10-14).
 Mobile-first. OG image route per project. RSS at /feed.xml. No client-side data fetching.
 
 ## Repo layout
@@ -263,7 +270,7 @@ v4 pool on every chain it covers shows up as soon as it is initialized, with exa
   how many pools a launchpad has (`hooks.pools_total`, `pools_n`) without a row per coin. A first-come cap invites
   griefing: anyone can initialize junk pools on a victim hook until the cap is full, so its later real pools are never
   stored at Initialize. The defence is that a pool past the cap that swaps is looked up by pool id and inserted
-  (`sampled`), and a swap page with pool ids left unresolved waits for the next loop instead of dropping swaps. That path
+  (`sampled`), and its swaps from before the lookup are owed, not dropped (see "Update 2026-10-14"). That path
   alone would let an attacker bypass the cap with one dust swap per junk pool, so it has its own limits: a late row needs a
   priced swap of at least `INDEXER_LATE_INSERT_MIN_USD` ($10; unpriced never qualifies) and stops at
   `INDEXER_SAMPLED_POOLS_PER_HOOK` (1,000) per hook. Nothing is lost past both caps: those swaps and wallets are kept per day
@@ -358,6 +365,9 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
 - `symmetric`: the pool's top 10 wallets that day each have equal buys and sells and carry > 50% of its rolling 24h
   volume (>= $10K), with at least 5 such wallets or 3 round trips each. Data from the activity step: the top 30 non-wash
   pools plus up to 10 24h-wash candidates (`ACTIVITY_WASH_POOLS`).
+- `uniform`: >= $1M rolling 24h, the pool's top 10 wallets (at least 8) each made exactly one trade, their sizes within 3%
+  of each other, and the pool's volume per wallet is at least 80% of their median size (a buy cap gives a uniform top but
+  a much lower average). Hookr MOW/WETH 10/13: ten one-trade buys of $22,450-$22,515, $17.1M from 809 wallets.
 - `unverified`: not a rule. A project that escaped the spam rule only by moving $1M or more, matched no rule and has no
   wallet data at all is listed as wash-like rather than ranked.
 - Live cases: OUROBOROS/CRCL on Robinhood (866x, 13 buyers + 13 sellers, symmetric bots) -> 24h, vol_tvl, symmetric;
@@ -387,6 +397,15 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
   verdict wins when given. ERC-1967 proxy bytecode is shared by unrelated deployments, so a code_hash is evidence only
   when `is_proxy` is false or the hook is an EIP-1167 clone (its hash embeds the implementation); unknown is not. Auto-named projects that joined proxies by
   bytecode were split, and their generic stored contract names looked up again (proxies resolve to implementations).
+- **Bytecode template families (rule 2b, 2026-10-13).** Launchpads deploy one hook per token from generated source, so
+  every member has its own code_hash (immutables, metadata) and each landed as its own "Unlisted hook" card: 856 of
+  5,633 projects were New on 10/13, 726 of them unnamed, mostly Robinhood and Ethereum memecoin hooks. `hooks.code_shape`
+  (`rules.code_shape`) is sha256 of the runtime without CBOR metadata and with PUSH32 operands zeroed; selectors and
+  constant addresses stay. Same shape on one chain, non-proxy, is evidence. Unlisted projects fold into the template's
+  one verified-name project, else its oldest unlisted family ("Unlisted hook family 0x…"); two verified names on one
+  template stay apart, curated projects never take part, old slugs redirect. New hooks join their template's project or
+  form a family. Shapes come from public-RPC eth_getCode, `SHAPE_MAX` (3,000) per run, unassigned first. Dry run on live
+  data: 1,385 unlisted projects into 184 families; 451 of the 856 New projects folded away.
 - **Regroup.** Ingest flags a grouped hook (`hooks.regroup`) when the hooklist names or lists it; a code-hash write flags
   it too. The group step moves it into the curated project with that name, or renames its auto-named project in place,
   then pulls same non-proxy bytecode out of auto-named projects. Curated projects never give hooks up.
@@ -405,7 +424,35 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
   5xx) is asked again next run; Cloudflare 403 is a miss. The log line carries per-source outcomes.
 - **Spend.** Paid POSTs retry only on connect errors and 429; a response lost after sending is recorded as ambiguous
   spend.
-- **Out of scope:** a teams alias map (FablesRamp, FablesRampETH, FablesRWA stay separate cards).
+- **Out of scope:** a teams alias map. FablesRamp, FablesRampETH and FablesRWA have three stems, so the same-team
+  merge (below) leaves them three cards even though they share a website.
+- **Same-team merge (rule 4, 2026-10-14).** The registry lists one team's hooks under per-chain and per-version names,
+  so "Aegis", "Aegis v2 Hook (Unichain)" and "Aegis v3 Hook (Unichain)" were three cards and Clanker fifteen.
+  `rules.name_stem` drops versions ("v2", "V6", "v2.3.0"), chain words after the first word ("(Unichain)", "Base",
+  "Robinhood Chain", "X Layer"; never the first word, Zora and Base are names), "L2" / "mainnet", the static / dynamic
+  fee mode and "hook": Clanker Static Fee Hook v2 (Base) and ClankerHookDynamicFee are both `clanker`. "ETH" is an
+  asset, not a chain. A stem is a candidate, never evidence: projects with one stem merge only when they share a
+  signal that one name root owns (`stem_root`, the stem's first word):
+  - a deployer that is not a CREATE2 factory, on any chain (hooklist `deployer`);
+  - non-proxy bytecode, or its template (`code_shape`), on any chain: a team redeploys one template per chain, and the
+    shape zeroes the per-chain immutables;
+  - the same hooklist audit URL;
+  - two of website host, GitHub owner and X handle, with none of the three disagreeing. Enrichment is found by
+    searching the name, so one matching link mostly repeats the name. Shared hosts and platform accounts (github.com,
+    uniswap.org, @Uniswap, ...) never count.
+
+  "Owns" is the guard against templates: a signal that names with two roots carry (an OpenZeppelin hook deployed under
+  two names, an auditor's portfolio URL) or that a generic name carries is nobody's. Unlisted projects neither count
+  for nor against (rule 2b folds those). Generic names, names.py's "Name 0x1234…abcd" two-team splits, and auto-named
+  projects holding proxies never take part. Curated projects do: this is the one rule that moves them. The kept
+  project is the curated one with the richest enrichment, then the fewest deployment words ("Aegis" over "Aegis v2
+  Hook (Unichain)"), then the most hooks; it takes the oldest `first_seen_at`, the others' missing enrichment and their
+  receipts, and every old slug redirects (`project_aliases`, reason `merge:team`). Its name loses the deployment words
+  its members disagree on ("Clanker Hook"; two chains of "Aegis v3 Hook (...)" become "Aegis v3 Hook"), unless another
+  project already has that name. The rule runs last in the group step, so a hook under a new per-chain name folds in
+  the night it appears, and the shape fill asks for rule 4 candidates' shapes right after unassigned hooks. It is
+  idempotent. The project page lists the merged registry names as chips under the badges (`lib/variants`), a
+  trailing "(Chain)" folded into the chip's chain list.
 
 ## Update 2026-10-10: the live layout, freshness, payload, indexer resilience
 
@@ -421,11 +468,19 @@ action and smart money, semantic green and amber) still hold.
   "Nightly update incomplete"), else "Indexer catching up"; a swap-lag warning alone shows none. The footer names the
   same day. One pure function decides (`lib/health.freshness`) over the same reads as `/api/health` (`db/health.ts`),
   cached 60 s. The Live trades dot is green only when the feed answered and its newest trade is under an hour old.
+- **Live trades freshness (2026-10-14).** `/api/trades` serves a cached pool list stale for at most 10 minutes; past
+  that it refetches before answering and falls back to the old list only when GeckoTerminal fails (an idle pool's first
+  visitor saw Hookr MOW/WETH trades "3d" old, Aegis 8h old, while GeckoTerminal had newer ones). Each browser poll gives
+  up after 12 s with "Trade feed did not answer", so the panel never stays on "Loading trades…". When the newest trade
+  is over an hour old the panel says so ("No trades over $10 in the last hour; the newest is 10h old.") and, then or
+  when the list is empty, adds the indexer's closed-day figure for the pool, so it never contradicts the stat tiles
+  silently. GeckoTerminal itself was not stale on 2026-10-14: its Robinhood feed for MOW/WETH matched its own h24 counts
+  (the pool simply went quiet after 15:52 UTC), and the Ink feed for Aegis held a 00:36 trade Bait's cache had not.
 - **Stat tiles** follow the pane by container query (6 columns from 720px, 3 by default, 2 under 420px) and never
   ellipsize a value. Week over week above +999% reads ">999%" (prose: "more than 999%"); weeks under $1K are no basis.
-- **Payload.** Every non-spam project ships with the page as a list row (1,658 on 2026-10-10), so rows stay lean:
-  whole dollars, no hook addresses. `GET /api/hooks` serves the address index; the list fetches it the first time a
-  search starts with "0x".
+- **Payload.** Rows stay lean: whole dollars, no hook addresses. `GET /api/hooks` serves the address index; the list
+  fetches it the first time a search starts with "0x". Superseded 2026-10-14 for the rows themselves: see "Feed payload
+  and client filtering" below.
 - **Indexer resilience.** Every HyperSync request has a wall-clock deadline (`HYPERSYNC_DEADLINE`, 120 s), since the
   idle timeout cannot end a request whose socket stays fed. Pool lookups spend at most their budget per chain per loop,
   checked before every call, and a cut scan resumes from its block next loop; the per-page log line shows rate-limit
@@ -433,3 +488,79 @@ action and smart money, semantic green and amber) still hold.
   pay off long scans in budgeted slices (BNB and Robinhood after 2026-10-09: a few hours behind head, health ok).
 - **Builds.** Base images come from ECR Public (`public.ecr.aws/docker/library/...`), and Dockerfiles carry no
   `# syntax=` line: Railway's builders could not reach Docker Hub on 2026-10-09.
+
+## Update 2026-10-14: swap pages never wait for pool lookups
+
+Base, the biggest hook chain, sat ~708K blocks (~16 days) behind on swaps while every other chain was caught up. A swap
+page in scan mode with pool ids that were neither rows nor known unhooked was held until a HyperSync Initialize scan by
+pool id over `[floor, page end)` settled them. On Base each ~200-block page carried ~200 unknown ids (~25 new to the
+process), the floor sits near the PoolManager's deployment, and a scan of that range is ~45 calls; with 30 lookup calls
+per loop the cursor gained ~80-200 blocks per loop against a gap that grows ~30 blocks a minute. It could never catch up.
+
+- **Rule now:** a swap page commits what it can count (rows, and keys of pools past the cap the process holds) and owes
+  the rest: each other unknown id goes in `pool_lookup_queue` with the block range its swaps were left out of, in the
+  page's transaction. After the pages, the resolver works the queue within the same per-loop call budget, in chunks of
+  `INDEXER_LOOKUP_CHUNK` (2,000) ids per scan; a scan costs the same calls for one id or thousands, so one scan settles
+  everything queued during the previous one. An unhooked id is deleted. A hooked one gets its swaps re-read by pool id
+  over its own range and counted (late row or hook aggregate, as on a page) in one transaction with its queue delete,
+  behind a compare-and-set on the unchanged swap cursor. No swap is skipped or counted twice, across restarts too.
+- **Honest completeness:** `backfilled` flips only when both cursors are at the head and no queued id owes swaps from
+  before the block where the swap cursor first reached it. Not "queue empty": after catch-up a Base scan spans several
+  loops while new ids arrive every loop, so the queue is rarely empty. The live edge is covered per day instead: the
+  nightly step (and a past-day re-score) treats a day as final only when no queued id owes swaps from before its end
+  (`from_time`), so usage on a chain still settling keeps the keyless numbers, as before. The resolver asks the oldest
+  owed ids first, so a backlog is never starved by newer ids.
+- **Fairness:** unchanged. `INDEXER_MAX_PAGES` (40) still bounds swap pages per chain per loop and the lookup budget
+  still bounds resolver calls; a busy chain now spends its slice on pages instead of waiting on scans. Chains without a
+  capped hook never queue anything (every hooked pool is a row there).
+- **Options weighed.** (a) "After the Initialize backfill, an id that is not a row is unhooked": true only on chains with
+  no capped hook, which is already how they run (no floor, no lookups). Where a hook is past the per-hook cap or was
+  pruned, its pools are hooked and deliberately not rows; treating them as unhooked would drop a launchpad's swaps and
+  undo the griefing defence. (b) Resolve by pool id with one topic1-filtered query: already the lookup; the cost is the
+  block range it walks, so the fix is more ids per scan, not a different query. (c) Decouple ingestion from resolution:
+  adopted, with the queue in Postgres so a restart cannot lose what is owed. Not adopted: a full in-memory or stored index
+  of every pool id past the cap (millions on Base; it would undo the cap's storage saving).
+- **Unverified on this date:** HyperSync's limit on topic values per query. 2,000 ids is ~140 KB of JSON; if HyperSync
+  refuses a lookup body (HTTP 4xx), the process halves the chunk (down to 100) and logs it.
+
+## Update 2026-10-14: one figure per fact across pages
+
+- **Unnamed labels.** An unnamed project is labelled by one pool everywhere (list, Leaders, project page, week page, OG
+  image, RSS): most 7-day volume over closed days, then most TVL, then the lowest pool id (`lib/unlisted.compareTopPool`,
+  mirrored by the `topPools` query). The project page's Trade panel shows that same pool (`lib/present.tradePool`), not
+  the first pool by TVL. Digests store the Monday name; the week page and RSS render today's name for the same slug. A
+  family's pair label ("X/Y hook family · 0x…") is still unnamed, so it stays out of Trending, New and the movers.
+- **Traded projects.** /leaders "Projects traded, last 7 days" and the digest intro count the same set: non-spam,
+  non-wash, 7-day volume > 0 (`totals.traded`, with TVL and volume summed over it). Digests written before 2026-10-14
+  only carry `totals.projects` (every tracked project) and say "projects tracked".
+- **Pool TVL.** A pool row's TVL is its latest snapshot up to the running day, as score sums it into the header. When the
+  rows shown do not add up to the header (pools past the 50 loaded, untracked chains, a capped hook's aggregate), the
+  note under the table says how much is elsewhere.
+- **Audit badge.** "Audit linked" needs an http(s) link, and its title names the link. Hooklist audit URLs count; a
+  Parallel one only when Parallel named a team and the project is not an unnamed address, and never Uniswap's own
+  v4-core / v4-periphery audits.
+- **One snapshot per page.** A project page's detail is cached per list load and pinned to that load's day, and takes
+  its name and rank from the rows it ships with. Project, OG and week pages revalidate every 10 minutes (was 1 h).
+
+## Update 2026-10-14: feed payload and client filtering
+
+- **Pages ship one page of rows.** "/" and "/p/[slug]" no longer carry every project. A page server-renders the first
+  100 rows of its own view (`lib/feed.feedSeed`: the URL's tab, chain and category; the default tab on the static
+  project page) plus the category chips and the counts. On 2026-10-14 the full set (2,318 rows) was ~0.99 MB of every
+  "/" and "/p/[slug]" response and of every project-link prefetch, and "/?tab=all" also rendered all 2,318 rows as HTML
+  (2.44 MB). Per row that was ~430 bytes on every terminal page plus ~560 bytes of HTML on All; now it is 0 past the
+  seeded 100.
+- **The full set comes from `GET /api/rows`** (`lib/rows.ts`): packed as arrays under one key list (~170 bytes a row,
+  ~25 gzipped, about 58 KB for the set), fetched once per visit on mount and kept across client navigations. The page
+  passes a content hash (`?v=`); a reply that matches it is cached for a day, anything else for a minute.
+- **Tab, category and chain change on the client.** The rules in `lib/feed.ts` are pure, so the list re-filters the
+  loaded rows in the same frame and `history.pushState` moves the URL (Next's `useSearchParams` follows it), so links,
+  reloads and Back still work and the first paint stays server-rendered. On a project page the list re-filters beside
+  the open project (`/p/<slug>?tab=all`) instead of leaving it. The detail pane on "/" keeps the project the server
+  picked for the first URL. Tab and chip links do not prefetch.
+- **Lists page by 100** ("Show 100 more · N in all"); a new view starts again at one page, scrolled to the top.
+- **Search box** is uncontrolled, so letters typed before hydration are kept and handed to the list on mount. Enter
+  before the rows or the address index arrive goes to the top match once it appears.
+- **Watchlist tab** fits the 320 px list column on one row: the In Uniswap app tab shows as "In app" there (full name
+  kept as its accessible name and tooltip), with 6 px tab padding and a 2 px gap; the bar wraps rather than clips if a
+  label grows. An empty watchlist reads "Star a project to keep it here."

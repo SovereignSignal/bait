@@ -175,6 +175,138 @@ def merge_evidence(a, b) -> str | None:
     return None
 
 
+# --- same-team stems (group rule 4, DESIGN.md "Same-team merge") ---
+# Words that name one deployment of a team's hook, not the team: chains, "L2" / "mainnet", versions, the static or
+# dynamic fee mode, and "hook". A chain word is never the first word (Zora and Base are also names). "ETH" is an asset,
+# not a chain: FablesRampETH keeps its own stem.
+STEM_CHAINS = frozenset({
+    "ethereum", "base", "arbitrum", "optimism", "unichain", "polygon", "avalanche", "avax", "bnb", "bsc", "ink",
+    "robinhood", "monad", "worldchain", "soneium", "megaeth", "celo", "blast", "linea", "xlayer", "arc", "tempo", "zora"})
+STEM_CHAIN_PAIRS = (("x", "layer"), ("world", "chain"), ("mega", "eth"))
+STEM_DEPLOY = frozenset({"l2", "mainnet"})
+_FEE_MODES = frozenset({"static", "dynamic"})
+_VERSION_WORD = re.compile(r"^v?\d+(?:\.\d+)*$")                     # "v2", "V6", "v2.3.0", "1.1.2"
+# names.py tells same-named contracts apart with "Name 0x1234…abcd": two teams by design, never a stem.
+ADDRESS_SUFFIX = re.compile(r"\s0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$")
+KEEP, CHAIN, VERSION, FEE = "keep", "chain", "version", "fee"
+
+
+def _stem_words(name: str | None) -> list[tuple[str, str]]:
+    """(word as written, kind) for each word of `name`, camelCase and digits split ("ZoraV4CoinHook" -> Zora V4 Coin
+    Hook, "AngstromL2" -> Angstrom L2). kind is CHAIN (chains, "L2", "mainnet"), VERSION, FEE (static / dynamic fee)
+    or KEEP; "hook" is KEEP here (a display name keeps it) and dropped from the stem by _stem_parts."""
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", name or "")
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", s)
+    s = re.sub(r"(\d)([A-Z])", r"\1 \2", s)
+    words = re.findall(r"(?i)v?\d+(?:\.\d+)+|[A-Za-z0-9]+", s)
+    low = [w.lower() for w in words]
+    out: list[tuple[str, str]] = []
+    i = 0
+    while i < len(words):
+        w, first = low[i], not any(k == KEEP for _, k in out)
+        pair = next((p for p in STEM_CHAIN_PAIRS if tuple(low[i:i + len(p)]) == p), None)
+        if w in STEM_CHAINS and low[i + 1:i + 2] == ["chain"]:
+            pair = (w, "chain")                              # "(Robinhood Chain)", "(BNB Chain)"
+        if w in _FEE_MODES and low[i + 1:i + 2] == ["fee"]:
+            out += [(words[i], FEE), (words[i + 1], FEE)]
+            i += 2
+        elif pair and not first:
+            out += [(x, CHAIN) for x in words[i:i + len(pair)]]
+            i += len(pair)
+        else:
+            kind = (VERSION if _VERSION_WORD.match(w) else FEE if w in ("staticfee", "dynamicfee")
+                    else CHAIN if not first and (w in STEM_CHAINS or w in STEM_DEPLOY) else KEEP)
+            out.append((words[i], kind))
+            i += 1
+    return out
+
+
+def _stem_parts(name: str) -> list[str]:
+    parts = []
+    for w, kind in _stem_words(name):
+        w = w.lower()
+        if kind != KEEP or w in ("hook", "hooks"):
+            continue
+        w = re.sub(r"(?<=[a-z]{3})v\d+$", "", w)          # "lendinghookv4": a version glued on in lowercase
+        for suf in _SUFFIXES:
+            if w.endswith(suf) and len(w) > len(suf):
+                w = w[: -len(suf)]
+                break
+        parts.append(w)
+    return parts
+
+
+def name_stem(name: str | None) -> str | None:
+    """The team part of a name: 'Clanker Static Fee Hook v2 (Base)', 'ClankerHookDynamicFee' -> 'clanker'; 'Aegis v3
+    Hook (Unichain)' -> 'aegis'; 'AngstromL2' -> 'angstrom'; 'Zora Post Hook v2.3.0 (Base)' -> 'zorapost'. None for
+    unlisted, generic and address-suffixed names, or when under 3 characters are left. A stem is a candidate only: a
+    merge also needs evidence (group._merge_same_team)."""
+    n = (name or "").strip()
+    if not n or n.startswith("Unlisted hook") or ADDRESS_SUFFIX.search(n) or useful_name(n, max_len=None) is None:
+        return None
+    stem = "".join(_stem_parts(n))
+    return stem if len(stem) >= 3 and not GENERIC.match(stem) else None
+
+
+def stem_root(name: str | None) -> str | None:
+    """The stem's first word, address suffix ignored: who a name says it belongs to ('Zora Post Hook' -> 'zora'). None
+    when the name has no stem. A signal that names with two roots share (an OpenZeppelin template, an auditor's
+    portfolio page) is nobody's team signal."""
+    n = ADDRESS_SUFFIX.sub("", (name or "").strip())
+    return _stem_parts(n)[0] if name_stem(n) else None
+
+
+def deployment_words(name: str | None) -> dict[str, frozenset[str]]:
+    """{kind: lowercased words} for the CHAIN, VERSION and FEE words of a name."""
+    out: dict[str, set[str]] = {CHAIN: set(), VERSION: set(), FEE: set()}
+    for w, kind in _stem_words(name):
+        if kind != KEEP:
+            out[kind].add(w.lower())
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+def team_name(name: str, drop: set[str] | frozenset[str] = frozenset({CHAIN, VERSION, FEE})) -> str:
+    """The name without the `drop` kinds of deployment words, as written; a kept chain goes in parentheses at the end.
+    'Clanker Static Fee Hook v2 (Base)' -> 'Clanker Hook'; with drop={CHAIN}, 'Aegis v3 Hook (Unichain)' -> 'Aegis v3
+    Hook'; with drop={FEE}, 'Bonker Static Fee Hook (Arc)' -> 'Bonker Hook (Arc)'."""
+    words = _stem_words(name)
+    body = " ".join(w for w, k in words if k not in drop and k != CHAIN)
+    chain = " ".join(w for w, k in words if k == CHAIN) if CHAIN not in drop else ""
+    return (f"{body} ({chain})" if chain else body) or name
+
+
+# Hosts, GitHub owners and X handles many unrelated projects point at: never one team's link.
+SHARED_HOSTS = frozenset({
+    "github.com", "x.com", "twitter.com", "linktr.ee", "medium.com", "mirror.xyz", "paragraph.xyz", "substack.com",
+    "t.me", "discord.gg", "discord.com", "docs.google.com", "notion.so", "notion.site", "gitbook.io", "youtube.com",
+    "uniswap.org", "app.uniswap.org", "docs.uniswap.org", "blog.uniswap.org", "uniswapfoundation.org", "warpcast.com",
+    "farcaster.xyz", "dexscreener.com", "geckoterminal.com", "coingecko.com", "etherscan.io", "basescan.org"})
+SHARED_GITHUB = frozenset({"uniswap", "uniswapfoundation", "openzeppelin", "hooklist", "v4-template"})
+SHARED_X = frozenset({"uniswap", "unichain", "uniswapfnd", "uniswapfoundation", "base", "buildonbase", "openzeppelin"})
+
+
+def team_links(website: str | None, github: str | None, x_handle: str | None) -> dict[str, str]:
+    """Enrichment links reduced to what identifies a team: website host (no www), GitHub owner, X handle, lowercased.
+    Shared hosts and platform accounts are dropped."""
+    out = {}
+    host = re.sub(r"^(?:https?://)?(?:www\.)?", "", (website or "").strip().lower()).split("/")[0].split("?")[0]
+    if host and "." in host and host not in SHARED_HOSTS:
+        out["website"] = host
+    m = re.search(r"github\.com/([A-Za-z0-9_.-]+)", github or "")
+    if m and m.group(1).lower() not in SHARED_GITHUB:
+        out["github"] = m.group(1).lower()
+    x = re.sub(r"^(?:https?://)?(?:www\.)?(?:x|twitter)\.com/", "", (x_handle or "").strip()).lstrip("@").split("/")[0].lower()
+    if x and x not in SHARED_X:
+        out["x"] = x
+    return out
+
+
+def audit_key(url: str | None) -> str | None:
+    """A hooklist audit URL compared as written, minus scheme, query, fragment and trailing slash."""
+    u = re.sub(r"^https?://(?:www\.)?", "", (url or "").strip()).split("#")[0].split("?")[0].rstrip("/")
+    return u.lower() or None
+
+
 def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return s or "project"
@@ -190,6 +322,43 @@ def code_hash(code_hex: str | None) -> str | None:
         return "0x" + hashlib.sha256(bytes.fromhex(s)).hexdigest()
     except ValueError:
         return None
+
+
+def code_shape(code_hex: str | None) -> str | None:
+    """Bytecode template fingerprint: "0x" + sha256 of the runtime with the trailing CBOR metadata removed and every PUSH32
+    operand zeroed. Solidity writes immutables as PUSH32, so one launchpad's per-token hooks (same source, different
+    constructor arguments, one metadata hash per generated file) share a shape while their code_hash differs. Function
+    selectors (PUSH4) and constant addresses (PUSH20) stay, so different code never shares one. None for no code."""
+    s = (code_hex or "").strip().lower().removeprefix("0x")
+    try:
+        code = bytes.fromhex(s)
+    except ValueError:
+        return None
+    if not code:
+        return None
+    if len(code) >= 2:                                   # solc appends CBOR metadata, then its length in 2 bytes
+        n = int.from_bytes(code[-2:], "big")
+        if 0 < n + 2 <= len(code) and code[-n - 2] in (0xA1, 0xA2, 0xA3):
+            code = code[:-n - 2]
+    out, i = bytearray(), 0
+    while i < len(code):
+        op = code[i]
+        out.append(op)
+        i += 1
+        if 0x60 <= op <= 0x7F:                           # PUSH1..PUSH32
+            n = op - 0x5F
+            arg = code[i:i + n]
+            out += bytes(len(arg)) if n == 32 else arg
+            i += n
+    return "0x" + hashlib.sha256(bytes(out)).hexdigest()
+
+
+def shape_evidence(r) -> str | None:
+    """(chain, code_shape) when the shape can join hooks: the same conditions as code_evidence (proxy bytecode is shared
+    by unrelated deployments), and only on one chain, where a template's immutables are the only thing that differs."""
+    if not getattr(r, "code_shape", None) or code_evidence(r) is None:
+        return None
+    return f"{r.chain_id}:{r.code_shape}"
 
 
 def score_trending(vol_7d: float, vol_7d_prev: float) -> float:
@@ -223,7 +392,7 @@ def is_spam(pool_stats: list[tuple[float, int]], volume: float = 0.0) -> bool:
 # --- wash rules (DESIGN.md "Wash rules"). A project is wash-like for a reason when the pools that rule flags carry
 # >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
 # "unverified" is not a rule: a project that only escaped the spam rule by moving >= $1M and has no wallet data at all.
-WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "unverified")
+WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified")
 WASH_SHARE = 0.5
 WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
 
@@ -342,13 +511,38 @@ def is_symmetric(top: list[tuple[float, int, int]], vol_24h: float | None) -> bo
             and sum(v for v, _, _ in t) > SYMMETRIC_SHARE * vol_24h)
 
 
+# One trade size across a pool: fresh wallets each making one trade of the same dollar size. 10/13: Hookr MOW/WETH on
+# Robinhood, top 10 wallets each one buy of $22,450-$22,515 (0.3% apart) and $17.1M from 809 wallets in 24h ($21.1K each).
+# A launch that caps buys gives a uniform top too, but its many smaller buyers pull the pool's per-wallet average well
+# under the cap, so the average must sit near the uniform size as well.
+UNIFORM_MIN_WALLETS = 8
+UNIFORM_MAX_SPREAD = 1.03           # largest / smallest of the top wallets' volumes
+UNIFORM_MIN_AVG_SHARE = 0.8         # pool volume per wallet, against the top wallets' median size
+UNIFORM_MIN_VOL = 1_000_000
+
+
+def is_uniform(top: list[tuple[float, int, int]], vol_24h: float | None, wallets_24h: int | None) -> bool:
+    """top: (volume_usd, buys, sells) per wallet. wallets_24h: distinct wallets, else buyers + sellers (an upper bound,
+    which only lowers the average: the safe side)."""
+    if not vol_24h or vol_24h < UNIFORM_MIN_VOL or not wallets_24h:
+        return False
+    t = sorted(top, key=lambda x: -x[0])[:SYMMETRIC_TOP]
+    if len(t) < UNIFORM_MIN_WALLETS or not all(b + s == 1 for _, b, s in t):
+        return False
+    sizes = sorted(v for v, _, _ in t)
+    if sizes[0] <= 0 or sizes[-1] / sizes[0] > UNIFORM_MAX_SPREAD:
+        return False
+    median = sizes[len(sizes) // 2]
+    return vol_24h / wallets_24h >= UNIFORM_MIN_AVG_SHARE * median
+
+
 def is_alive(last_commit_at: datetime | None, latest_exa_hit: datetime | None, now: datetime) -> bool:
     cutoff = now - timedelta(days=30)
     return bool((last_commit_at and last_commit_at >= cutoff) or (latest_exa_hit and latest_exa_hit >= cutoff))
 
 
 # --- receipt relevance (mirrors web/src/lib/relevance.ts; shared cases in fixtures/relevance_cases.json) ---
-_DOMAIN_WORDS = ("uniswap", "hook", "v4", "liquidity", "swap", "pool", "defi", "amm", "dex", "lp", "mev", "fee")
+_DOMAIN_WORDS = ("uniswap", "hook", "v4", "liquidity", "swap", "pool", "amm", "dex", "lp", "mev", "fee")
 _BLOCKED_HOSTS = ("linkedin.com", "wikipedia.org", "netlify.app", "facebook.com", "instagram.com", "tiktok.com")
 
 

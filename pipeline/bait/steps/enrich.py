@@ -98,9 +98,11 @@ def cut_line(text: str, limit: int = 200) -> str:
 
 
 def select_candidates(conn) -> list:
-    """Projects with live pools, busiest first, never enriched, ENRICH_MAX (40) per run. Parallel and Claude bill per
-    call and ~95% of registry hooks have no pools; the rest wait until they show activity. The cost preview uses this."""
-    cap = _env_int("ENRICH_MAX", 40)
+    """Projects with live pools, busiest first, never enriched, ENRICH_MAX (20) per run. Parallel and Claude bill per
+    call and ~95% of registry hooks have no pools; the rest wait until they show activity. The cost preview uses this.
+    20 keeps a night near $1.25 all in (2026-10-13 ledger: Parallel $0.025 a project, Exa ~$0.55, Claude ~$0.25), inside
+    the $40 rolling 30-day budget; 40 ran ~$1.75 a night and would have hit it on day 23."""
+    cap = _env_int("ENRICH_MAX", 20)
     busy = (sa.select(hooks.c.project_id, sa.func.coalesce(sa.func.sum(pool_stats.c.vol_24h), 0.0).label("vol"))
             .select_from(hooks.join(pools, sa.and_(pools.c.hook_address == hooks.c.address, pools.c.chain_id == hooks.c.chain_id))
                          .outerjoin(pool_stats, sa.and_(pool_stats.c.pool_id == pools.c.pool_id, pool_stats.c.chain_id == pools.c.chain_id)))

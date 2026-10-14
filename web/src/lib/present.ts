@@ -1,7 +1,7 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
-import { CHAINS } from "./chains";
+import { CHAINS, knownChain } from "./chains";
 import { weekDelta } from "./feed";
-import { clip, deltaWords, fmtDelta, int, usd } from "./format";
+import { clip, dayLabel, deltaWords, fmtDelta, int, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
@@ -20,7 +20,7 @@ export function categoryShort(c: RowView["category"]): string {
 
 export function sourceLine(p: ProjectSummary): string {
   const parts = [p.verified ? "Verified" : "Unverified"];
-  if (p.signals.auditCount > 0) parts.push(`${p.signals.auditCount} audit${p.signals.auditCount === 1 ? "" : "s"}`);
+  if (p.signals.auditUrl && p.signals.auditCount > 0) parts.push(`${p.signals.auditCount} audit${p.signals.auditCount === 1 ? "" : "s"}`);
   if (p.upgradeable) parts.push("upgradeable");
   return parts.join(" · ");
 }
@@ -31,11 +31,34 @@ export function deltaText(r: { vol7d: number | null; vol7dPrev: number | null })
   return d == null ? null : { text: fmtDelta(d), up: d >= 0 };
 }
 
-export type Win = "24h" | "7d";
+// "1d", not "24h": the number is one closed UTC day, like "7d" is seven. "24h" reads as the 24 hours before now, which
+// is what the Uniswap app's "Past day" shows, and the two differ by up to two days of trading.
+export type Win = "1d" | "7d";
 
-/** The number a row or mover shows and the window it covers. 24h only when asked for and known. */
+/** The number a row or mover shows and the window it covers. The closed day only when asked for and known. */
 export function rowMetric(r: { vol24h: number | null; vol7d: number | null }, use24h: boolean): { v: number | null; win: Win } {
-  return use24h && r.vol24h != null ? { v: r.vol24h, win: "24h" } : { v: r.vol7d, win: "7d" };
+  return use24h && r.vol24h != null ? { v: r.vol24h, win: "1d" } : { v: r.vol7d, win: "7d" };
+}
+
+const DAY_MS = 86_400_000;
+
+/** The closed UTC day the "24h" figures cover, as a column label ("Oct 12") and the hover note that says how it differs
+ * from the Uniswap app. Unknown day: "1d". */
+export function dayWindow(through: string | null | undefined): { short: string; note: string } {
+  const day = through ? dayLabel(through) : null;
+  return {
+    short: day ?? "1d",
+    note: `${day ? `${day}, 00:00 to 24:00 UTC` : "The last closed UTC day"}. The Uniswap app's "Past day" is the 24 hours before you look, so its number differs.`,
+  };
+}
+
+/** Bar labels for a daily series that ends on the closed day `end`, oldest first ("Sep 29" .. "Oct 12"); relative
+ * ("14d ago" .. "1d ago") when `end` is unknown. Never "yesterday": the run is nightly, so `end` can be two days back. */
+export function seriesLabels(n: number, end: string | null | undefined): string[] {
+  const last = end ? Date.parse(`${end}T00:00:00Z`) : NaN;
+  return Array.from({ length: n }, (_, i) =>
+    Number.isNaN(last) ? `${n - i}d ago` : dayLabel(new Date(last - (n - 1 - i) * DAY_MS).toISOString().slice(0, 10)),
+  );
 }
 
 const HOOK_SEARCH_CAP = 8;
@@ -46,6 +69,41 @@ export function firstWebUrl(urls: Iterable<unknown>): string | null {
   return null;
 }
 
+// Uniswap's own v4 core/periphery audits cover the PoolManager, not anyone's hook: a search that found nothing returns them.
+const CORE_AUDIT = /^https?:\/\/(www\.)?github\.com\/uniswap\/v4-(core|periphery)\b/i;
+
+/**
+ * A project's audit links, the only source of the "Audit linked" badge: web URLs published on its hooks (hooklist), plus
+ * the one Parallel found, but only when Parallel identified a team and the project has a name to research. An unnamed
+ * hook is just an address, so an audit "found" for it belongs to someone else. Count = links.length; badge = links[0].
+ */
+export function auditLinks(
+  hookUrls: Iterable<unknown>,
+  parallel: { audit_url?: unknown; team?: unknown } | null | undefined,
+  unnamed: boolean,
+): string[] {
+  const out = new Set<string>();
+  for (const u of hookUrls) {
+    const url = firstWebUrl([u]);
+    if (url) out.add(url);
+  }
+  const par = firstWebUrl([parallel?.audit_url]);
+  const team = typeof parallel?.team === "string" && parallel.team.trim() !== "";
+  if (par && team && !unnamed && !CORE_AUDIT.test(par)) out.add(par);
+  return [...out];
+}
+
+/** The note under the pools table when the header TVL (every pool, score's sum) is more than the rows shown add up to:
+ * pools past the 50 loaded, on untracked chains, or a capped hook's aggregate. null when the rows account for it. */
+export function poolTvlNote(headerTvl: number, rows: Array<{ tvlUsd: number | null }>): string | null {
+  const shown = rows.reduce((s, r) => s + (r.tvlUsd ?? 0), 0);
+  const rest = headerTvl - shown;
+  if (rest <= Math.max(1, headerTvl * 0.005)) return null;   // rounding between the two reads
+  return shown > 0
+    ? `TVL ${usd(headerTvl)} is the sum over all pools; ${usd(rest)} of it is in pools not listed here.`
+    : `TVL ${usd(headerTvl)} is the sum over all pools; none of it is in the pools listed here.`;
+}
+
 /** Hook addresses for 0x search: lowercase, deduplicated, capped. */
 export function hookKeys(addresses: string[]): string[] {
   return [...new Set(addresses.map((a) => a.toLowerCase()))].slice(0, HOOK_SEARCH_CAP);
@@ -53,7 +111,7 @@ export function hookKeys(addresses: string[]): string[] {
 
 const dollars = (n: number | null): number | null => (n == null ? null : Math.round(n));
 
-/** ProjectSummary -> the light row the client list ships with, 1,600+ of them per page: whole dollars, no hook list. */
+/** ProjectSummary -> the light row the client list works from (2,000+ of them via /api/rows): whole dollars, no hook list. */
 export function toRow(p: ProjectSummary): RowView {
   return {
     slug: p.slug,
@@ -72,7 +130,6 @@ export function toRow(p: ProjectSummary): RowView {
     vol24h: dollars(p.usage.vol24h),
     tvlUsd: Math.round(p.metrics.tvlUsd),
     routable: p.signals.routable,
-    audited: p.signals.auditCount > 0,
     rank: p.rank,
   };
 }
@@ -85,7 +142,7 @@ export function pace(vol24h: number | null, vol7d: number | null): number {
 
 export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean }, rank: number | undefined, m: { v: number | null; win: Win }): string {
   const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
-  const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "24-hour"} volume`];
+  const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "1-day"} volume`];
   const d = weekDelta(r);
   if (r.isWash) parts.push("wash-like volume");
   else if (r.isNew) parts.push("new");
@@ -107,6 +164,7 @@ const WASH_TEXT: Record<string, string> = {
   vol_tvl: "7-day volume over 300x its liquidity from fewer than 50 wallets",
   no_liquidity: "$1M+ in 7 days through a pool with $1K or less of liquidity",
   symmetric: "its top wallets buy and sell in equal counts and carry most of the volume",
+  uniform: "its top wallets each made one trade of the same size, and the pool averages that size per wallet",
   unverified: "$1M+ moved through a pool that looks idle, with no wallet data to check who moved it",
 };
 
@@ -123,7 +181,43 @@ export function digestItem(
   return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
 }
 
-/** The 24h volume cell: dollars when known; for a pool whose USD volume is unknown (custom accounting, unpriced swaps)
+/** The pool the Trade panel shows: the one the project is labelled by (topPool, busiest 7 days), so a family titled
+ * "LUCKYKEY/WETH hook family" never offers an EQVTA/WETH pool beside it. Else the first pool on a chain we link to. */
+export function tradePool<P extends { poolId: string; chainId: number }>(
+  pools: P[],
+  top: { poolId: string; chainId: number } | null,
+): P | null {
+  const known = (x: P) => knownChain(x.chainId);
+  const id = top?.poolId.toLowerCase();
+  return (top && pools.find((x) => x.poolId.toLowerCase() === id && x.chainId === top.chainId && known(x))) || pools.find(known) || null;
+}
+
+/** A digest stores the name a project had on Monday ("Unlisted hook family 0x0f48…"); render the name every other page
+ * shows today, from the same load. A slug no longer listed keeps its stored name. */
+export function withCurrentNames(items: DigestItem[], names: ReadonlyMap<string, string>): DigestItem[] {
+  return items.map((i) => ({ ...i, name: names.get(i.slug) ?? i.name }));
+}
+
+/** The digest's one-line summary. `traded` is the /leaders "Projects traded this week" count (non-spam, non-wash, 7-day
+ * volume > 0); digests written before it existed stored only every tracked project, and say that instead. */
+export function digestIntro(
+  fresh: DigestItem[],
+  hot: DigestItem[],
+  totals: { projects: number; traded?: number; tvl_usd: number; vol_7d: number },
+): string {
+  const n = (x: number) => x.toLocaleString("en-US");
+  return [
+    fresh.length === 0 ? "No new projects cleared the bar." : `${fresh.length} new project${fresh.length === 1 ? "" : "s"} cleared the bar.`,
+    hot.length > 0 ? `${hot[0].name} led trending.` : null,
+    totals.traded != null
+      ? `${n(totals.traded)} project${totals.traded === 1 ? "" : "s"} traded this week, ${usd(totals.tvl_usd)} TVL, ${usd(totals.vol_7d)} 7d volume.`
+      : `${n(totals.projects)} projects tracked (live pools, not wash-like), ${usd(totals.tvl_usd)} TVL, ${usd(totals.vol_7d)} 7d volume.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** The pool's closed-day volume cell: dollars when known; for a pool whose USD volume is unknown (custom accounting, unpriced swaps)
  * but that swapped this week, the swap count, a lower bound; else the missing glyph. */
 export function poolVolume(x: { vol24h: number | null; tx7d: number | null }): { text: string; note?: string } {
   if (x.vol24h != null) return { text: usd(x.vol24h) };

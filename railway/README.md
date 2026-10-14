@@ -72,8 +72,10 @@ Without `HYPERSYNC_API_TOKEN` the service still runs, in a degraded mode it logs
 public RPCs on 10 chains, no history and no swaps. With the token it backfills every hooked pool from block 0 on 16
 chains and the last 14 days of swaps, then follows the heads. Watch the logs for the per-loop line
 `heartbeat loop=N mode=hypersync new_pools=K base:lag=<initialize>/<swap>,new=..,swaps=..`; lags fall to near 0 once a chain
-is caught up, and `indexer_state.backfilled` flips to true per chain. Optional: `INDEXER_CHAINS` (subset),
-`INDEXER_MAX_PAGES` (40 HyperSync pages per chain per loop).
+is caught up, and `indexer_state.backfilled` flips to true per chain (once `pool_lookup_queue` owes nothing from before the
+block where the swap cursor reached the head; until then the indexer logs `backfill completes once the lookup queue ...`). A
+chain more than 100K blocks behind also logs `swap catch-up: block A -> B (+N in P pages), L behind, lookup queue Q ids`
+every loop. Optional: `INDEXER_CHAINS` (subset), `INDEXER_MAX_PAGES` (40 HyperSync pages per chain per loop).
 
 Deploying the package-5 indexer over an older one: the indexer must be stopped before this deploy (the orchestrator
 removes the running deployment first). Otherwise the old process (no lock, no compare-and-set) runs next to the new one,

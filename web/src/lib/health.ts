@@ -26,6 +26,7 @@ const SOFT_ERRORS_FAIL = 10;
 export interface Freshness {
   through: string | null; // YYYY-MM-DD: the last closed UTC day the nightly figures cover
   note: "run_late" | "run_failed" | "catching_up" | null; // why figures may be behind, when health fails
+  partialChains?: number[]; // chains whose indexer history is still backfilling: their pool counts and volumes are partial
 }
 
 const DAY_MS = 86_400_000;
@@ -47,7 +48,8 @@ export function freshness(input: HealthInput, now: Date): Freshness {
         : has("chain ", "indexer")
           ? "catching_up"
           : null;
-  return { through, note };
+  const partialChains = input.chains.filter((c) => !c.backfilled).map((c) => c.chainId);
+  return { through, note, partialChains };
 }
 
 export const FRESH_NOTE: Record<NonNullable<Freshness["note"]>, string> = {

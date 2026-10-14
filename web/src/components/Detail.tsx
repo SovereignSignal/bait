@@ -3,9 +3,11 @@ import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from 
 import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, poolsNote, poolVolume, walletsText, washLine } from "@/lib/present";
+import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
+import { variants } from "@/lib/variants";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
+import { indexerLine } from "@/lib/trades";
 import { LiveTrades } from "./LiveTrades";
 import { ProjectHeading } from "./ProjectHeading";
 import { WatchStar } from "./WatchStar";
@@ -13,8 +15,9 @@ import s from "./Detail.module.css";
 
 const DAY = 86_400_000;
 const POOLS_SHOWN = 8;
+const VARIANTS_SHOWN = 6;
 
-/** Most active pool (24h volume), else the deepest. */
+/** Most active pool (closed-day volume), else the deepest. */
 export function busiestPool(p: ProjectDetail): PoolView | null {
   const withVol = p.pools.filter((x) => x.vol24h != null && x.vol24h > 0);
   if (withVol.length) return withVol.reduce((a, b) => ((b.vol24h ?? 0) > (a.vol24h ?? 0) ? b : a));
@@ -28,18 +31,23 @@ function poolPair(x: PoolView): string {
 export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh?: Freshness | null }) {
   const d = weekDelta(p.metrics);
   const u = p.usage;
+  // The day the data ends on, else the run receipt's: labels name that UTC day, never "24h" (see dayWindow).
+  const through = p.through ?? fresh?.through ?? null;
+  const win = dayWindow(through);
   const stats: Array<{ k: string; v: string; cls?: string; title?: string }> = [
     { k: "7d volume", v: usd(p.metrics.vol7d) },
     { k: "vs last week", v: d == null ? (p.isNew ? "new" : NONE) : fmtDelta(d), cls: d == null ? undefined : d >= 0 ? "up" : "down" },
     { k: "TVL", v: usd(p.metrics.tvlUsd) },
     { k: "Pools", v: int(p.metrics.poolsN || p.pools.length) },
     {
-      k: "Wallets 24h",
+      k: `Wallets ${win.short}`,
       v: walletsText(u.wallets24h, u.walletsExact),
-      title: u.walletsExact === false ? "Upper bound: buyers + sellers per pool, so a wallet that bought and sold counts twice." : undefined,
+      title: u.walletsExact === false ? "Upper bound: buyers + sellers per pool, so a wallet that bought and sold counts twice." : win.note,
     },
-    // the closed UTC day, from score: no longer GeckoTerminal's rolling buys + sells
-    { k: "Swaps 24h", v: int(u.tx24h) },
+    // the closed UTC day, from score; when a day is missing, the rolling buys + sells the trade card shows, marked "≈"
+    (u.tx24h == null || (u.tx24h === 0 && (u.wallets24h ?? 0) > 0)) && u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0
+      ? { k: "Swaps 24h", v: `≈ ${int(u.buys24h + u.sells24h)}`, title: "Rolling 24h buys + sells from the pool feed; the closed-day count is not in yet." }
+      : { k: `Swaps ${win.short}`, v: int(u.tx24h), title: win.note },
   ];
   const badges: Array<{ cls: string; label: string; why: string; href?: string }> = [
     ...(p.isWash ? [{ cls: "b-r", label: "Wash-like volume", why: washLine(p.washReason) }] : []),
@@ -49,8 +57,9 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     ...(p.signals.routable === "eligible" ? [{ cls: "b-g", label: "In Uniswap app", why: "At least one pool should route in the Uniswap app. A rule, not a guarantee." }] : []),
     ...(p.signals.routable === "ineligible" ? [{ cls: "b-n", label: "Not in app", why: "The Uniswap app will not route swaps through this hook." }] : []),
     ...(p.signals.routable === "unknown" ? [{ cls: "b-n", label: "Routing unknown", why: "Not enough data to say whether the app routes through this hook." }] : []),
-    p.signals.auditCount > 0
-      ? { cls: "b-g", label: "Audit linked", why: "An audit link is published. It says nothing about scope or findings.", href: p.signals.auditUrl ?? undefined }
+    // only with a link to follow: a count without a URL is not an audit anyone can read
+    p.signals.auditUrl
+      ? { cls: "b-g", label: "Audit linked", why: `Audit link: ${p.signals.auditUrl}. It says nothing about scope or findings.`, href: p.signals.auditUrl }
       : { cls: "b-n", label: "No audit", why: "No audit link found." },
     ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
     ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
@@ -59,6 +68,8 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       ? [{ cls: "b-p", label: `◆ ${u.smartWallets} smart wallet${u.smartWallets === 1 ? "" : "s"}`, why: "Wallets Nansen labelled as smart money (labels collected until October 2026) traded here in the last day." }]
       : []),
   ];
+  const partial = p.chains.filter((c) => fresh?.partialChains?.includes(c));
+  const vs = variants(p.hooks);
   const busy = busiestPool(p);
   const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
@@ -92,6 +103,16 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
                 ),
               )}
             </div>
+            {vs.length > 0 && (
+              <div className={s.variants} data-testid="variants" aria-label="Deployments">
+                {vs.slice(0, VARIANTS_SHOWN).map((v) => (
+                  <span key={v.label} className="b b-n" title={`${v.hooks} hook${v.hooks === 1 ? "" : "s"} registered as ${v.label}`}>
+                    {v.label} · {chainNames(v.chains, ", ")}
+                  </span>
+                ))}
+                {vs.length > VARIANTS_SHOWN && <span className="b b-n">+{vs.length - VARIANTS_SHOWN} more</span>}
+              </div>
+            )}
             {/* the titles above are hover-only; this works on touch and keyboard */}
             <details className={s.badgeHelp}>
               <summary>What these badges mean</summary>
@@ -126,30 +147,41 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
         </div>
         {fresh?.through && (
           <p className={s.fresh} data-testid="freshness">
-            <span>Figures through {dayLabel(fresh.through)}, updated nightly</span>
+            <span>Figures through {dayLabel(fresh.through)} (UTC), updated nightly</span>
             {fresh.note && <span className="b b-a">{FRESH_NOTE[fresh.note]}</span>}
+            {partial.length > 0 && (
+              <span className="b b-a" title="On-chain history for this chain is still loading, so pool counts, volume and wallets here are a partial view." data-testid="partial-chain">
+                {chainNames(partial, ", ")} still indexing: figures partial
+              </span>
+            )}
           </p>
         )}
       </div>
 
       <div className={`panel ${s.chart}`}>
         <h2>Daily volume</h2>
-        <Bars series={p.series} />
+        <Bars series={p.series} through={through} />
       </div>
 
       <div className={s.two}>
         <div className={`panel ${s.blk}`}>
           <h2>Pools</h2>
-          <PoolsTable pools={p.pools} total={p.metrics.poolsN} />
+          <PoolsTable pools={p.pools} total={p.metrics.poolsN} tvl={p.metrics.tvlUsd} win={win} />
         </div>
         <div className={`panel ${s.blk}`}>
           <h2>Activity</h2>
           {busy && knownChain(busy.chainId) && (
-            <LiveTrades chainId={busy.chainId} chainSlug={chainSlug(busy.chainId)} poolId={busy.poolId} pair={`${poolPair(busy)} on ${CHAINS[busy.chainId]?.name ?? ""}`} />
+            <LiveTrades
+              chainId={busy.chainId}
+              chainSlug={chainSlug(busy.chainId)}
+              poolId={busy.poolId}
+              pair={`${poolPair(busy)} on ${CHAINS[busy.chainId]?.name ?? ""}`}
+              indexer={indexerLine(busy)}
+            />
           )}
           {busy && <div className={s.sub}>Signals</div>}
           <div className={s.feed}>
-            {events(p, busy, now).map((e, i) => (
+            {events(p, busy, now, win.short).map((e, i) => (
               <div key={i} className={s.ev}>
                 <span className={`b ${e.cls}`}>{e.label}</span>
                 <span className={s.evX}>{e.text}</span>
@@ -203,7 +235,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
   );
 }
 
-function Bars({ series }: { series: (number | null)[] }) {
+function Bars({ series, through }: { series: (number | null)[]; through: string | null }) {
   if (series.length < 2) return <div className={s.chartEmpty}>Daily history starts with the next snapshot.</div>;
   const W = 640;
   const H = 170;
@@ -214,6 +246,7 @@ function Bars({ series }: { series: (number | null)[] }) {
   const n = series.length;
   const max = Math.max(0, ...series.filter((v): v is number => v != null)) || 1;
   const bw = (W - pl - pr) / n;
+  const labels = seriesLabels(n, through);
   return (
     <>
     <svg className={s.bars} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Daily volume, last ${n} days, peak ${usd(max)}`}>
@@ -232,24 +265,24 @@ function Bars({ series }: { series: (number | null)[] }) {
             rx={3}
             fill={i === n - 1 ? "#ff007a" : "rgba(255,0,122,.42)"}
           >
-            <title>{`${n - 1 - i === 0 ? "Yesterday" : `${n - i}d ago`}: ${usd(v)}`}</title>
+            <title>{`${labels[i]}: ${usd(v)}`}</title>
           </rect>
         );
       })}
     </svg>
     <div className={s.axis}>
-      <span>{n}d ago</span>
+      <span>{labels[0]}</span>
       <span>peak {usd(max)}</span>
-      <span>yesterday</span>
+      <span>{labels[n - 1]}{through ? " (UTC)" : ""}</span>
     </div>
     </>
   );
 }
 
-/** In the table the reason is a tooltip; the phone stack has no hover, so it says it inline and drops the "24h" label. */
-function PoolVolume({ x, stacked = false }: { x: PoolView; stacked?: boolean }) {
+/** In the table the reason is a tooltip; the phone stack has no hover, so it says it inline and drops the day label. */
+function PoolVolume({ x, day, stacked = false }: { x: PoolView; day: string; stacked?: boolean }) {
   const v = poolVolume(x);
-  if (!v.note) return <>{stacked ? `24h ${v.text}` : v.text}</>;
+  if (!v.note) return <>{stacked ? `${day} ${v.text}` : v.text}</>;
   return (
     <span className="mut" title={v.note}>
       {v.text}
@@ -258,11 +291,12 @@ function PoolVolume({ x, stacked = false }: { x: PoolView; stacked?: boolean }) 
   );
 }
 
-function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
+function PoolsTable({ pools, total, tvl, win }: { pools: PoolView[]; total: number; tvl: number; win: { short: string; note: string } }) {
   const known = pools.filter((x) => knownChain(x.chainId));
   const active = known.filter(activePool);
   const shown = (active.length ? active : known).slice(0, POOLS_SHOWN);
-  const note = poolsNote(shown.length, active.length, known.length, total);
+  // the header TVL is score's sum over every pool: say where the part not in these rows is
+  const note = [poolsNote(shown.length, active.length, known.length, total), poolTvlNote(tvl, shown)].filter(Boolean).join(" ") || null;
   if (!shown.length) return <div className="mut">No pools indexed yet.</div>;
   return (
     <>
@@ -273,7 +307,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
               <th>Pool</th>
               <th>Chain</th>
               <th>TVL</th>
-              <th>24h vol</th>
+              <th title={win.note}>Vol {win.short}</th>
               <th>Wallets</th>
               <th>Fee</th>
             </tr>
@@ -289,7 +323,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
                 <td>{CHAINS[x.chainId]?.name ?? x.chainId}</td>
                 <td className="num">{usd(x.tvlUsd)}</td>
                 <td className="num">
-                  <PoolVolume x={x} />
+                  <PoolVolume x={x} day={win.short} />
                 </td>
                 <td className="num">{walletsText(x.wallets24h, x.walletsExact)}</td>
                 <td>{feeLabel(x.fee)}</td>
@@ -309,7 +343,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
               · {CHAINS[x.chainId]?.name ?? x.chainId} · {feeLabel(x.fee)}
             </span>
             <div className={`${s.stackSub} num`}>
-              TVL {usd(x.tvlUsd)} · <PoolVolume x={x} stacked /> · {walletsText(x.wallets24h, x.walletsExact)} wallets
+              TVL {usd(x.tvlUsd)} · <PoolVolume x={x} day={win.short} stacked /> · {walletsText(x.wallets24h, x.walletsExact)} wallets
             </div>
           </li>
         ))}
@@ -322,7 +356,7 @@ function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
 type Ev = { cls: string; label: string; text: string; at?: string };
 
 /** The mock's derived events: the fallback when live trades are empty, and context under them. */
-function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
+function events(p: ProjectDetail, busy: PoolView | null, now: number, day: string): Ev[] {
   const out: Ev[] = [];
   if (p.isWash) out.push({ cls: "b-r", label: "Wash-like", text: washLine(p.washReason) });
   for (const x of p.pools.slice(0, 20)) {
@@ -338,17 +372,17 @@ function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
       text: `${deltaWords(d)} week over week, ${usd(p.metrics.vol7d)} in 7 days`,
     });
   }
-  if (busy && busy.vol24h != null) {
+  if (busy && busy.vol24h != null && busy.vol24h > 0) {
     out.push({
       cls: "b-n",
       label: "Top pool",
-      text: `${poolPair(busy)}: ${usd(busy.vol24h)}${busy.wallets24h != null ? ` from ${walletsText(busy.wallets24h, busy.walletsExact)} wallets` : ""} in 24h`,
+      text: `${poolPair(busy)}: ${usd(busy.vol24h)}${busy.wallets24h != null ? ` from ${walletsText(busy.wallets24h, busy.walletsExact)} wallets` : ""} ${day === "1d" ? "in the last closed day" : `on ${day}`}`,
     });
   }
   if (p.upgradeable) out.push({ cls: "b-a", label: "Upgradeable", text: "The hook owner can change its code; read it before you trade." });
   out.push(
     p.hooklisted
-      ? { cls: "b-v", label: "Registry", text: `Listed in the Uniswap hooklist${p.signals.auditCount > 0 ? " with an audit link" : ""}` }
+      ? { cls: "b-v", label: "Registry", text: `Listed in the Uniswap hooklist${p.signals.auditUrl ? " with an audit link" : ""}` }
       : { cls: "b-n", label: "Discovered on-chain", text: "Not in the Uniswap hooklist; found from its pools. Name and flags come from the chain." },
   );
   return out;
@@ -386,7 +420,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
         {p.topWallets.length > 0 && <span>by volume in the latest ~300 trades of each busy pool</span>}
       </div>
       {p.topWallets.length === 0 ? (
-        <div className="mut">No wallet data for this project yet. It usually fills in within a day.</div>
+        <div className="mut">No wallet data for this project yet.</div>
       ) : (
         <div className={s.tw}>
           <table className={s.table}>

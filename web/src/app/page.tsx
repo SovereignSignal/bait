@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { Terminal } from "@/components/Terminal";
-import { getProject, getRows, usingFixtures } from "@/db/queries";
+import { getProject, getRowSet, usingFixtures } from "@/db/queries";
 import { getFreshness } from "@/db/health";
 import { getLaunches } from "@/db/radar";
 import { SAMPLE_NOW } from "@/fixtures/sample";
-import { applyTab, movers, parseFeedQuery } from "@/lib/feed";
+import { feedSeed, movers, parseFeedQuery } from "@/lib/feed";
 import type { Tab } from "@/lib/types";
 
 export const revalidate = 3600;
@@ -27,13 +27,15 @@ export async function generateMetadata({ searchParams }: { searchParams: Promise
 export default async function TerminalPage({ searchParams }: { searchParams: Promise<Search> }) {
   const q = parseFeedQuery(await searchParams);
   // The New tab carries the "Just launched" feed (v4_pools); other tabs skip the read.
-  const [rows, launches, fresh] = await Promise.all([getRows(), q.tab === "new" ? getLaunches(20) : Promise.resolve(undefined), getFreshness()]);
-  const first = applyTab(rows, q)[0];
+  const [{ rows, version }, launches, fresh] = await Promise.all([getRowSet(), q.tab === "new" ? getLaunches(20) : Promise.resolve(undefined), getFreshness()]);
+  // Only this URL's first rows ride in the page; the client fetches the full set (/api/rows) for search and filters.
+  const seed = feedSeed(rows, q, version);
+  const first = seed.rows[0];
   const project = first ? await getProject(first.slug) : null;
   const sample = usingFixtures();
   return (
     <Terminal
-      rows={rows}
+      seed={seed}
       moverRows={movers(rows, 60)}
       project={project}
       view="list"
