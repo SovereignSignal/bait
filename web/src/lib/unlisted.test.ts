@@ -28,6 +28,9 @@ test("isUnnamed: placeholder and pair labels are unnamed; chosen names are not",
   assert.equal(isUnnamed("Unlisted hook 0x58a6…94c0"), true);
   assert.equal(isUnnamed("Unlisted hook family 0x58a6…"), true);
   assert.equal(isUnnamed("GULD/ELEVATE hook · 0xaa67…0fc0"), true);
+  // the week page renames a digest's "Unlisted hook family 0x1775…" to today's label; it must still be kept out of New
+  assert.equal(isUnnamed("LUCKYKEY/WETH hook family · 0x0f48…"), true);
+  assert.equal(isUnnamed(unlistedLabel("Unlisted hook family 0x1775…", "BOTSON", "ETH")), true);
   assert.equal(isUnnamed("Aegis"), false);
   assert.equal(isUnnamed("PadHook (Ethereum)"), false);
   assert.equal(isUnnamed("Zora Post Hook v2.3.0 (Base)"), false);
