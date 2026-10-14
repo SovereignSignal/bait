@@ -69,6 +69,14 @@ class HyperSyncAuthError(RuntimeError):
     pass
 
 
+class HyperSyncRefused(RuntimeError):
+    """HTTP 4xx other than auth and 429: the request itself was rejected (e.g. a body too large), so retrying it as is
+    cannot help."""
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
 class HyperSync:
     def __init__(self, url: str, token: str, client: httpx.Client, retries: int = 5, sleep=time.sleep,
                  deadline: float | None = None):
@@ -115,7 +123,7 @@ class HyperSync:
                 self.sleep(min(2 ** attempt, 30))
                 continue
             if r.status_code >= 400:
-                raise RuntimeError(f"{self.url}{path} HTTP {r.status_code}: {r.text[:300]}")
+                raise HyperSyncRefused(r.status_code, f"{self.url}{path} HTTP {r.status_code}: {r.text[:300]}")
             self._account(r.headers)
             return r.json()
         raise RuntimeError(f"{self.url}{path} failed after {self.retries} attempts: {last}")

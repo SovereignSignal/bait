@@ -337,6 +337,19 @@ hook_pool_counts = sa.Table(
     sa.Column("volume_usd_total", sa.Float, nullable=False, server_default="0"),
 )
 
+# Pool ids a committed swap page could not place (not v4_pools rows, not known unhooked; 0015). Their swaps in
+# [from_block, seen_block) were left out of pool_daily_onchain and are owed until the indexer's resolver settles the id:
+# a hooked pool past its hook's cap gets those swaps re-read and counted, an unhooked pool is just deleted. from_time =
+# block time of the first swap left out: a day before it is final for every pool (nightly step onchain, ready_chains).
+pool_lookup_queue = sa.Table(
+    "pool_lookup_queue", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("from_block", sa.BigInteger, nullable=False),
+    sa.Column("seen_block", sa.BigInteger, nullable=False),
+    sa.Column("from_time", TS),
+)
+
 # One pool id per capped hook for the swaps of its pools that are not rows. Never a real pool id (0x + 64 hex); the step
 # onchain gives it a pools row so its per-day usage reaches the hook's project; per-pool web lists skip it.
 HOOK_POOL_PREFIX = "hook:"

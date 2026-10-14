@@ -134,6 +134,22 @@ def test_stuck_swap_cursor_keeps_keyless_even_when_updated_at_is_fresh(conn, ctx
     assert conn.execute(sa.select(db.pool_stats.c.vol_24h).where(db.pool_stats.c.pool_id == PA)).scalar() == 999.0
 
 
+def test_swaps_still_owed_to_the_indexers_lookup_queue_keep_keyless_usage_for_that_day(conn, ctx):
+    """The indexer commits a swap page without the pools it cannot place yet (pool_lookup_queue) and counts their swaps
+    when it settles them. A day those swaps fall in is not final until then; owed swaps from today do not hold REF."""
+    _setup(conn)
+    late_on_ref = datetime(2026, 10, 5, 23, 59, tzinfo=timezone.utc)
+    conn.execute(sa.insert(db.pool_lookup_queue).values(chain_id=8453, pool_id=PE, from_block=5, seen_block=9, from_time=late_on_ref))
+    conn.execute(sa.insert(db.pool_lookup_queue).values(chain_id=10, pool_id=PE, from_block=5, seen_block=9, from_time=late_on_ref))
+    out = onchain.run(conn, ctx)
+    assert out["chains_stale"] == 1 and out["pools_usage"] == 0 and onchain.owed_before(conn, 8453, NOW) == 1
+    assert conn.execute(sa.select(db.pool_stats.c.vol_24h).where(db.pool_stats.c.pool_id == PA)).scalar() == 999.0
+    conn.execute(sa.update(db.pool_lookup_queue).values(from_time=datetime(2026, 10, 6, 0, 1, tzinfo=timezone.utc)))
+    out = onchain.run(conn, ctx)
+    assert out["chains_stale"] == 0 and out["chains_usage"] == 1
+    assert conn.execute(sa.select(db.pool_stats.c.vol_24h).where(db.pool_stats.c.pool_id == PA)).scalar() == 500.0
+
+
 CUSTOM, PF = "0x" + "f" * 36 + "0088", "0x" + "f" * 64          # beforeSwap + beforeSwapReturnsDelta (bit 3)
 
 

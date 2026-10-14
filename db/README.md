@@ -17,5 +17,5 @@ create the tables itself: `python -m bait init-db`. Columns added to an existing
 
 Tables: projects, hooks, pools, pool_snapshots, pool_stats, pool_top_wallets, wallet_labels,
 project_daily, signals, receipts, digests; on-chain indexer (0004): v4_pools, pool_daily_onchain, pool_wallet_day,
-indexer_state.
+indexer_state; hook_pool_counts (0013); pool_lookup_queue (0015).
 See DESIGN.md "Postgres schema" for field meaning.

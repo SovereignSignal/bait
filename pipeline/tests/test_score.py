@@ -440,6 +440,18 @@ def test_rescoring_a_past_day_does_not_depend_on_indexer_freshness_now(conn, ctx
     assert first == "7d,concentrated,vol_tvl" and daily(conn, wash).wash_reason == first
 
 
+def test_rescoring_a_past_day_waits_for_swaps_the_indexer_still_owes_for_it(conn, ctx):
+    _optimism_ready(conn)
+    ctx.now = NOW + timedelta(days=5)            # a re-score: the past-day path, not ready_chains
+    end = DAY - timedelta(days=1)
+    owed_from = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=12)
+    conn.execute(sa.insert(db.pool_lookup_queue).values(chain_id=10, pool_id="0x" + "9" * 64, from_block=1, seen_block=2,
+                                                        from_time=owed_from))
+    assert 10 not in score._ready(conn, ctx, end)
+    conn.execute(sa.delete(db.pool_lookup_queue))
+    assert 10 in score._ready(conn, ctx, end)
+
+
 def test_pruned_wallet_rows_are_unknown_not_zero_wallets(conn, ctx):
     """pool_wallet_day is kept 30 days; volume without wallet rows must not read as "<= 10 wallets"."""
     wash = _onchain_project(conn, "Desk", "0xdp", wallets=0, vol_per_day=60_000_000)
