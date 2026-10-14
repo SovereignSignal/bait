@@ -201,7 +201,7 @@ export interface ProjectSummary {
   isSpam: boolean;
   /** wash-like volume: listed in All and on its page with a badge, never in Trending, New, movers or Leaders */
   isWash: boolean;
-  /** comma list of reasons: 24h, 7d, vol_tvl, no_liquidity, symmetric */
+  /** comma list of reasons: 24h, 7d, concentrated, vol_tvl, no_liquidity, symmetric, uniform, unverified */
   washReason: string | null;
   scoreTrending: number;
   /** 1-based trending rank, set when listing the Trending tab */

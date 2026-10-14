@@ -85,7 +85,7 @@ export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & 
   if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash && !isUnnamed(p.name)).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
   else if (q.tab === "verified") rows = all.filter((p) => inApp(p) && !p.isWash).sort(byVol7d);
-  else rows = [...all].sort(byVol7d);
+  else rows = [...all].sort((a, b) => Number(a.isWash) - Number(b.isWash) || byVol7d(a, b)); // wash-like rows after the rest
   return rows.filter((p) => matches(p, q)).map((p) => ({ ...p, rank: rankOf.get(p.slug) }));
 }
 
