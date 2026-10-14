@@ -92,6 +92,12 @@ is a rolling window ending at run time: it is `pool_stats.vol_24h_rolling` (the 
 OHLCV cap, D-1's volume marked `estimated`. Swap counts are NULL unless every day is known; wallets are distinct across
 a project's pools on ready chains, otherwise an upper bound (`wallets_exact = false`, shown as "≤").
 
+**Labels (2026-10-14).** The UI never calls the closed day "24h": the project page names it ("Vol Oct 12", "Wallets Oct 12",
+bars dated through Oct 12 UTC) and compact rows say "1d" next to "7d". The Uniswap app's pool "Past day" is a rolling 24 h
+ending when you look, so it differs from Bait's closed day by up to two days of trading. Checked on Aegis USD₮0/USDC (Ink,
+0xfff5…1805): Bait $292.3K for Oct 12 = GeckoTerminal's Oct 12 candle $292.3K = on-chain $292.8K (664 Swap logs, one leg);
+the app read $35.8K at about 01:00 UTC Oct 14, matching the on-chain rolling 24 h then. Not double-counted.
+
 - New: project first_seen <= 7d AND (max pool TVL > $1k OR swaps_7d >= 10, counted over the known days, a lower bound)
 - Trending: vol_7d >= $10k; score = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)
   tie-break TVL delta; top 20

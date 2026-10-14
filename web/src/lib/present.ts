@@ -1,7 +1,7 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
 import { CHAINS } from "./chains";
 import { weekDelta } from "./feed";
-import { clip, deltaWords, fmtDelta, int, usd } from "./format";
+import { clip, dayLabel, deltaWords, fmtDelta, int, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
@@ -31,11 +31,34 @@ export function deltaText(r: { vol7d: number | null; vol7dPrev: number | null })
   return d == null ? null : { text: fmtDelta(d), up: d >= 0 };
 }
 
-export type Win = "24h" | "7d";
+// "1d", not "24h": the number is one closed UTC day, like "7d" is seven. "24h" reads as the 24 hours before now, which
+// is what the Uniswap app's "Past day" shows, and the two differ by up to two days of trading.
+export type Win = "1d" | "7d";
 
-/** The number a row or mover shows and the window it covers. 24h only when asked for and known. */
+/** The number a row or mover shows and the window it covers. The closed day only when asked for and known. */
 export function rowMetric(r: { vol24h: number | null; vol7d: number | null }, use24h: boolean): { v: number | null; win: Win } {
-  return use24h && r.vol24h != null ? { v: r.vol24h, win: "24h" } : { v: r.vol7d, win: "7d" };
+  return use24h && r.vol24h != null ? { v: r.vol24h, win: "1d" } : { v: r.vol7d, win: "7d" };
+}
+
+const DAY_MS = 86_400_000;
+
+/** The closed UTC day the "24h" figures cover, as a column label ("Oct 12") and the hover note that says how it differs
+ * from the Uniswap app. Unknown day: "1d". */
+export function dayWindow(through: string | null | undefined): { short: string; note: string } {
+  const day = through ? dayLabel(through) : null;
+  return {
+    short: day ?? "1d",
+    note: `${day ? `${day}, 00:00 to 24:00 UTC` : "The last closed UTC day"}. The Uniswap app's "Past day" is the 24 hours before you look, so its number differs.`,
+  };
+}
+
+/** Bar labels for a daily series that ends on the closed day `end`, oldest first ("Sep 29" .. "Oct 12"); relative
+ * ("14d ago" .. "1d ago") when `end` is unknown. Never "yesterday": the run is nightly, so `end` can be two days back. */
+export function seriesLabels(n: number, end: string | null | undefined): string[] {
+  const last = end ? Date.parse(`${end}T00:00:00Z`) : NaN;
+  return Array.from({ length: n }, (_, i) =>
+    Number.isNaN(last) ? `${n - i}d ago` : dayLabel(new Date(last - (n - 1 - i) * DAY_MS).toISOString().slice(0, 10)),
+  );
 }
 
 const HOOK_SEARCH_CAP = 8;
@@ -85,7 +108,7 @@ export function pace(vol24h: number | null, vol7d: number | null): number {
 
 export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean }, rank: number | undefined, m: { v: number | null; win: Win }): string {
   const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
-  const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "24-hour"} volume`];
+  const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "1-day"} volume`];
   const d = weekDelta(r);
   if (r.isWash) parts.push("wash-like volume");
   else if (r.isNew) parts.push("new");
@@ -124,7 +147,7 @@ export function digestItem(
   return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
 }
 
-/** The 24h volume cell: dollars when known; for a pool whose USD volume is unknown (custom accounting, unpriced swaps)
+/** The pool's closed-day volume cell: dollars when known; for a pool whose USD volume is unknown (custom accounting, unpriced swaps)
  * but that swapped this week, the swap count, a lower bound; else the missing glyph. */
 export function poolVolume(x: { vol24h: number | null; tx7d: number | null }): { text: string; note?: string } {
   if (x.vol24h != null) return { text: usd(x.vol24h) };
