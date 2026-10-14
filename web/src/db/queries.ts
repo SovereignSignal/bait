@@ -19,6 +19,7 @@ import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate } from "@/lib/format";
 import { auditLinks, digestIntro, digestItem, hookKeys, toRow, withCurrentNames } from "@/lib/present";
+import { packRows, rowsVersion, type PackedRows } from "@/lib/rows";
 import type {
   Category,
   ChainId,
@@ -76,8 +77,24 @@ function rowOf(p: ProjectDetail): RowView {
 
 /** Every non-spam project as a light row (the terminal list, movers, search). */
 export async function getRows(): Promise<RowView[]> {
+  return (await getRowSet()).rows;
+}
+
+type RowSet = { rows: RowView[]; packed: PackedRows; version: string };
+// Keyed by the cached loadAll array: every page render and /api/rows call between two loads shares one set and hash.
+const rowSets = new WeakMap<ProjectDetail[], RowSet>();
+
+/** The rows, packed for GET /api/rows, and the version a page hands the client to fetch them by. */
+export async function getRowSet(): Promise<RowSet> {
   const all = await loadAll();
-  return all.filter((p) => !p.isSpam).map(rowOf);
+  let set = rowSets.get(all);
+  if (!set) {
+    const rows = all.filter((p) => !p.isSpam).map(rowOf);
+    const packed = packRows(rows);
+    set = { rows, packed, version: rowsVersion(packed) };
+    rowSets.set(all, set);
+  }
+  return set;
 }
 
 /** slug -> hook addresses for 0x search (GET /api/hooks): the same projects as getRows. */
@@ -105,11 +122,11 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
  * to that load's day, and takes its display name from the list row, so the header, the sidebar, its rank and every other
  * page agree even when the snapshot is up to an hour old.
  */
-export async function getProjectPage(slug: string): Promise<{ project: ProjectDetail | null; rows: RowView[] }> {
+export async function getProjectPage(slug: string): Promise<{ project: ProjectDetail | null; rows: RowView[]; version: string }> {
   const db = getDb();
   const all = await loadAll();
   const live = all.filter((p) => !p.isSpam);
-  const rows = live.map(rowOf);
+  const { rows, version } = await getRowSet();   // the same set and hash "/" hands the client, from this load
   let detail: ProjectDetail | null;
   if (!db) {
     const p = usingFixtures() ? SAMPLE_PROJECTS.find((x) => x.slug === slug) : undefined;
@@ -118,7 +135,7 @@ export async function getProjectPage(slug: string): Promise<{ project: ProjectDe
     // Unknown slugs never reach the cache: random URLs cannot fill it.
     // (An empty list means an empty or failing database: fall through so a failure throws rather than 404s.)
     const base = live.find((p) => p.slug === slug);
-    if (live.length && !base) return { project: null, rows };
+    if (live.length && !base) return { project: null, rows, version };
     const gen = (all as Loaded).gen;
     const pin = gen != null ? { latest: (all as Loaded).day ?? null } : {};
     // No safe() here: a database error throws (Next keeps the last good page) instead of becoming a cached 404.
@@ -127,9 +144,9 @@ export async function getProjectPage(slug: string): Promise<{ project: ProjectDe
     // the list row's name and top pool: symbol lookups can differ between two loads, the label must not
     if (detail && base) detail = { ...detail, name: base.name, topPool: base.topPool };
   }
-  if (!detail || detail.isSpam) return { project: null, rows }; // spam 404s; a wash-like project keeps its page (Detail shows why)
+  if (!detail || detail.isSpam) return { project: null, rows, version }; // spam 404s; a wash-like project keeps its page (Detail shows why)
   const rank = applyTab(rows, { tab: "trending" }).find((x) => x.slug === slug)?.rank;
-  return { project: { ...detail, rank }, rows };
+  return { project: { ...detail, rank }, rows, version };
 }
 
 /**

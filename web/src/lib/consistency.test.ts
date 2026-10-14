@@ -1,7 +1,7 @@
 // One project, one set of figures across pages: names, counts, TVL and audit badges (demo smoke, 2026-10-14).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditLinks, digestIntro, poolTvlNote, toRow, tradePool, withCurrentNames } from "./present";
+import { auditLinks, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
 import type { DigestItem } from "./types";
 
 const item = (slug: string, name: string, kind: DigestItem["kind"] = "trending"): DigestItem => ({ slug, name, kind, line: "", vol7d: 1 });
@@ -43,18 +43,6 @@ test("audit badge only for a real link that belongs to the project", () => {
   assert.deepEqual(auditLinks(["N/A", "none", "javascript:alert(1)"], { team: "Acme", audit_url: "Not found" }, false), []);
   // Uniswap's own v4 audits cover the PoolManager, not this hook
   assert.deepEqual(auditLinks([], { team: "Acme", audit_url: "https://github.com/Uniswap/v4-core/tree/main/docs/security/audits" }, false), []);
-});
-
-test("the list row's audited flag follows the link, not the count", () => {
-  const p = {
-    slug: "x", name: "X", whatLine: "", color: "#000", category: "other", secondaryCategories: [], chains: [8453], firstSeenAt: "",
-    isNew: false, isWash: false, scoreTrending: 0, isFactory: false,
-    metrics: { tvlUsd: 0, vol7d: 0, vol7dPrev: 0, swaps7d: null, poolsN: 1, hooksN: 1 },
-    usage: { vol24h: null },
-    signals: { routable: "unknown", auditCount: 1, auditUrl: null },
-  } as unknown as Parameters<typeof toRow>[0];
-  assert.equal(toRow(p).audited, false);
-  assert.equal(toRow({ ...p, signals: { ...p.signals, auditUrl: "https://a.org/x" } }).audited, true);
 });
 
 test("the Trade panel offers the pool the title is named after, not the first pool by TVL", () => {

@@ -111,7 +111,7 @@ export function hookKeys(addresses: string[]): string[] {
 
 const dollars = (n: number | null): number | null => (n == null ? null : Math.round(n));
 
-/** ProjectSummary -> the light row the client list ships with, 1,600+ of them per page: whole dollars, no hook list. */
+/** ProjectSummary -> the light row the client list works from (2,000+ of them via /api/rows): whole dollars, no hook list. */
 export function toRow(p: ProjectSummary): RowView {
   return {
     slug: p.slug,
@@ -130,7 +130,6 @@ export function toRow(p: ProjectSummary): RowView {
     vol24h: dollars(p.usage.vol24h),
     tvlUsd: Math.round(p.metrics.tvlUsd),
     routable: p.signals.routable,
-    audited: p.signals.auditUrl != null,   // a badge only ever points at a real link
     rank: p.rank,
   };
 }
