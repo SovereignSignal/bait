@@ -119,7 +119,7 @@ against the same Postgres before cron fires.
 
 ## Frontend
 
-Next.js App Router on Railway, Drizzle -> Postgres, ISR revalidate 1h.
+Next.js App Router on Railway, Drizzle -> Postgres, ISR revalidate 1h (project and week pages 10 min, 2026-10-14).
 Mobile-first. OG image route per project. RSS at /feed.xml. No client-side data fetching.
 
 ## Repo layout
@@ -445,3 +445,21 @@ action and smart money, semantic green and amber) still hold.
   pay off long scans in budgeted slices (BNB and Robinhood after 2026-10-09: a few hours behind head, health ok).
 - **Builds.** Base images come from ECR Public (`public.ecr.aws/docker/library/...`), and Dockerfiles carry no
   `# syntax=` line: Railway's builders could not reach Docker Hub on 2026-10-09.
+
+## Update 2026-10-14: one figure per fact across pages
+
+- **Unnamed labels.** An unnamed project is labelled by one pool everywhere (list, Leaders, project page, week page, OG
+  image, RSS): most 7-day volume over closed days, then most TVL, then the lowest pool id (`lib/unlisted.compareTopPool`,
+  mirrored by the `topPools` query). Digests store the Monday name; the week page and RSS render today's name for the
+  same slug.
+- **Traded projects.** /leaders "Projects traded, last 7 days" and the digest intro count the same set: non-spam,
+  non-wash, 7-day volume > 0 (`totals.traded`, with TVL and volume summed over it). Digests written before 2026-10-14
+  only carry `totals.projects` (every tracked project) and say "projects tracked".
+- **Pool TVL.** A pool row's TVL is its latest snapshot up to the running day, as score sums it into the header. When the
+  rows shown do not add up to the header (pools past the 50 loaded, untracked chains, a capped hook's aggregate), the
+  note under the table says how much is elsewhere.
+- **Audit badge.** "Audit linked" needs an http(s) link, and its title names the link. Hooklist audit URLs count; a
+  Parallel one only when Parallel named a team and the project is not an unnamed address, and never Uniswap's own
+  v4-core / v4-periphery audits.
+- **One snapshot per page.** A project page's detail is cached per list load and pinned to that load's day, and takes
+  its name and rank from the rows it ships with. Project, OG and week pages revalidate every 10 minutes (was 1 h).

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isSlugShaped, isUnlisted, isUnnamed, unlistedLabel } from "./unlisted";
+import { compareTopPool, isSlugShaped, isUnlisted, isUnnamed, unlistedLabel } from "./unlisted";
 import { applyTab, movers } from "./feed";
 import type { RowView } from "./types";
 
@@ -43,4 +43,18 @@ test("unnamed rows stay out of Trending, New and the movers, but are listed in A
   assert.deepEqual(applyTab(rows, { tab: "new" }).map((r) => r.slug), []);
   assert.deepEqual(movers(rows).map((r) => r.slug), ["a"]);
   assert.equal(applyTab(rows, { tab: "all" }).length, 3);
+});
+
+test("compareTopPool: 7-day volume, then TVL, then pool id, so a family gets the same pair on every page", () => {
+  const pools = [
+    { poolId: "0xc", vol7d: 10, tvlUsd: 5 },
+    { poolId: "0xb", vol7d: 900, tvlUsd: 1 },
+    { poolId: "0xa", vol7d: 900, tvlUsd: 1 },      // tie on both: the lower pool id wins
+    { poolId: "0xd", vol7d: 900, tvlUsd: 50 },     // same volume, more TVL
+    { poolId: "0xe", vol7d: null, tvlUsd: 1e9 },   // unknown volume ranks below any known figure
+  ];
+  assert.deepEqual([...pools].sort(compareTopPool).map((p) => p.poolId), ["0xd", "0xa", "0xb", "0xc", "0xe"]);
+  // input order never changes the pick
+  assert.deepEqual([...pools].reverse().sort(compareTopPool).map((p) => p.poolId), ["0xd", "0xa", "0xb", "0xc", "0xe"]);
+  assert.equal(compareTopPool({ poolId: "0x1", vol7d: null, tvlUsd: null }, { poolId: "0x1", vol7d: null, tvlUsd: null }), 0);
 });

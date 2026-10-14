@@ -3,7 +3,7 @@ import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from 
 import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, poolsNote, poolVolume, walletsText, washLine } from "@/lib/present";
+import { activePool, categoryLine, chainNames, poolsNote, poolTvlNote, poolVolume, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
 import { LiveTrades } from "./LiveTrades";
@@ -51,8 +51,9 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     ...(p.signals.routable === "eligible" ? [{ cls: "b-g", label: "In Uniswap app", why: "At least one pool should route in the Uniswap app. A rule, not a guarantee." }] : []),
     ...(p.signals.routable === "ineligible" ? [{ cls: "b-n", label: "Not in app", why: "The Uniswap app will not route swaps through this hook." }] : []),
     ...(p.signals.routable === "unknown" ? [{ cls: "b-n", label: "Routing unknown", why: "Not enough data to say whether the app routes through this hook." }] : []),
-    p.signals.auditCount > 0
-      ? { cls: "b-g", label: "Audit linked", why: "An audit link is published. It says nothing about scope or findings.", href: p.signals.auditUrl ?? undefined }
+    // only with a link to follow: a count without a URL is not an audit anyone can read
+    p.signals.auditUrl
+      ? { cls: "b-g", label: "Audit linked", why: `Audit link: ${p.signals.auditUrl}. It says nothing about scope or findings.`, href: p.signals.auditUrl }
       : { cls: "b-n", label: "No audit", why: "No audit link found." },
     ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
     ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
@@ -148,7 +149,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       <div className={s.two}>
         <div className={`panel ${s.blk}`}>
           <h2>Pools</h2>
-          <PoolsTable pools={p.pools} total={p.metrics.poolsN} />
+          <PoolsTable pools={p.pools} total={p.metrics.poolsN} tvl={p.metrics.tvlUsd} />
         </div>
         <div className={`panel ${s.blk}`}>
           <h2>Activity</h2>
@@ -266,11 +267,12 @@ function PoolVolume({ x, stacked = false }: { x: PoolView; stacked?: boolean }) 
   );
 }
 
-function PoolsTable({ pools, total }: { pools: PoolView[]; total: number }) {
+function PoolsTable({ pools, total, tvl }: { pools: PoolView[]; total: number; tvl: number }) {
   const known = pools.filter((x) => knownChain(x.chainId));
   const active = known.filter(activePool);
   const shown = (active.length ? active : known).slice(0, POOLS_SHOWN);
-  const note = poolsNote(shown.length, active.length, known.length, total);
+  // the header TVL is score's sum over every pool: say where the part not in these rows is
+  const note = [poolsNote(shown.length, active.length, known.length, total), poolTvlNote(tvl, shown)].filter(Boolean).join(" ") || null;
   if (!shown.length) return <div className="mut">No pools indexed yet.</div>;
   return (
     <>
@@ -356,7 +358,7 @@ function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
   if (p.upgradeable) out.push({ cls: "b-a", label: "Upgradeable", text: "The hook owner can change its code; read it before you trade." });
   out.push(
     p.hooklisted
-      ? { cls: "b-v", label: "Registry", text: `Listed in the Uniswap hooklist${p.signals.auditCount > 0 ? " with an audit link" : ""}` }
+      ? { cls: "b-v", label: "Registry", text: `Listed in the Uniswap hooklist${p.signals.auditUrl ? " with an audit link" : ""}` }
       : { cls: "b-n", label: "Discovered on-chain", text: "Not in the Uniswap hooklist; found from its pools. Name and flags come from the chain." },
   );
   return out;

@@ -7,7 +7,7 @@ import { longDate, usd } from "@/lib/format";
 import s from "../week.module.css";
 import { isUnnamed } from "@/lib/unlisted";
 
-export const revalidate = 3600;
+export const revalidate = 600; // demo window: a first visit is at most ten minutes behind the list
 export const dynamicParams = true;
 
 export async function generateStaticParams() {
