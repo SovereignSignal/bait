@@ -4,7 +4,7 @@ import { CHAINS } from "@/lib/chains";
 import { int, pctDelta, usd } from "@/lib/format";
 import { categoryLine, sourceLine } from "@/lib/present";
 
-export const revalidate = 3600;
+export const revalidate = 600; // demo window: a first visit is at most ten minutes behind the list
 export const alt = "Bait project card";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -121,7 +121,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             {money !== null && money > 0 && sig(true, `◆ ${money} smart money LP${money === 1 ? "" : "s"}`, true)}
             {sig(p.signals.routable === "eligible", p.signals.routable === "eligible" ? "● Routes in Uniswap app" : p.signals.routable === "ineligible" ? "○ Not routable in app" : "○ Routing unknown")}
-            {sig(p.signals.auditCount > 0, p.signals.auditCount > 0 ? "✓ Audit linked" : "○ No audit linked")}
+            {sig(p.signals.auditUrl != null, p.signals.auditUrl != null ? "✓ Audit linked" : "○ No audit linked")}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px 0", fontSize: 24, color: T.fg2 }}>

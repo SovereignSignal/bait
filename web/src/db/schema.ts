@@ -211,7 +211,9 @@ export interface DigestCard {
 export interface DigestBody {
   week_of: string;
   generated_at: string;
-  totals: { projects: number; tvl_usd: number; vol_7d: number };
+  /** projects: every tracked (non-spam, non-wash) project; traded (newer digests): those with 7-day volume > 0, the
+   * /leaders count. tvl_usd and vol_7d are summed over the traded set when it is present. */
+  totals: { projects: number; traded?: number; tvl_usd: number; vol_7d: number };
   new: DigestCard[];
   trending: DigestCard[];
 }
