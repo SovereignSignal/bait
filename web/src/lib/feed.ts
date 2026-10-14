@@ -1,6 +1,7 @@
 // Tab / filter / ranking rules shared by the server (which project "/" selects)
 // and the client list (search, watchlist). Pure: no server-only imports.
 import { CHAINS, parseChainParam } from "./chains";
+import { isUnnamed } from "./unlisted";
 import { CATEGORIES, CATEGORY_LABEL, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type HookIndex, type RowView, type Tab } from "./types";
 
 export const TRENDING_TOP_N = 20;
@@ -42,6 +43,15 @@ export function projectHref(slug: string, q?: Partial<FeedQuery>): string {
   return `/p/${slug}${q ? feedQs(q) : ""}`;
 }
 
+/** Where a tab, category or chain change goes: the feed, or the open project with the list re-filtered beside it. */
+export function feedHrefAt(pathname: string | null | undefined, q: Partial<FeedQuery>): string {
+  return `${pathname?.startsWith("/p/") ? pathname : "/"}${feedQs(q)}`;
+}
+
+export function sameQuery(a: FeedQuery, b: FeedQuery): boolean {
+  return feedQs(a) === feedQs(b);
+}
+
 /** Week-over-week change in percent: vol7d (the 7 closed UTC days ending the day before the run) against vol7dPrev (the
  * 7 before), or null when the earlier week is under $1K. */
 export function weekDelta(r: { vol7d: number | null; vol7dPrev: number | null }): number | null {
@@ -54,7 +64,7 @@ export function inApp(r: { routable: Eligibility }): boolean {
   return r.routable === "eligible";
 }
 
-type FeedItem = Pick<RowView, "slug" | "isNew" | "isWash" | "firstSeenAt" | "scoreTrending" | "vol7d" | "tvlUsd" | "chains" | "category" | "secondaryCategories" | "routable" | "audited">;
+type FeedItem = Pick<RowView, "slug" | "name" | "isNew" | "isWash" | "firstSeenAt" | "scoreTrending" | "vol7d" | "tvlUsd" | "chains" | "category" | "secondaryCategories" | "routable">;
 
 function matches(p: FeedItem, q: FeedQuery): boolean {
   if (q.chain && !p.chains.includes(q.chain)) return false;
@@ -65,7 +75,7 @@ function matches(p: FeedItem, q: FeedQuery): boolean {
 /** Trending order over every row (not the filtered view), so ranks stay stable across filters. */
 export function trendingOrder<T extends FeedItem>(all: T[]): T[] {
   return [...all]
-    .filter((p) => !p.isWash && p.vol7d != null && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
+    .filter((p) => !p.isWash && !isUnnamed(p.name) && p.vol7d != null && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
     .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd || a.slug.localeCompare(b.slug))
     .slice(0, TRENDING_TOP_N);
 }
@@ -81,11 +91,39 @@ export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & 
   const trending = trendingOrder(all);
   const rankOf = new Map(trending.map((p, i) => [p.slug, i + 1]));
   let rows: T[];
-  if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
+  if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash && !isUnnamed(p.name)).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
   else if (q.tab === "verified") rows = all.filter((p) => inApp(p) && !p.isWash).sort(byVol7d);
-  else rows = [...all].sort(byVol7d);
+  else rows = [...all].sort((a, b) => Number(a.isWash) - Number(b.isWash) || byVol7d(a, b)); // wash-like rows after the rest
   return rows.filter((p) => matches(p, q)).map((p) => ({ ...p, rank: rankOf.get(p.slug) }));
+}
+
+/** Rows the list renders at first and per "Show more": a few screens, not all 2,000+ (DOM, hydration, prefetch). */
+export const LIST_PAGE = 100;
+
+/** What the list shows: the watchlist, a search across every project (chain and category still apply), or a tab. */
+export function listFor<T extends FeedItem>(all: T[], q: FeedQuery, o: { search: string; watchlist?: string[]; hooks?: HookIndex }): Array<T & { rank?: number }> {
+  const list = o.watchlist ? all.filter((r) => o.watchlist!.includes(r.slug)).sort(byVol7d) : applyTab(all, o.search.trim() ? { ...q, tab: "all" } : q);
+  return searchRows(list, o.search, o.hooks);
+}
+
+/** The list a page server-renders for its URL, so first paint needs no fetch; the full set follows from /api/rows. */
+export interface FeedSeed {
+  query: FeedQuery;
+  /** the first LIST_PAGE rows of the query, ranked */
+  rows: RowView[];
+  /** rows the query matches in all */
+  total: number;
+  /** every listed project */
+  count: number;
+  cats: Category[];
+  /** /api/rows cache key (rowsVersion) */
+  version: string;
+}
+
+export function feedSeed(all: RowView[], q: FeedQuery, version: string): FeedSeed {
+  const rows = applyTab(all, q);
+  return { query: q, rows: rows.slice(0, LIST_PAGE), total: rows.length, count: all.length, cats: availableCategories(all), version };
 }
 
 /** Categories that have at least one row, in canonical order. */
@@ -108,7 +146,7 @@ export function movers(all: RowView[], n = 10): RowView[] {
     return v7 * (d != null && d > 0 ? 1 + d / 100 : 1);
   };
   return all
-    .filter((p) => !p.isWash && ((p.isNew && (p.vol7d ?? 0) > 0) || trending.has(p.slug)))
+    .filter((p) => !p.isWash && !isUnnamed(p.name) && ((p.isNew && (p.vol7d ?? 0) > 0) || trending.has(p.slug)))
     .sort((a, b) => key(b) - key(a))
     .slice(0, n);
 }

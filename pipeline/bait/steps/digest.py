@@ -19,6 +19,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         .join(project_daily, project_daily.c.project_id == projects.c.id)
         .where(project_daily.c.day == ctx.day, project_daily.c.is_spam.is_(False))).all()
     live = [r for r in rows if not r.is_wash]   # listed in All, never counted in the week
+    # the /leaders count (queries.ts getLeaders): non-spam, non-wash, 7-day volume > 0. One definition on both pages.
+    traded = [r for r in live if (r.vol_7d or 0) > 0]
 
     def card(r):
         return {"slug": r.slug, "name": r.name, "category": r.category, "what_line": r.what_line,
@@ -29,7 +31,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     new = sorted([r for r in live if r.is_new], key=lambda r: -(r.tvl_usd or 0))[:20]   # 85 were New on 10/8
     body = {
         "week_of": ctx.day.isoformat(), "window_end": (ctx.day - timedelta(days=1)).isoformat(), "generated_at": ctx.now.isoformat(),
-        "totals": {"projects": len(live), "tvl_usd": sum(r.tvl_usd or 0 for r in live), "vol_7d": sum(r.vol_7d or 0 for r in live)},
+        "totals": {"projects": len(live), "traded": len(traded),
+                   "tvl_usd": sum(r.tvl_usd or 0 for r in traded), "vol_7d": sum(r.vol_7d or 0 for r in traded)},
         "new": [card(r) for r in new], "trending": [card(r) for r in trending],
     }
     upsert(conn, digests, [{"week_of": ctx.day, "body": body}], keys=["week_of"])

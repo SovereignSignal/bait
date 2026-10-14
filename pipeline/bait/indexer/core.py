@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from ..db import as_utc, hook_pool_id
 from .chains import CHAINS, IndexedChain
 from .decode import INITIALIZE_TOPIC, decode_initialize, decode_swap, is_hooked, num, utc
-from .hypersync import HyperSync, initialize_by_id_query, initialize_query, page, swap_query
+from .hypersync import HyperSync, HyperSyncRefused, initialize_by_id_query, initialize_query, page, swap_query
 from .prices import PriceBook, swap_usd
 from . import store
 
@@ -47,6 +47,9 @@ class Settings:
     pools_per_hook: int = 2000       # v4_pools rows per (chain, hook); past it pools are counted, not stored (0 = no cap)
     pool_lookups: int = 10           # HyperSync calls per chain per loop to find pools past the cap that swap
     lookup_catchup: int = 3          # pool_lookups multiplier while the swap cursor is > LOOKUP_CATCHUP_LAG blocks behind
+    # pool ids per Initialize-by-id lookup. One scan of [floor, cursor) costs the same calls for 1 id or thousands (the
+    # range is what HyperSync walks), so the queue is settled in big chunks; halved for the process if HyperSync refuses one.
+    lookup_chunk: int = 2000
     late_min_usd: float = 10.0       # a pool past the cap becomes a row only on a priced swap of at least this (no dust)
     sampled_per_hook: int = 1000     # second cap: such late rows per (chain, hook); the rest's swaps stay on the hook
 
@@ -55,9 +58,10 @@ class Settings:
         return cls(max_pages=_env_int("INDEXER_MAX_PAGES", 40), topic_filter_max=_env_int("INDEXER_TOPIC_FILTER_MAX", 2000),
                    topic_chunk=max(1, _env_int("INDEXER_TOPIC_CHUNK", 500)), rpc_max_windows=_env_int("INDEXER_RPC_MAX_WINDOWS", 30),
                    pools_per_hook=_env_int("INDEXER_POOLS_PER_HOOK", 2000),
-                   # at least 1: a chunk in progress always finishes, so a held swap page moves every loop
+                   # at least 1: a cut scan moves every loop, so the lookup queue always drains
                    pool_lookups=max(1, _env_int("INDEXER_POOL_LOOKUPS", 10)),
                    lookup_catchup=max(1, _env_int("INDEXER_POOL_LOOKUPS_CATCHUP", 3)),
+                   lookup_chunk=max(1, _env_int("INDEXER_LOOKUP_CHUNK", 2000)),
                    late_min_usd=_env_float("INDEXER_LATE_INSERT_MIN_USD", 10.0),
                    sampled_per_hook=_env_int("INDEXER_SAMPLED_POOLS_PER_HOOK", 1000))
 
@@ -70,9 +74,12 @@ class ChainStats:
     new_pools: int = 0
     capped: int = 0                  # Initialize logs past the per-hook cap: counted in hook_pool_counts, not stored
     late: int = 0                    # pools past the cap inserted on their first swap (sampled)
-    lookups: int = 0                 # HyperSync calls spent finding them (every call of a chunk counts)
+    lookups: int = 0                 # resolver HyperSync calls: lookups (every call of a chunk counts) and owed re-reads
     unknown: int = 0                 # pool ids that needed a lookup (not rows, not known unhooked)
-    chunk_calls: int = 0             # most calls one lookup chunk took (a long [floor, page end) range pages)
+    chunk_calls: int = 0             # most calls one lookup chunk took (a long [floor, cursor) range pages)
+    queued: int = 0                  # ids left uncounted by this loop's swap pages (per page), for the resolver
+    backlog: int = 0                 # ids still queued after this loop's settle
+    owed: int = 0                    # swaps of queued ids found hooked, re-read and counted this loop
     folded: int = 0                  # swaps of pools past both caps (or dust), kept on the hook's aggregate pool
     swaps: int = 0
     unpriced: int = 0
@@ -117,33 +124,38 @@ class SwapAgg:
 
 
 class LookupBudget(RuntimeError):
-    """This loop's HyperSync budget for pool lookups is spent; the swap page waits for the next loop."""
+    """This loop's HyperSync budget for pool lookups is spent (or a lookup was refused); the queue waits for the next loop."""
 
 
 class PoolResolver:
-    """Keys of hooked pools that are not v4_pools rows (past their hook's cap, or pruned), for when one of them swaps.
-    One per chain, kept by the Runner across loops. First `recent` (rows this process left out of v4_pools, the newest
-    RECENT_MAX), then one HyperSync Initialize query by pool id (topic1) over [floor, page end) per `topic_chunk` ids, at
-    most `pool_lookups` calls per loop, checked before every call. A chunk cut by the budget records how far each of
-    its ids was scanned (`scanned`) and resumes there next loop, so a deep floor (a prune lowers it to the oldest
-    deleted pool: 44M blocks on BNB on 2026-10-10, ~70 calls of ~45 s each) costs a bounded slice of every loop instead
-    of the whole loop. A swap page with ids left unresolved is not
-    committed: its swaps are never dropped, and what was learned carries over to the next loop. This is also the defence
-    against a hook filled to its cap with junk pools: a later real pool is a row from its first swap on. `pending` keeps
-    what lookups found for the page being resolved, out of reach of `recent`'s eviction (Initialize pages can push more
-    than RECENT_MAX rows in between), so a held page resumes where it stopped; it is cleared when the page commits.
-    `absent` remembers ids that are not hooked pools (unhooked pools are most of a scan page); it is only valid for the
-    floor it was built with, so it is cleared when the floor moves down."""
+    """Which pool ids that swap are hooked pools that are not v4_pools rows (past their hook's cap, or pruned). One per
+    chain, kept by the Runner across loops. Swap pages never wait for it: a page counts the pools it can place (rows, and
+    `recent`: keys this process holds) and queues the other ids in pool_lookup_queue with the block range they were left
+    out of, in the page's transaction; ids in `absent` (known unhooked) are dropped. After the pages, `settle_queue`
+    works the queue: one HyperSync Initialize query by pool id (topic1) over [floor, newest owed block) per
+    `lookup_chunk` ids, at most the loop's budget of calls, checked before every call. A chunk cut by the budget records
+    how far each of its ids was scanned (`scanned`) and resumes there next loop; ids queued meanwhile wait for the next
+    chunk, so one scan of the range settles everything that arrived during the last one. An id found hooked waits in `held` until its owed swaps
+    are re-read (a Swap query by pool id over its range) and counted together with its queue delete; only then is it in
+    `recent`, which pages count from. An unhooked id is just deleted.
+
+    Before 2026-10-14 a page with unresolved ids was held until they were settled: on Base (~200 unknown ids per
+    200-block page, a [floor, page end) scan ~45 calls) that was ~100 blocks per loop against a 708K-block gap.
+    `absent` is only valid for the floor it was built with, so it is cleared when the floor moves down (a prune lowers it
+    to the oldest deleted pool: 44M blocks on BNB on 2026-10-10)."""
     RECENT_MAX = 50_000
     ABSENT_MAX = 1_000_000
+    MIN_CHUNK = 100                                     # a refused lookup halves the chunk down to this, then raises
 
     def __init__(self):
         self.recent: dict[str, dict] = {}
-        self.pending: dict[str, dict] = {}              # looked up for the page not yet committed
+        self.held: dict[str, dict] = {}                 # found hooked, owed swaps not counted yet
         self.absent: set[str] = set()
         self.absent_floor: int | None = None
         self.scanned: dict[str, int] = {}              # id -> block its scan reached when the budget cut the chunk
-        self.calls = 0                                  # this loop's lookup calls
+        self.chunk: int | None = None                   # lookup ids per query after a refusal (None: settings.lookup_chunk)
+        self.backfill_at: int | None = None             # swap cursor when it first reached the head, backfill not yet complete
+        self.calls = 0                                  # this loop's resolver calls (lookups and re-reads)
         self.asked = 0                                  # this loop's ids that needed a lookup
         self.chunk_calls = 0                            # this loop's most calls for one chunk
 
@@ -156,32 +168,55 @@ class PoolResolver:
     def start_loop(self) -> None:
         self.calls = self.asked = self.chunk_calls = 0
 
+    def set_floor(self, floor: int) -> None:
+        """Pages trust `absent`, so they call this first: a lower floor means an older range nobody was scanned for."""
+        if self.absent_floor is None or floor < self.absent_floor:
+            self.absent.clear()
+            self.scanned.clear()
+            self.absent_floor = floor
+        elif len(self.absent) > self.ABSENT_MAX:        # here, not mid-settle: decisions are used before they are dropped
+            self.absent.clear()
+
+    def known(self, pool_id: str) -> dict | None:
+        """The key of a hooked pool that is not a row, as far as this process can count it now (never a held one)."""
+        return self.recent.get(pool_id)
+
+    def found(self, pool_id: str) -> dict | None:
+        return self.held.get(pool_id) or self.recent.get(pool_id)
+
+    def settled(self, rows: dict[str, dict]) -> None:
+        """Their owed swaps are counted: from now on pages count them."""
+        self.remember(rows.values())
+        for i in rows:
+            self.held.pop(i, None)
+
     def _keep(self, got: dict, found: dict) -> None:
-        """What a scan found so far is kept even when the chunk is cut: pending for this page, recent across pages."""
-        self.pending.update(got)
-        self.remember(got.values())
+        """What a scan found so far is kept even when the chunk is cut."""
+        self.held.update(got)
         found.update(got)
         for i in got:
             self.scanned.pop(i, None)                   # a found id keeps no stale cursor
 
     def resolve(self, hs: HyperSync, chain: IndexedChain, ids, floor: int, to_block: int, settings: Settings,
                 budget: int | None = None) -> dict[str, dict]:
-        """-> {pool_id: v4_pools row} for the ids that are hooked pools. A swap at a block below to_block means the pool
-        was initialized below it, so one scan of [floor, to_block) settles every id it asked for."""
-        if self.absent_floor is None or floor < self.absent_floor:
-            self.absent.clear()
-            self.scanned.clear()                        # a lower floor means an unscanned older range for everyone
-            self.absent_floor = floor
-        found = {i: self.pending.get(i) or self.recent[i] for i in ids if i in self.pending or i in self.recent}
-        need = sorted(i for i in ids if i not in found and i not in self.absent)
+        """-> {pool_id: v4_pools row} for the ids that are hooked pools (new finds wait in `held`); the ids found unhooked
+        go to `absent`. A swap at a block below to_block means the pool was initialized below it, so one scan of
+        [floor, to_block) settles every id it asked for. A list of ids is asked in its order (the queue's: oldest owed
+        first, so a backlog is never starved by newer ids), a set in sorted order."""
+        self.set_floor(floor)
+        ids = ids if isinstance(ids, (list, tuple)) else sorted(ids)
+        found = {i: self.found(i) for i in ids if self.found(i) is not None}
+        need = [i for i in ids if i not in found and i not in self.absent]
         budget = settings.pool_lookups if budget is None else budget
+        size = self.chunk or settings.lookup_chunk
         self.asked += len(need)
         groups: dict[int, list[str]] = {}               # resume block -> ids; ids cut last loop carry on from their block
         for i in need:
             groups.setdefault(self.scanned.get(i, floor), []).append(i)
         for start_block, group in sorted(groups.items(), reverse=True):   # closest to done first: finishing frees ids
-            for k in range(0, len(group), settings.topic_chunk):
-                chunk, got, cur, start = group[k:k + settings.topic_chunk], {}, start_block, self.calls
+            for k in range(0, len(group), size):
+                chunk, got, cur, start = group[k:k + size], {}, start_block, self.calls
+                asked = set(chunk)
                 while cur < to_block:
                     if self.calls >= budget:
                         self._keep(got, found)
@@ -192,21 +227,32 @@ class PoolResolver:
                         left = sum(1 for i in need if i not in found and i not in self.absent)
                         raise LookupBudget(f"pool lookup budget spent ({self.calls} of {budget} calls), {left} ids left, "
                                            f"scan resumes at block {cur}")
-                    logs, blocks, _, nb, _ = page(hs.query(initialize_by_id_query(chain.pool_manager, cur, to_block, chunk)))
+                    try:
+                        res = hs.query(initialize_by_id_query(chain.pool_manager, cur, to_block, chunk))
+                    except HyperSyncRefused as e:
+                        self._keep(got, found)
+                        for i in chunk:
+                            if i not in got:
+                                self.scanned[i] = cur
+                        if len(chunk) <= self.MIN_CHUNK:
+                            raise
+                        self.chunk = max(self.MIN_CHUNK, len(chunk) // 2)   # the next loop asks in smaller chunks
+                        raise LookupBudget(f"HyperSync refused a {len(chunk)}-id lookup (HTTP {e.status}); lookups now go "
+                                           f"{self.chunk} ids per query") from e
+                    logs, blocks, _, nb, _ = page(res)
                     self.calls += 1
                     if nb is None or nb <= cur:
                         self._keep(got, found)                  # the chain errors this loop; what was found stays
                         raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={nb})")
                     for r in hooked_pools_from_page(chain.chain_id, logs, blocks):
-                        got[r["pool_id"]] = r
+                        if r["pool_id"] in asked:
+                            got[r["pool_id"]] = r
                     cur = nb
                 self.chunk_calls = max(self.chunk_calls, self.calls - start)
                 self._keep(got, found)
                 self.absent.update(i for i in chunk if i not in got)
                 for i in chunk:
                     self.scanned.pop(i, None)
-        if len(self.absent) > self.ABSENT_MAX:
-            self.absent.clear()
         return found
 
 
@@ -340,6 +386,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     swap_time = as_utc(state.swap_block_time)
     if swap_time is None and not state.backfilled and init_from > swap_from:
         swap_from, swap_time = _start_swap_phase(engine, chain, hs, swap_from, end, head, now)
+    swap_start = swap_from
     swap_end = min(init_from, end)      # never count swaps past the block our pool list is complete for
     with engine.connect() as conn:
         n_pools = store.pool_count(conn, chain.chain_id)
@@ -377,6 +424,8 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     else:
         st.mode = "hypersync/scan"
         budget = lookup_budget(settings, end - swap_from)
+        if floor is not None:
+            resolver.set_floor(floor)
         while swap_from < swap_end and st.pages < settings.max_pages and not stop():
             agg = SwapAgg()
             logs, blocks, txs, nb, _ = page(hs.query(swap_query(chain.pool_manager, swap_from, swap_end)))
@@ -392,25 +441,22 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             with engine.connect() as conn:
                 known = store.pools_by_id(conn, chain.chain_id, ids)
             late: dict[str, dict] = {}
+            owed: dict[str, tuple] = {}
             unknown = ids - set(known)
-            if floor is not None and unknown:      # some may be hooked pools past the cap: find their keys
-                calls, asked, units = resolver.calls, resolver.asked, hs.units
-                try:
-                    late = resolver.resolve(hs, chain, unknown, floor, nb, settings, budget)
-                except LookupBudget as e:
-                    log.info("chain=%s %s; the swap page at block %d waits for the next loop", chain.slug, e, swap_from)
-                    break
-                finally:
-                    if resolver.asked > asked:
-                        log.info("chain=%s swap page %d-%d unknown=%d lookups: ids=%d calls=%d (loop %d of %d) units=%d left=%s",
-                                 chain.slug, swap_from, nb, len(unknown), resolver.asked - asked, resolver.calls - calls,
-                                 resolver.calls, budget, hs.units - units, hs.remaining if hs.remaining is not None else "?")
+            if floor is not None and unknown:      # some may be hooked pools past the cap: count the ones we hold, owe the rest
+                late = {i: resolver.known(i) for i in unknown if resolver.known(i) is not None}
+                owed = owed_ranges(logs, blocks, unknown - set(late) - resolver.absent, swap_from, nb)
                 known.update({p: (r["currency0"], r["currency1"]) for p, r in late.items()})
+                if owed:
+                    st.queued += len(owed)
+                    log.info("chain=%s swap page %d-%d unknown=%d late=%d queued=%d", chain.slug, swap_from, nb, len(unknown),
+                             len(late), len(owed))
             aggregate_swaps(chain, logs, blocks, txs, known, prices, agg)
             rows, adds = _admit_late(engine, chain, late, agg, settings, st) if late else ([], {})
-            swap_time = _commit_swaps(engine, chain, agg, swap_from, nb, head, st, rows, adds) or swap_time
-            resolver.pending.clear()
+            swap_time = _commit_swaps(engine, chain, agg, swap_from, nb, head, st, rows, adds, owed) or swap_time
             swap_from = nb
+        if not stop():
+            settle_queue(engine, chain, hs, prices, settings, resolver, floor, swap_from, head, budget, st, stop)
 
     if swap_from >= end and (swap_time is None or now - swap_time > ANCHOR_MAX_AGE):
         ts = hs.block_timestamp(swap_from - 1)
@@ -420,10 +466,25 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     st.lookups, st.unknown, st.chunk_calls = resolver.calls, resolver.asked, resolver.chunk_calls
     st.init_lag = max(end - init_from, 0)
     st.swap_lag = max(end - swap_from, 0)
+    if swap_from - swap_start > 0 and end - swap_start > LOOKUP_CATCHUP_LAG:     # catching up: say how fast, per loop
+        log.info("chain=%s swap catch-up: block %d -> %d (+%d in %d pages), %d behind, lookup queue %d ids",
+                 chain.slug, swap_start, swap_from, swap_from - swap_start, st.pages, st.swap_lag, st.backlog)
     if not state.backfilled and init_from >= end and swap_from >= end:
-        with engine.begin() as conn:
-            store.set_state(conn, chain.chain_id, backfilled=True, head_block=head)
-        log.info("chain=%s backfill complete at block %d", chain.slug, end - 1)
+        # Complete means every swap up to where the cursor first reached the head is counted: none of them still owed to
+        # the lookup queue. Ids queued at the live edge after that do not count (on Base a scan spans several loops, so
+        # the queue is rarely empty); the nightly step checks those per day (onchain.owed_before).
+        if resolver.backfill_at is None:
+            resolver.backfill_at = swap_from
+        with engine.connect() as conn:
+            backlog, oldest = store.lookup_backlog(conn, chain.chain_id)
+        if oldest is None or oldest >= resolver.backfill_at:
+            with engine.begin() as conn:
+                store.set_state(conn, chain.chain_id, backfilled=True, head_block=head)
+            resolver.backfill_at = None
+            log.info("chain=%s backfill complete at block %d", chain.slug, end - 1)
+        else:
+            log.info("chain=%s swap cursor at the head; backfill completes once the lookup queue settles the ids owed from "
+                     "before block %d (%d queued, oldest from block %d)", chain.slug, resolver.backfill_at, backlog, oldest)
     return st
 
 
@@ -455,20 +516,125 @@ def _admit_late(engine: sa.Engine, chain: IndexedChain, late: dict[str, dict], a
 
 
 def _commit_swaps(engine: sa.Engine, chain: IndexedChain, agg: SwapAgg, expected: int, cursor: int, head: int,
-                  st: ChainStats, late=(), hook_adds: dict | None = None) -> datetime | None:
-    """late: pools past their hook's cap admitted as rows in this page (sampled); hook_adds: hook_pool_counts increments.
-    Both are written with the page, after the CAS."""
+                  st: ChainStats, late=(), hook_adds: dict | None = None, owed: dict | None = None) -> datetime | None:
+    """late: pools past their hook's cap admitted as rows in this page (sampled); hook_adds: hook_pool_counts increments;
+    owed: ids whose swaps this page left out, queued for the resolver. All written with the page, after the CAS."""
     block_time = utc(agg.seen_ts) if agg.seen_ts else None
     with engine.begin() as conn:
         store.advance_swap_cursor(conn, chain.chain_id, expected, cursor, head, block_time)   # first: a loser fails before writing
-        store.insert_late_pools(conn, list(late))
-        store.add_hook_usage(conn, chain.chain_id, hook_adds or {})
-        store.apply_swaps(conn, chain.chain_id, agg.daily, agg.wallets)
+        store.queue_lookups(conn, chain.chain_id, owed or {})
+        _write_counts(conn, chain, agg, late, hook_adds)
+    _count(st, agg, late, hook_adds)
+    return block_time
+
+
+def _write_counts(conn: sa.Connection, chain: IndexedChain, agg: SwapAgg, late, hook_adds: dict | None) -> None:
+    store.insert_late_pools(conn, list(late))
+    store.add_hook_usage(conn, chain.chain_id, hook_adds or {})
+    store.apply_swaps(conn, chain.chain_id, agg.daily, agg.wallets)
+
+
+def _count(st: ChainStats, agg: SwapAgg, late, hook_adds: dict | None) -> None:
     st.late += len(late)
     st.folded += sum(a[1] for a in (hook_adds or {}).values())
     st.swaps += agg.swaps
     st.unpriced += agg.unpriced
-    return block_time
+
+
+def owed_ranges(logs: list[dict], blocks: dict[int, int], ids, frm: int, to: int) -> dict[str, tuple]:
+    """Ids among `ids` that swapped in this page [frm, to) -> (frm, to, block time of their first swap here)."""
+    ids, first = set(ids), {}
+    for lg in logs:
+        s = decode_swap(lg)
+        if s and s["pool_id"] in ids:
+            ts, had = blocks.get(num(lg.get("block_number"))), first.get(s["pool_id"])
+            if s["pool_id"] not in first or (ts is not None and (had is None or ts < had)):
+                first[s["pool_id"]] = ts
+    return {p: (frm, to, utc(t) if t is not None else None) for p, t in first.items()}
+
+
+def settle_queue(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices: PriceBook | None, settings: Settings,
+                 resolver: PoolResolver, floor: int | None, cursor: int, head: int, budget: int, st: ChainStats,
+                 stop=lambda: False) -> None:
+    """Work the lookup queue after the swap pages. Ids decided in earlier loops settle first (their re-reads are a few
+    calls, never cut by the budget, so a found pool cannot starve behind new lookups); then lookups spend what is left of
+    the budget on the rest, one scan of [floor, newest owed block) per `lookup_chunk` ids; then what they decided settles."""
+    with engine.connect() as conn:
+        queue = store.queued_lookups(conn, chain.chain_id)
+    if not queue:
+        return
+    if floor is None:        # no hook past the cap: every hooked pool is a row, so no queued id can be one
+        with engine.begin() as conn:
+            store.settle_lookups(conn, chain.chain_id, list(queue))
+        return
+    calls, asked, units, n0 = resolver.calls, resolver.asked, hs.units, len(queue)
+    hooked, unhooked = _settle_decided(engine, chain, hs, prices, settings, resolver, queue, cursor, head, st, stop)
+    cut = None
+    if queue and not stop():
+        try:
+            resolver.resolve(hs, chain, list(queue), floor, max(s_ for _, s_ in queue.values()), settings, budget)
+        except LookupBudget as e:
+            cut = e
+        h2, u2 = _settle_decided(engine, chain, hs, prices, settings, resolver, queue, cursor, head, st, stop)
+        hooked, unhooked = hooked + h2, unhooked + u2
+    st.backlog = len(queue)
+    log.info("chain=%s lookup queue %d -> %d ids: settled hooked=%d unhooked=%d owed_swaps=%d, asked=%d calls=%d of %d "
+             "units=%d left=%s%s", chain.slug, n0, len(queue), hooked, unhooked, st.owed, resolver.asked - asked,
+             resolver.calls - calls, budget, hs.units - units, hs.remaining if hs.remaining is not None else "?",
+             f"; {cut}" if cut else "")
+
+
+def _settle_decided(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices: PriceBook | None, settings: Settings,
+                    resolver: PoolResolver, queue: dict[str, tuple[int, int]], cursor: int, head: int, st: ChainStats,
+                    stop) -> tuple[int, int]:
+    """Settle the queued ids the resolver has decided; they leave `queue`. -> (hooked settled, unhooked settled).
+    Unhooked: deleted, nothing owed. Hooked: their swaps in [from_block, seen_block) are re-read by pool id and counted
+    (late row or the hook's aggregate pool, as on a page) in one transaction with their delete, behind a compare-and-set
+    on the unchanged swap cursor: the ranges were read against it, and a second process would have moved it."""
+    gone = [i for i in queue if i in resolver.absent]
+    if gone:
+        with engine.begin() as conn:
+            store.settle_lookups(conn, chain.chain_id, gone)
+        for i in gone:
+            del queue[i]
+    found = {i: resolver.found(i) for i in queue if resolver.found(i) is not None}
+    ids = sorted(found)
+    size = min(resolver.chunk or settings.lookup_chunk, settings.topic_chunk)   # Swap queries by id: the proven topic size
+    hooked = 0
+    for k in range(0, len(ids), size):
+        if stop():
+            break
+        chunk = {i: found[i] for i in ids[k:k + size]}
+        known = {i: (r["currency0"], r["currency1"]) for i, r in chunk.items()}
+        agg, lo, hi = SwapAgg(), min(queue[i][0] for i in chunk), max(queue[i][1] for i in chunk)
+        cur = lo
+        while cur < hi:
+            logs, blocks, txs, nb, _ = page(hs.query(swap_query(chain.pool_manager, cur, hi, sorted(chunk))))
+            resolver.calls += 1
+            if nb is None or nb <= cur:
+                raise RuntimeError(f"HyperSync made no progress at block {cur} (next_block={nb})")
+            nb = min(nb, hi)
+            mine = []                                   # each id's own range only: outside it its swaps were counted
+            for lg in logs:
+                s = decode_swap(lg)
+                b = num(lg.get("block_number"))
+                if s and s["pool_id"] in chunk and b is not None and queue[s["pool_id"]][0] <= b < queue[s["pool_id"]][1]:
+                    mine.append(lg)
+            aggregate_swaps(chain, mine, blocks, txs, known, prices, agg)
+            cur = nb
+        rows, adds = _admit_late(engine, chain, chunk, agg, settings, st)
+        with engine.begin() as conn:
+            store.advance_swap_cursor(conn, chain.chain_id, cursor, cursor, head)     # first: a loser fails before writing
+            if store.settle_lookups(conn, chain.chain_id, chunk) != len(chunk):
+                raise store.CursorMoved(f"chain_id={chain.chain_id}: lookup queue rows settled by another process")
+            _write_counts(conn, chain, agg, rows, adds)
+        _count(st, agg, rows, adds)
+        st.owed += agg.swaps
+        resolver.settled(chunk)
+        for i in chunk:
+            del queue[i]
+        hooked += len(chunk)
+    return hooked, len(gone)
 
 
 # ---------------------------------------------------------------- RPC fallback (no token)

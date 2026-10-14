@@ -69,6 +69,7 @@ hooks = sa.Table(
     sa.Column("is_proxy", sa.Boolean),         # from the bytecode (EIP-1967 slot / EIP-1167 clone) or explorer; NULL = unknown
     sa.Column("proxy_kind", sa.Text),          # eip1167 | eip1967 | explorer | unknown; an eip1167 clone's hash is evidence
     sa.Column("pools_total", sa.BigInteger),   # every pool initialized through it (step onchain, 0013); NULL = not indexed
+    sa.Column("code_shape", sa.Text),          # rules.code_shape: bytecode with immutables zeroed; same-chain template family (0014)
     sa.Column("project_id", sa.Integer, sa.ForeignKey("projects.id"), index=True),
     sa.Column("first_seen_at", TS, nullable=False),
 )
@@ -336,6 +337,19 @@ hook_pool_counts = sa.Table(
     sa.Column("volume_usd_total", sa.Float, nullable=False, server_default="0"),
 )
 
+# Pool ids a committed swap page could not place (not v4_pools rows, not known unhooked; 0015). Their swaps in
+# [from_block, seen_block) were left out of pool_daily_onchain and are owed until the indexer's resolver settles the id:
+# a hooked pool past its hook's cap gets those swaps re-read and counted, an unhooked pool is just deleted. from_time =
+# block time of the first swap left out: a day before it is final for every pool (nightly step onchain, ready_chains).
+pool_lookup_queue = sa.Table(
+    "pool_lookup_queue", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("from_block", sa.BigInteger, nullable=False),
+    sa.Column("seen_block", sa.BigInteger, nullable=False),
+    sa.Column("from_time", TS),
+)
+
 # One pool id per capped hook for the swaps of its pools that are not rows. Never a real pool id (0x + 64 hex); the step
 # onchain gives it a pools row so its per-day usage reaches the hook's project; per-pool web lists skip it.
 HOOK_POOL_PREFIX = "hook:"
@@ -413,6 +427,7 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("project_daily", "wash_reason", "text"),
     ("v4_pools", "sampled", "boolean NOT NULL DEFAULT false"),
     ("hooks", "pools_total", "bigint"),
+    ("hooks", "code_shape", "text"),
 ]
 
 

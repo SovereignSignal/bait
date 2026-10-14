@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef } from "react";
 import { CHAINS } from "@/lib/chains";
-import { feedQs, parseFeedQuery } from "@/lib/feed";
+import { feedHrefAt, parseFeedQuery } from "@/lib/feed";
 import type { ChainId } from "@/lib/types";
 import { Mark, SearchIcon } from "./Icons";
 import { useTerminal } from "./TerminalProvider";
@@ -43,6 +43,24 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
     if (t.focusTick > 0) input.current?.focus();
   }, [t.focusTick]);
 
+  // The box is uncontrolled: hydration never writes it, so letters typed while the page was still loading stay put.
+  // The first run hands them on as if just typed; later runs copy outside changes in (Clear, a 404 page's guess).
+  const adopted = useRef(false);
+  const { q, setQ } = t;
+  useEffect(() => {
+    const el = input.current;
+    if (!el) return;
+    if (!adopted.current) {
+      adopted.current = true;
+      if (el.value && el.value !== q) {
+        setQ(el.value);
+        if (!onTerminal && el.value.trim()) router.push(`/${window.location.search}`);
+        return;
+      }
+    }
+    if (el.value !== q) el.value = q;
+  }, [q, setQ, onTerminal, router]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -75,7 +93,6 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
         <input
           ref={input}
           type="search"
-          value={t.q}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== "Enter") return;
@@ -83,8 +100,8 @@ export function TopBar({ chains }: { chains: ChainId[] }) {
               e.preventDefault();
               router.push(t.topMatch);
               input.current?.blur();
-            } else if (/^0x/i.test(t.q.trim())) {
-              pendingEnter.current = true; // the address index may still be loading: go when the match appears
+            } else if (t.q.trim()) {
+              pendingEnter.current = true; // the rows or the address index may still be loading: go when the match appears
             }
           }}
           placeholder="Search hooks or 0x…"
@@ -132,8 +149,10 @@ function ChainSelect({ chains }: { chains: ChainId[] }) {
       value={value}
       onChange={(slug) => {
         const chain = Object.values(CHAINS).find((c) => c.slug === slug)?.id;
-        const base = pathname?.startsWith("/p/") ? pathname : "/";
-        router.push(`${base}${feedQs({ ...q, chain })}`);
+        const href = feedHrefAt(pathname, { ...q, chain });
+        // On the terminal the list and movers filter on the client: move the URL, skip the server round trip.
+        if (isTerminalPath(pathname)) window.history.pushState(null, "", href);
+        else router.push(href);
       }}
     />
   );

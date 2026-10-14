@@ -1,7 +1,7 @@
 // Right column: pool action card (links out to Uniswap), buys vs sells, hook facts.
 import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
-import { pace, walletsText } from "@/lib/present";
+import { pace, tradePool, walletsText } from "@/lib/present";
 import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
 import { WatchStar } from "./WatchStar";
@@ -19,7 +19,7 @@ function Token({ sym }: { sym: string }) {
 }
 
 export function TradePanel({ p }: { p: ProjectDetail }) {
-  const pool = p.pools.find((x) => knownChain(x.chainId)) ?? null;
+  const pool = tradePool(p.pools, p.topPool);
   const hookProps = (addr: string | null | undefined) => p.hooks.find((h) => h.address.toLowerCase() === (addr ?? "").toLowerCase())?.properties ?? {};
   const top = pool
     ? { poolId: pool.poolId, chainId: pool.chainId, s0: pool.token0Symbol, s1: pool.token1Symbol, fee: feeLabel(pool.fee), hook: pool.hookAddress, eligibility: pool.eligibility, tvlUsd: pool.tvlUsd as number | null }

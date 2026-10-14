@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
-from bait.rules import (corroborated, is_symmetric, is_wash_24h, is_wash_7d, is_wash_no_liquidity, is_wash_vol_tvl, vol_tvl,
+from bait.rules import (corroborated, is_symmetric, is_uniform, is_wash_24h, is_wash_7d, is_wash_no_liquidity, is_wash_vol_tvl, vol_tvl,
                         wallets_lower_bound)
 from bait.rules import eligibility, flags_from_address, is_dynamic_fee, is_new, is_spam, normalize_name, routable, score_trending, slugify
 
@@ -251,3 +251,21 @@ def test_symmetric_needs_repeated_round_trips_or_several_wallets():
     assert not is_symmetric([(50_000.0, 2, 2)] * 4, 190_000)         # four wallets, two round trips each
     assert is_symmetric([(50_000.0, 3, 3)] * 2, 90_000)              # three round trips each
     assert is_symmetric([(20_000.0, 1, 1)] * 5, 190_000)             # five wallets
+
+
+def test_uniform_flags_one_size_fresh_wallets():
+    # Hookr MOW/WETH 10/13: top 10 each one buy of $22,450-$22,515; $17.1M from 809 wallets in 24h
+    top = [(22_515 - i * 7, 1, 0) for i in range(10)]
+    assert is_uniform(top, 17_100_000, 809)
+    # sells of the same size count too
+    assert is_uniform([(22_500 - i * 5, i % 2, 1 - i % 2) for i in range(10)], 17_100_000, 809)
+
+
+def test_uniform_spares_a_buy_cap_launch_and_real_trading():
+    capped = [(5_000, 1, 0)] * 10
+    assert not is_uniform(capped, 2_000_000, 2_000)          # $1K per wallet: the cap is the top, not the pool
+    assert not is_uniform([(22_500 * (1 + i / 10), 1, 0) for i in range(10)], 17_100_000, 809)   # sizes spread out
+    assert not is_uniform([(22_500, 2, 1)] * 10, 17_100_000, 809)                                 # repeat traders
+    assert not is_uniform([(22_500, 1, 0)] * 7, 17_100_000, 809)                                  # too few to be a pattern
+    assert not is_uniform([(22_500, 1, 0)] * 10, 900_000, 40)                                     # under $1M
+    assert not is_uniform([(22_500, 1, 0)] * 10, 17_100_000, None)                                # wallets unknown

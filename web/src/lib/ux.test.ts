@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clip, dayLabel, deltaWords, fmtDelta, nextDigestDay, NONE, usd, usdWhole } from "./format";
-import { activePool, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric } from "./present";
+import { activePool, dayWindow, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric, seriesLabels } from "./present";
 import { emptyCopy, moversFor, searchRows } from "./feed";
-import { liveDotOn, tradesNote } from "./trades";
+import { indexerLine, liveDotOn, quietNote, tradesNote } from "./trades";
 import { respond, respondJson } from "./http";
 import { gunzipSync } from "node:zlib";
 import { loadHookIndex, resetHookIndex } from "./hook-index";
@@ -23,8 +23,8 @@ test("clip: word boundary, ellipsis only when cut", () => {
   assert.ok(c.endsWith("…") && c.length <= 40 && long[c.length - 1] === " ");
   assert.equal(clip("x".repeat(100), 10), "x".repeat(9) + "…");
 });
-test("rowMetric: 24h only when asked for and known", () => {
-  assert.deepEqual(rowMetric({ vol24h: 5, vol7d: 70 }, true), { v: 5, win: "24h" });
+test("rowMetric: the closed day only when asked for and known", () => {
+  assert.deepEqual(rowMetric({ vol24h: 5, vol7d: 70 }, true), { v: 5, win: "1d" });
   assert.deepEqual(rowMetric({ vol24h: null, vol7d: 70 }, true), { v: 70, win: "7d" });
   assert.deepEqual(rowMetric({ vol24h: 5, vol7d: 70 }, false), { v: 70, win: "7d" });
 });
@@ -36,7 +36,7 @@ test("moversFor: chain filter first, then the cap, order kept", () => {
 test("rowLabel reads rank, name, category, chain, window, direction", () => {
   const r = { name: "StablePairHook", category: "dynamic-fee" as const, chains: [1 as const], isNew: false, vol7d: 10_600_000, vol7dPrev: 1_000_000 };
   assert.equal(rowLabel(r, 1, { v: r.vol7d, win: "7d" }), "#1 StablePairHook, Dynamic fee on Ethereum, $10.6M 7-day volume, up 960 percent");
-  assert.equal(rowLabel({ ...r, isNew: true, category: "other" }, undefined, { v: 5000, win: "24h" }), "StablePairHook, Ethereum, $5K 24-hour volume, new");
+  assert.equal(rowLabel({ ...r, isNew: true, category: "other" }, undefined, { v: 5000, win: "1d" }), "StablePairHook, Ethereum, $5K 1-day volume, new");
 });
 test("emptyCopy names the filter that matched nothing", () => {
   assert.equal(emptyCopy({ tab: "new", category: "launchpad", chain: 8453 }), "No new Launchpad hooks on Base.");
@@ -48,6 +48,24 @@ test("tradesNote separates nothing-traded from feed-unavailable", () => {
   assert.equal(tradesNote("rate_limited", 0), "Trade feed unavailable, retrying in 60s.");
   assert.equal(tradesNote("unknown_pool", 0), "No live trade data for this pool.");
   assert.equal(tradesNote("upstream_error", 3), null);
+  assert.equal(tradesNote("timeout", 0), "Trade feed did not answer, retrying in 60s.");   // never "Loading…" forever
+});
+
+test("quietNote names the newest trade's age once the feed has gone an hour without one", () => {
+  const now = Date.parse("2026-10-14T02:00:00Z");
+  // Hookr MOW/WETH on Robinhood 10/14: GeckoTerminal's newest trade over $10 was 15:52 the day before
+  const quiet = [{ ts: "2026-10-13T15:44:33Z" }, { ts: "2026-10-13T15:52:49Z" }];
+  assert.equal(quietNote(quiet, now), "No trades over $10 in the last hour; the newest is 10h old.");
+  assert.equal(quietNote([{ ts: "2026-10-14T01:30:00Z" }, ...quiet], now), null);
+  assert.equal(quietNote([], now), null);
+  assert.equal(liveDotOn("ok", quiet, now), false);
+});
+
+test("indexerLine shows the pool's closed-day figure, or nothing without one", () => {
+  assert.equal(indexerLine({ vol24h: 17_100_000, wallets24h: 809, walletsExact: true }), "Indexer, last closed day: $17.1M from 809 wallets in this pool.");
+  assert.equal(indexerLine({ vol24h: 292_000, wallets24h: 41, walletsExact: false }), "Indexer, last closed day: $292K from up to 41 wallets in this pool.");
+  assert.equal(indexerLine({ vol24h: 5_000, wallets24h: null, walletsExact: true }), "Indexer, last closed day: $5K in this pool.");
+  assert.equal(indexerLine({ vol24h: null, wallets24h: 3, walletsExact: true }), null);
 });
 
 test("a week-over-week change past +999% reads >999%, in tiles and in prose", () => {
@@ -152,4 +170,21 @@ test("route responses are gzipped when accepted and worth it, plain otherwise", 
   assert.equal(respond(req("gzip"), "tiny", { headers: {} }).headers.get("content-encoding"), null);
   assert.equal(respond(req("gzip"), big, { status: 404, headers: {} }).status, 404);
   assert.equal(respondJson(req(), { a: 1 }).headers.get("content-type"), "application/json");
+});
+
+// Aegis USDC/USD₮0 on Ink, 2026-10-13 evening PT: Bait $292.3K (UTC day Oct 12; on-chain $292.8K) vs the Uniswap app's
+// "$35.8K Past day" (rolling, mostly Oct 13). Same pool, different windows: the label must name the day.
+test("dayWindow names the closed UTC day and says how the Uniswap app's Past day differs", () => {
+  const w = dayWindow("2026-10-12");
+  assert.equal(w.short, "Oct 12");
+  assert.match(w.note, /^Oct 12, 00:00 to 24:00 UTC\. The Uniswap app's "Past day" is the 24 hours before you look/);
+  assert.equal(dayWindow(null).short, "1d");
+  assert.ok(!/24h/.test(dayWindow(null).short + dayWindow("2026-10-12").short));
+});
+test("seriesLabels date every bar back from the closed day, across a month boundary; relative when the day is unknown", () => {
+  const l = seriesLabels(14, "2026-10-12");
+  assert.equal(l.length, 14);
+  assert.deepEqual([l[0], l[2], l[3], l[13]], ["Sep 29", "Oct 1", "Oct 2", "Oct 12"]);
+  assert.deepEqual(seriesLabels(3, null), ["3d ago", "2d ago", "1d ago"]);
+  assert.ok(!seriesLabels(14, "2026-10-12").some((x) => /yesterday/i.test(x)));
 });

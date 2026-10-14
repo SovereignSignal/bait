@@ -27,6 +27,9 @@ export const TABS: Array<[Tab, string]> = [
   ["all", "All"],
 ];
 
+/** Visible label in the 320 px list column, where the full names plus the star need ~318 px of ~294; the full name stays the accessible name. */
+export const TAB_SHORT: Partial<Record<Tab, string>> = { verified: "In app" };
+
 export interface HookFlags {
   beforeInitialize: boolean;
   afterInitialize: boolean;
@@ -201,7 +204,7 @@ export interface ProjectSummary {
   isSpam: boolean;
   /** wash-like volume: listed in All and on its page with a badge, never in Trending, New, movers or Leaders */
   isWash: boolean;
-  /** comma list of reasons: 24h, 7d, vol_tvl, no_liquidity, symmetric */
+  /** comma list of reasons: 24h, 7d, concentrated, vol_tvl, no_liquidity, symmetric, uniform, unverified */
   washReason: string | null;
   scoreTrending: number;
   /** 1-based trending rank, set when listing the Trending tab */
@@ -217,6 +220,9 @@ export interface ProjectDetail extends ProjectSummary {
   series: (number | null)[];
   /** top wallets across the project's pools, latest pool_top_wallets day; project page only */
   topWallets: WalletView[];
+  /** YYYY-MM-DD: the closed UTC day the series, the pools' day volume and the day's wallets/swaps end on (the latest
+   * run's day - 1); project page only, absent in fixtures */
+  through?: string | null;
 }
 
 /** The light row the terminal list, movers and client search work from. */
@@ -238,7 +244,6 @@ export interface RowView {
   vol24h: number | null;
   tvlUsd: number;
   routable: Eligibility;
-  audited: boolean;
   rank?: number;
 }
 

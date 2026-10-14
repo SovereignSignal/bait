@@ -24,7 +24,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from .logsetup import configure
-from .rules import (code_hash as canonical_code_hash, flags_from_address, is_wash_24h, normalize_name, proxy_kind, routable,
+from .rules import (code_hash as canonical_code_hash, code_shape, flags_from_address, is_wash_24h, normalize_name, proxy_kind, routable,
                     score_trending, slugify, wallets_lower_bound)
 
 GT = "https://api.geckoterminal.com/api/v2"
@@ -371,18 +371,15 @@ def code_hashes(http: Http, addrs_by_net: dict[str, set[str]]) -> dict[tuple[str
     return out
 
 
-def code_facts(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | None = None,
-               max_fail: int = 3) -> dict[tuple[str, str], tuple[str, str | None] | None]:
-    """(canonical code_hash, proxy kind or None) per (net, address) from eth_getCode, 10 per batch. None = the RPC answered with no
-    code (a definitive miss); absent = not answered (retry later). A chain stops after max_fail consecutive unanswered
-    batches; everything stops at `deadline` (time.monotonic())."""
-    out: dict[tuple[str, str], tuple[str, bool] | None] = {}
+def _codes(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | None, max_fail: int, what: str):
+    """Yield (net, address, runtime hex) from eth_getCode, 10 per batch; unanswered addresses are not yielded. A chain
+    stops after max_fail consecutive unanswered batches; everything stops at `deadline` (time.monotonic())."""
     for net, addrs in addrs_by_net.items():
-        addrs, rpc, fails = sorted(addrs), CHAINS[net][3], 0
+        addrs, rpc, fails, got = sorted(addrs), CHAINS[net][3], 0, 0
         for k in range(0, len(addrs), 10):
             if deadline is not None and time.monotonic() > deadline:
-                log(f"code facts: time budget spent, {CHAINS[net][1]} and later chains wait for the next run")
-                return out
+                log(f"{what}: time budget spent, {CHAINS[net][1]} and later chains wait for the next run")
+                return
             chunk = addrs[k:k + 10]
             calls = [{"jsonrpc": "2.0", "id": i, "method": "eth_getCode", "params": [a, "latest"]} for i, a in enumerate(chunk)]
             res = {r.get("id"): r for r in http.rpc_batch(rpc, calls) if isinstance(r, dict)}
@@ -397,11 +394,27 @@ def code_facts(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | 
                 r = res.get(i)
                 if r is None or "error" in r:
                     continue
-                code = r.get("result")
-                h = canonical_code_hash(code) if isinstance(code, str) else None
-                out[(net, a)] = (h, proxy_kind(code)) if h else None
-        log(f"{CHAINS[net][1]}: code facts for {sum(1 for a in addrs if (net, a) in out)}/{len(addrs)} hooks")
+                got += 1
+                yield net, a, r.get("result")
+        log(f"{CHAINS[net][1]}: {what} for {got}/{len(addrs)} hooks")
+
+
+def code_facts(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | None = None,
+               max_fail: int = 3) -> dict[tuple[str, str], tuple[str, str | None] | None]:
+    """(canonical code_hash, proxy kind or None) per (net, address) from eth_getCode, 10 per batch. None = the RPC answered with no
+    code (a definitive miss); absent = not answered (retry later). A chain stops after max_fail consecutive unanswered
+    batches; everything stops at `deadline` (time.monotonic())."""
+    out: dict[tuple[str, str], tuple[str, bool] | None] = {}
+    for net, a, code in _codes(http, addrs_by_net, deadline, max_fail, "code facts"):
+        h = canonical_code_hash(code) if isinstance(code, str) else None
+        out[(net, a)] = (h, proxy_kind(code)) if h else None
     return out
+
+
+def code_shapes(http: Http, addrs_by_net: dict[str, set[str]], deadline: float | None = None,
+                max_fail: int = 3) -> dict[tuple[str, str], str | None]:
+    """rules.code_shape per (net, address); None = the RPC answered with no code, absent = not answered."""
+    return {(net, a): code_shape(code) if isinstance(code, str) else None for net, a, code in _codes(http, addrs_by_net, deadline, max_fail, "code shapes")}
 
 
 def fetch_daily(http: Http, net: str, pool_id: str, limit: int = 15) -> list[tuple[int, float]] | None:

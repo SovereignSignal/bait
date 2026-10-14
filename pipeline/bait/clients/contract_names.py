@@ -8,7 +8,9 @@ Returns None when no source has verified code. Unverified contracts have no name
 from __future__ import annotations
 
 import threading
+import time
 from collections import Counter
+from urllib.parse import urlsplit
 from typing import NamedTuple
 
 import httpx
@@ -18,6 +20,10 @@ from ..rules import GENERIC, useful_name  # noqa: F401  re-exported; the list li
 from . import http
 
 ROUTESCAN_CHAINS = {43114}
+# Sourcify answers 429 after a burst of ~50-120 requests (measured 2026-10-13: every night 280 of 400 lookups failed
+# with six workers), and sustains 4+ requests a second. Space its calls; a 429 waits and asks again before it counts.
+PACE_S = {"sourcify.dev": 0.25}
+RETRY_429_S = (2.0, 5.0)
 
 
 class Found(NamedTuple):
@@ -58,6 +64,7 @@ class ContractNames:
         self.key = blockscout_key
         self.outcomes: Counter = Counter()        # "source:hit|miss|error|skipped|bad_payload", logged per run
         self._lock = threading.Lock()
+        self._next: dict[str, float] = {}         # host -> earliest time.monotonic() of its next call
 
     @classmethod
     def from_env(cls, http_client=None):
@@ -93,8 +100,25 @@ class ContractNames:
             raise LookupTransient(f"{chain_id}:{address}")
         return Found(*fallback, proxy) if fallback else None
 
+    def _pace(self, host: str) -> None:
+        gap = PACE_S.get(host)
+        if not gap:
+            return
+        with self._lock:                                 # reserve a slot; workers then sleep outside the lock
+            now = time.monotonic()
+            at = max(now, self._next.get(host, 0.0))
+            self._next[host] = at + gap
+        if at > now:
+            time.sleep(at - now)
+
     def _get(self, url: str, params: dict | None = None) -> dict | None:
-        r = self.c.get(url, params=params or {})
+        host = urlsplit(url).hostname or ""
+        for wait in (*RETRY_429_S, None):
+            self._pace(host)
+            r = self.c.get(url, params=params or {})
+            if r.status_code != 429 or wait is None:
+                break
+            time.sleep(wait)
         if r.status_code == 429 or r.status_code >= 500:
             raise _Transient(r.status_code)
         if r.status_code != 200:

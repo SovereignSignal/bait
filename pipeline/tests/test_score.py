@@ -48,7 +48,7 @@ def test_score_hand_computed(conn, ctx):
     assert d.is_new is False           # pipeline first saw it 3d ago, but its pool is 60d old: not new
     assert d.is_spam is False
     assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_24h": 0, "wash_7d": 0,
-                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_unverified": 0,
+                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_uniform": 0, "wash_unverified": 0,
                    "wash_concentrated": 0}
 
 
@@ -438,6 +438,18 @@ def test_rescoring_a_past_day_does_not_depend_on_indexer_freshness_now(conn, ctx
     ctx.now = NOW + timedelta(days=5)            # updated_at (NOW) is now days stale
     score.run(conn, ctx)
     assert first == "7d,concentrated,vol_tvl" and daily(conn, wash).wash_reason == first
+
+
+def test_rescoring_a_past_day_waits_for_swaps_the_indexer_still_owes_for_it(conn, ctx):
+    _optimism_ready(conn)
+    ctx.now = NOW + timedelta(days=5)            # a re-score: the past-day path, not ready_chains
+    end = DAY - timedelta(days=1)
+    owed_from = datetime.combine(end, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=12)
+    conn.execute(sa.insert(db.pool_lookup_queue).values(chain_id=10, pool_id="0x" + "9" * 64, from_block=1, seen_block=2,
+                                                        from_time=owed_from))
+    assert 10 not in score._ready(conn, ctx, end)
+    conn.execute(sa.delete(db.pool_lookup_queue))
+    assert 10 in score._ready(conn, ctx, end)
 
 
 def test_pruned_wallet_rows_are_unknown_not_zero_wallets(conn, ctx):

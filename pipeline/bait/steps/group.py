@@ -1,6 +1,7 @@
 """Step 4 (group): hooks -> projects. Rule 1 hooklist name (generic names excluded; a same-chain verified-name project
-is adopted only with evidence), rule 2 code_hash or deployer, rule 3 Claude for the long tail. Flagged hooks are
-regrouped first; moved and renamed projects leave aliases. is_factory when a project has > 20 hooks."""
+is adopted only with evidence), rule 2 code_hash or deployer, rule 2b bytecode template (code_shape) on one chain, rule 3
+Claude for the long tail, rule 4 one team's projects (shared name stem plus a shared signal). Flagged hooks are regrouped
+first; moved and renamed projects leave aliases. is_factory when a project has > 20 hooks."""
 from __future__ import annotations
 
 import os
@@ -9,7 +10,8 @@ import time
 import sqlalchemy as sa
 
 from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow
-from ..rules import SHARED_DEPLOYERS, code_evidence, merge_evidence, normalize_name, proxy_flag, slugify, useful_name
+from ..rules import (SHARED_DEPLOYERS, audit_key, code_evidence, deployment_words, merge_evidence, name_stem, normalize_name,
+                     proxy_flag, shape_evidence, slugify, stem_root, team_links, team_name, useful_name)
 from . import RunContext, log
 from .names import add_alias, backfill_unlisted_aliases, detach_project, hook_rows, retire_project, unique_slug
 
@@ -19,7 +21,7 @@ FACTORY_MIN_HOOKS = 21
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"by_name": 0, "by_code": 0, "by_deployer": 0, "by_claude": 0, "created": 0, "unassigned": 0,
            "code_fetched": 0, "factories": 0, "split": 0, "promoted": 0, "moved": 0, "retired": 0, "adopted": 0,
-           "code_refreshed": 0, "code_missing": 0}
+           "code_refreshed": 0, "code_missing": 0, "shapes_filled": 0, "by_shape": 0, "shape_merged": 0, "team_merged": 0}
     out["flags_backfilled"] = backfill_address_flags(conn)
     _refresh_code_facts(conn, ctx, out)
     out["aliases_backfilled"] = backfill_unlisted_aliases(conn, ctx.now)
@@ -27,6 +29,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     splits = _split_generic(conn, ctx, generic) + _split_proxy_families(conn, ctx)
     out["split"] = len(splits)
     _regroup(conn, ctx, out, generic)
+    _fill_shapes(conn, ctx, out, _team_candidates(conn, generic))
+    _merge_shape_families(conn, ctx, out)
     unassigned = _unassigned(conn)
 
     # Rule 1: hooklist name -> curated project, else a same-chain verified-name project with evidence, else a new one.
@@ -78,7 +82,30 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 _assign(conn, m, pid)
             out["created"] += 1
             out["by_code"] += len(members)
-        unassigned = still
+        # Rule 2b: same bytecode template on one chain (only immutables differ): join its project, or form a family.
+        targets = _shape_targets(conn)
+        fam = {}
+        rest = []
+        for h in still:
+            k = shape_evidence(h)
+            if k and (pid := targets.get(k)):
+                _assign(conn, h, pid)
+                out["by_shape"] += 1
+            elif k:
+                fam.setdefault(k, []).append(h)
+            else:
+                rest.append(h)
+        for members in fam.values():
+            if len(members) < 2:
+                rest += members
+                continue
+            first = sorted(m.address for m in members)[0]
+            pid = _create_project(conn, ctx, f"Unlisted hook family {first[:6]}…", None, None)
+            for m in members:
+                _assign(conn, m, pid)
+            out["created"] += 1
+            out["by_shape"] += len(members)
+        unassigned = sorted(rest, key=lambda h: (h.chain_id, h.address))
 
     # Rule 3: Claude classification for the long tail (nameless hooks or names that matched nothing).
     if unassigned:
@@ -137,6 +164,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     names.run(conn, ctx, out)
     for snap in splits:                                  # split projects' slugs and paid facts follow their hooks
         names.settle_split(conn, snap, ctx.now)
+    # Rule 4 last, so projects the rules above created tonight (a new hooklist name, a verified-source name) merge
+    # tonight too, before the score step builds their cards.
+    _merge_same_team(conn, ctx, out, generic)
 
     # Factories: > 20 hooks.
     counts = conn.execute(sa.select(hooks.c.project_id, sa.func.count()).where(hooks.c.project_id.is_not(None)).group_by(hooks.c.project_id)).all()
@@ -339,6 +369,274 @@ def _split_generic(conn, ctx, generic: set[str]) -> list[dict]:
     if snaps:
         log.info("group: split %d projects keyed on a template or proxy name", len(snaps))
     return snaps
+
+
+def _shape_max() -> int:
+    try:
+        return max(0, int(os.environ.get("SHAPE_MAX", "") or 3000))
+    except ValueError:
+        return 3000
+
+
+def _rpc_shapes(ctx, rows, deadline: float) -> dict:
+    """{(chain_id, address): code_shape | None} from public-RPC eth_getCode (keyless chains). None = no code there."""
+    if os.environ.get("KEYLESS", "1") == "0":
+        return {}
+    from .. import keyless as K
+    from .snapshot import keyless_http
+    net_by_chain = {cid: net for net, (cid, *_rest) in K.CHAINS.items()}
+    by_net: dict[str, set[str]] = {}
+    for r in rows:
+        if net := net_by_chain.get(r.chain_id):
+            by_net.setdefault(net, set()).add(r.address)
+    if not by_net:
+        return {}
+    try:
+        got = K.code_shapes(keyless_http(ctx), by_net, deadline=deadline)
+    except Exception as e:
+        log.warning("group: code shape lookup failed: %s", e)
+        return {}
+    return {(K.CHAINS[net][0], addr): v for (net, addr), v in got.items()}
+
+
+def _fill_shapes(conn, ctx, out: dict, first: set[int] = frozenset()) -> None:
+    """code_shape for non-proxy hooks without one: unassigned hooks first, then hooks of the `first` projects (rule 4
+    candidates, whose merge may wait on a shape), then the newest. SHAPE_MAX (3000) per run within REHASH_BUDGET_S;
+    hooks an RPC does not answer are asked again next run, "" marks a hook with no code left."""
+    cap = _shape_max()
+    if cap == 0:
+        return
+    # no term at all when `first` is empty: a bare constant in ORDER BY is an error on Postgres 15+
+    later = [hooks.c.project_id.not_in(sorted(first))] if first else []
+    todo = conn.execute(sa.select(hooks.c.address, hooks.c.chain_id)
+                        .where(hooks.c.code_shape.is_(None), hooks.c.code_hash.is_not(None), hooks.c.is_proxy.is_(False))
+                        .order_by(hooks.c.project_id.is_not(None), *later, hooks.c.first_seen_at.desc(), hooks.c.chain_id,
+                                  hooks.c.address)
+                        .limit(cap)).all()
+    if not todo:
+        return
+    got = _rpc_shapes(ctx, todo, time.monotonic() + _refresh_budget_s())
+    for r in todo:
+        key = (r.chain_id, r.address)
+        if key in got:
+            conn.execute(sa.update(hooks).values(code_shape=got[key] or "")
+                         .where(hooks.c.address == r.address, hooks.c.chain_id == r.chain_id))
+            out["shapes_filled"] += 1
+    log.info("group: code shapes for %d of %d hooks", out["shapes_filled"], len(todo))
+
+
+def _unlisted(name: str) -> bool:
+    return name.startswith("Unlisted hook")
+
+
+def _shape_groups(conn) -> dict[str, dict[int, sa.Row]]:
+    """(chain:shape) -> {project_id: a row} over auto-named projects. Curated projects never take part."""
+    groups: dict[str, dict[int, sa.Row]] = {}
+    for r in conn.execute(
+            sa.select(hooks.c.address, hooks.c.chain_id, hooks.c.code_shape, hooks.c.code_hash, hooks.c.is_proxy,
+                      hooks.c.proxy_kind, hooks.c.project_id, projects.c.name.label("pname"), projects.c.norm_name.label("pnorm"))
+            .join(projects, projects.c.id == hooks.c.project_id)
+            .where(hooks.c.code_shape.is_not(None), hooks.c.code_shape != "")
+            .order_by(hooks.c.project_id)):
+        if (k := shape_evidence(r)) and _provisional(r.pname, r.pnorm):
+            groups.setdefault(k, {}).setdefault(r.project_id, r)
+    return groups
+
+
+def _shape_target(projs: dict[int, sa.Row]) -> int | None:
+    """Where a template's unnamed hooks belong: its one verified-name project, else its oldest unlisted family, else its
+    oldest unlisted project. Two verified names on one template are two teams: their unnamed siblings stay apart from
+    both and only fold among themselves."""
+    named = [pid for pid, r in projs.items() if not _unlisted(r.pname)]
+    if len(named) == 1:
+        return named[0]
+    unl = [(not r.pname.startswith("Unlisted hook family"), pid) for pid, r in projs.items() if _unlisted(r.pname)]
+    return min(unl)[1] if unl else None
+
+
+def _shape_targets(conn) -> dict[str, int]:
+    return {k: pid for k, projs in _shape_groups(conn).items() if (pid := _shape_target(projs)) is not None}
+
+
+def _merge_shape_families(conn, ctx, out: dict) -> None:
+    """Rule 2b across time: unlisted projects whose hooks share a bytecode template on one chain are one launchpad's
+    per-token deployments. They fold into _shape_target; a single unlisted target becomes "Unlisted hook family 0x…".
+    Named projects never move. Old slugs redirect."""
+    into: dict[int, int] = {}
+
+    def live(pid: int) -> int:
+        while pid in into:
+            pid = into[pid]
+        return pid
+
+    renamed = set()
+    for k, projs in _shape_groups(conn).items():
+        target = _shape_target(projs)
+        if target is None:
+            continue
+        target = live(target)
+        movers = sorted({live(pid) for pid, r in projs.items() if _unlisted(r.pname)} - {target})
+        for pid in movers:
+            retire_project(conn, pid, into=target, reason="regroup:code_shape", now=ctx.now)
+            into[pid] = target
+            out["shape_merged"] += 1
+        if movers and target not in renamed:
+            renamed.add(target)
+            p = conn.execute(sa.select(projects).where(projects.c.id == target)).one()
+            if _unlisted(p.name) and not p.name.startswith("Unlisted hook family"):
+                first = conn.execute(sa.select(sa.func.min(hooks.c.address)).where(hooks.c.project_id == target)).scalar_one()
+                name = f"Unlisted hook family {first[:6]}…"
+                slug = unique_slug(conn, name, target)
+                conn.execute(sa.update(projects).values(name=name, slug=slug).where(projects.c.id == target))
+                if slug != p.slug:
+                    add_alias(conn, p.slug, target, "renamed", ctx.now)
+    if out["shape_merged"]:
+        log.info("group: folded %d unlisted projects into bytecode-template families", out["shape_merged"])
+
+
+def _team_tokens(r) -> set[str]:
+    """One hook's team signals: a deployer that is not a CREATE2 factory, non-proxy bytecode (code_hash) and its
+    template (code_shape, on any chain), and the hooklist audit URL."""
+    out = set()
+    if r.deployer and r.deployer not in SHARED_DEPLOYERS:
+        out.add(f"deployer:{r.deployer}")
+    if c := code_evidence(r):
+        out.add(f"code_hash:{c}")
+        if r.code_shape:
+            out.add(f"code_shape:{r.code_shape}")
+    if a := audit_key(r.audit_url):
+        out.add(f"audit:{a}")
+    return out
+
+
+def _team_root(p, generic: set[str]) -> str | None:
+    """Whose signals a project's hooks and links are: its stem root; "*" (nobody's) for a generic or template name; None
+    for an unlisted project, which says nothing either way (rule 2b folds those)."""
+    if _unlisted(p.name):
+        return None
+    if p.norm_name in generic:
+        return "*"
+    return stem_root(p.name) or "*"
+
+
+def _team_rank(p, hooks_n: int):
+    """The project a team merge keeps: a curated (hooklist-named) one, then the richest enrichment, the name with the
+    fewest deployment words ("Aegis" over "Aegis v2 Hook (Unichain)"), the most hooks, the oldest, the lowest id."""
+    rich = (p.enriched_at is not None) + bool(p.website) + bool(p.github) + bool(p.x_handle)
+    words = sum(len(w) for w in deployment_words(p.name).values())
+    return (_provisional(p.name, p.norm_name), -rich, words, -hooks_n, p.first_seen_at, p.id)
+
+
+def _team_participants(conn, generic: set[str], prows: dict | None = None) -> dict[str, list[int]]:
+    """stem -> project ids that may take part in rule 4: a stem, hooks, and no proxy hook in an auto-named project (the
+    proxy split would undo the merge)."""
+    prows = prows if prows is not None else {p.id: p for p in conn.execute(sa.select(projects))}
+    held = dict(conn.execute(sa.select(hooks.c.project_id, sa.func.max(sa.case((hooks.c.is_proxy.is_(True), 1), else_=0)))
+                             .where(hooks.c.project_id.is_not(None)).group_by(hooks.c.project_id)).all())
+    by_stem: dict[str, list[int]] = {}
+    for pid, p in prows.items():
+        stem = name_stem(p.name) if p.norm_name not in generic else None
+        if stem and pid in held and not (held[pid] and _provisional(p.name, p.norm_name)):
+            by_stem.setdefault(stem, []).append(pid)
+    return by_stem
+
+
+def _team_candidates(conn, generic: set[str]) -> set[int]:
+    return {pid for pids in _team_participants(conn, generic).values() if len(pids) > 1 for pid in pids}
+
+
+def _merge_same_team(conn, ctx, out: dict, generic: set[str] = frozenset()) -> None:
+    """Rule 4, one team's projects (DESIGN.md "Same-team merge"). Projects whose names share a stem (rules.name_stem:
+    versions, chains, "L2", fee modes and "hook" stripped) merge when they also share a signal that only that name root
+    carries: a non-CREATE2 deployer on any chain, non-proxy bytecode or its template, a hooklist audit URL, or two of
+    website / GitHub owner / X handle with none of the three disagreeing (enrichment is found by searching the name, so
+    one link alone mostly repeats the name). A stem alone never merges. The kept project takes the oldest first_seen_at
+    and the others' missing enrichment and receipts; old slugs redirect. Curated projects take part: this is the one
+    rule that moves them."""
+    prows = {p.id: p for p in conn.execute(sa.select(projects))}
+    hrows = conn.execute(sa.select(hooks.c.project_id, hooks.c.deployer, hooks.c.code_hash, hooks.c.is_proxy,
+                                   hooks.c.proxy_kind, hooks.c.code_shape, hooks.c.audit_url)
+                         .where(hooks.c.project_id.is_not(None))).all()
+    tokens: dict[int, set[str]] = {}
+    hooks_n: dict[int, int] = {}
+    for r in hrows:
+        tokens.setdefault(r.project_id, set()).update(_team_tokens(r))
+        hooks_n[r.project_id] = hooks_n.get(r.project_id, 0) + 1
+    links = {pid: team_links(p.website, p.github, p.x_handle) for pid, p in prows.items()}
+    for pid, ls in links.items():
+        tokens.setdefault(pid, set()).update(f"link:{k}:{v}" for k, v in ls.items())
+
+    # A signal is a team's only when every named project carrying it has one root: an OpenZeppelin template or an
+    # auditor's portfolio URL shows up under unrelated names, and a generic name ("*") marks it as a template.
+    roots: dict[str, set[str]] = {}
+    for pid, ts in tokens.items():
+        if (root := _team_root(prows[pid], generic)) is not None:
+            for t in ts:
+                roots.setdefault(t, set()).add(root)
+    owned = {t for t, rs in roots.items() if len(rs) == 1 and "*" not in rs}
+
+    for stem, pids in sorted(_team_participants(conn, generic, prows).items()):
+        if len(pids) < 2:
+            continue
+        up = {pid: pid for pid in pids}
+
+        def find(x: int) -> int:
+            while up[x] != x:
+                up[x] = up[up[x]]
+                x = up[x]
+            return x
+        why: dict[int, str] = {}
+        carriers: dict[str, list[int]] = {}
+        for pid in pids:
+            for t in tokens.get(pid, ()):
+                if t in owned and not t.startswith("link:"):
+                    carriers.setdefault(t, []).append(pid)
+        for t, ps in sorted(carriers.items()):
+            for o in ps[1:]:
+                if find(o) != find(ps[0]):
+                    up[find(o)] = find(ps[0])
+                    why[o] = t.split(":")[0]
+        for i, a in enumerate(pids):
+            for b in pids[i + 1:]:
+                la, lb = links[a], links[b]
+                same = [k for k in la if lb.get(k) == la[k] and f"link:{k}:{la[k]}" in owned]
+                clash = any(k in lb and lb[k] != la[k] for k in la)
+                if len(same) >= 2 and not clash and find(a) != find(b):
+                    up[find(b)] = find(a)
+                    why[b] = "links"
+        comps: dict[int, list[int]] = {}
+        for pid in pids:
+            comps.setdefault(find(pid), []).append(pid)
+        for members in comps.values():
+            if len(members) > 1:
+                kinds = ",".join(sorted({why[m] for m in members if m in why}))
+                _fold_team(conn, ctx, [prows[m] for m in members], hooks_n, out, f"{stem} by {kinds}")
+    if out["team_merged"]:
+        log.info("group: merged %d projects into their team's project (same stem and a shared signal)", out["team_merged"])
+
+
+def _fold_team(conn, ctx, members: list, hooks_n: dict[int, int], out: dict, why: str) -> None:
+    keep = min(members, key=lambda p: _team_rank(p, hooks_n.get(p.id, 0)))
+    for p in members:
+        if p.id != keep.id:
+            retire_project(conn, p.id, into=keep.id, reason="merge:team", now=ctx.now)
+            out["team_merged"] += 1
+            log.info("group: team merge %s <- %s (stem %s)", keep.slug, p.slug, why)
+    vals = {"first_seen_at": min(p.first_seen_at for p in members)}
+    # The kept name loses the deployment words its members disagree on: chains when they span chains, fee modes,
+    # versions ("Clanker Static Fee Hook v2 (Base)" -> "Clanker Hook"; two "Aegis v3 Hook (...)" -> "Aegis v3 Hook").
+    # Unless another project already goes by it: AngstromL2 stays AngstromL2 next to Angstrom.
+    words = [deployment_words(p.name) for p in members]
+    drop = {k for k in words[0] if len({w[k] for w in words}) > 1}
+    name = team_name(keep.name, drop)
+    # a template-looking name would be split again by _split_generic next run
+    if any(deployment_words(keep.name)[k] for k in drop) and useful_name(name, max_len=None) and not conn.execute(
+            sa.select(projects.c.id).where(sa.func.lower(projects.c.name) == name.lower(), projects.c.id != keep.id)).first():
+        slug = unique_slug(conn, name, keep.id)
+        vals.update(name=name, slug=slug)
+        if slug != keep.slug:
+            add_alias(conn, keep.slug, keep.id, "renamed", ctx.now)
+    conn.execute(sa.update(projects).values(**vals).where(projects.c.id == keep.id))
 
 
 def _join_targets(conn) -> tuple[dict, dict]:

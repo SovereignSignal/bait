@@ -26,10 +26,10 @@ import sqlalchemy as sa
 from ..db import (HOOK_POOL_PREFIX, as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
 from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
-                     is_new, is_spam, is_symmetric, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
+                     is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
                      is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
-from .onchain import ready_chains
+from .onchain import owed_before, ready_chains
 
 _D = timedelta(days=1)
 
@@ -166,13 +166,14 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 def _ready(conn, ctx: RunContext, end: date) -> list[int]:
     """Chains whose on-chain days through `end` are complete. The nightly run (day = today) uses onchain.ready_chains,
     freshness included. A re-score of a past day (package 9) must not depend on the indexer's freshness at re-score time:
-    backfilled and the swap cursor's block time past the end of `end` is enough."""
+    backfilled, the swap cursor's block time past the end of `end` and nothing owed from before it is enough."""
     if ctx.day >= ctx.now.astimezone(timezone.utc).date():
         return ready_chains(conn, ctx)
     boundary = datetime.combine(end + _D, datetime.min.time(), tzinfo=timezone.utc)
     return [st.chain_id for st in conn.execute(sa.select(indexer_state).order_by(indexer_state.c.chain_id))
             if (not ctx.chains or st.chain_id in ctx.chains) and st.backfilled
-            and st.swap_block_time is not None and as_utc(st.swap_block_time) >= boundary]
+            and st.swap_block_time is not None and as_utc(st.swap_block_time) >= boundary
+            and not owed_before(conn, st.chain_id, boundary)]
 
 
 def _custom(hook: str | None) -> bool:
@@ -295,6 +296,9 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
         "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
         "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k], k in custom)) for k, v in vol7.items()},
         "symmetric": {k: (r.vol_24h_rolling or 0.0, sym[k]) for k, r in stats.items()},
+        "uniform": {k: (r.vol_24h_rolling or 0.0, is_uniform(top.get(k, []), r.vol_24h_rolling,
+                                                             r.wallets_24h if r.wallets_24h else r.traders_24h))
+                    for k, r in stats.items()},
     }
     reasons: dict[int, list[str]] = {}
     for reason in (r for r in WASH_REASONS if r in judged):
