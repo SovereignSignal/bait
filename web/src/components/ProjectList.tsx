@@ -4,7 +4,7 @@
 // re-filters at once and history.pushState moves the URL, which useSearchParams follows, so links and the back button
 // still work. Search and watchlist come from TerminalProvider.
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { loadHookIndex } from "@/lib/hook-index";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
@@ -20,6 +20,8 @@ import { useTerminal } from "./TerminalProvider";
 import s from "./Terminal.module.css";
 
 const DEFAULT_QUERY: FeedQuery = { tab: "trending" };
+
+const subscribeNever = () => () => {};
 
 /** The hook address index for 0x search: requested when a query starts with "0x", again on a later keystroke if the last
  * request failed. `loading` is true while an address query waits for it. */
@@ -113,8 +115,11 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
   }, []);
   const query = picked ?? urlQuery;
 
-  const watching = t.watchOnly;
-  const searching = t.q.trim().length > 0;
+  // Letters typed before hydration reach `q` from the top bar's effect, which can run before this Suspense boundary
+  // hydrates; the boundary must still render what the server did, so search and watchlist wait for the mount.
+  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
+  const watching = hydrated && t.watchOnly;
+  const searching = hydrated && t.q.trim().length > 0;
   const hooks = useHookIndex(t.q);
   // Before /api/rows lands, the seeded view is the only one we can draw; any other waits a moment for the full set.
   const fromSeed = !all.rows && !watching && !searching && sameQuery(seed.query, query);

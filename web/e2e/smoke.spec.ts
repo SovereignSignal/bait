@@ -164,7 +164,7 @@ test("/p/angstrom: the audit badge links out, the summary says when it was writt
   await expect(page.getByTestId("badges").getByRole("link", { name: /Audit linked/ })).toHaveAttribute("href", "https://github.com/Uniswap/hooklist");
   await expect(page.getByText("Written Oct 8; the figures above are current.")).toBeVisible();
   await page.getByText("What these badges mean").click();
-  await expect(page.getByText("An audit link is published. It says nothing about scope or findings.").last()).toBeVisible();
+  await expect(page.getByText("Audit link: https://github.com/Uniswap/hooklist. It says nothing about scope or findings.").last()).toBeVisible();
   expect(errs).toEqual([]);
 });
 
