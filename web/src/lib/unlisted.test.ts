@@ -36,7 +36,7 @@ test("isUnnamed: placeholder and pair labels are unnamed; chosen names are not",
 test("unnamed rows stay out of Trending, New and the movers, but are listed in All", () => {
   const row = (slug: string, name: string, over: Partial<RowView> = {}): RowView => ({
     slug, name, whatLine: "", color: "#000", category: "other", secondaryCategories: [], chains: [1], firstSeenAt: "2026-10-12T00:00:00Z",
-    isNew: false, isWash: false, scoreTrending: 50, vol7d: 500_000, vol7dPrev: 1_000, vol24h: 70_000, tvlUsd: 1_000, routable: "unknown", audited: false, ...over,
+    isNew: false, isWash: false, scoreTrending: 50, vol7d: 500_000, vol7dPrev: 1_000, vol24h: 70_000, tvlUsd: 1_000, routable: "unknown", ...over,
   });
   const rows = [row("a", "Aegis"), row("u", "Unlisted hook 0x58a6…94c0", { scoreTrending: 99, isNew: true }), row("p", "POP/USDT hook · 0xca9d…5800", { isNew: true })];
   assert.deepEqual(applyTab(rows, { tab: "trending" }).map((r) => r.slug), ["a"]);

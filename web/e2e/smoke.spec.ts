@@ -42,6 +42,64 @@ test("feed: tab labels, category chips, one h1", async ({ page }) => {
   expect(errs).toEqual([]);
 });
 
+test("tabs and category chips filter on the client: no server round trip, the URL follows, Back undoes", async ({ page }) => {
+  const errs = watch(page);
+  // "/" with a tab or category, as a document or an RSC request; the tab and chip links never prefetch
+  const feedFetches: string[] = [];
+  page.on("request", (r) => {
+    const u = new URL(r.url());
+    if (u.pathname === "/" && (u.searchParams.has("tab") || u.searchParams.has("category"))) feedFetches.push(r.url());
+  });
+  const rowsLoaded = page.waitForResponse((r) => r.url().includes("/api/rows"));
+  await page.goto("/");
+  await rowsLoaded;
+  const list = page.getByRole("complementary", { name: "Hook projects" });
+  await page.getByRole("navigation", { name: "Feed views" }).getByRole("link", { name: "All", exact: true }).click();
+  await expect(page).toHaveURL(/\/\?tab=all$/);
+  await expect(page.getByRole("navigation", { name: "Feed views" }).getByRole("link", { name: "All", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(list.getByRole("link", { name: /StablePairHook/ })).toBeVisible();
+  await page.getByRole("group", { name: "Category" }).getByRole("link", { name: "Compliance", exact: true }).click();
+  await expect(page).toHaveURL(/tab=all&category=compliance/);
+  await expect(list.getByRole("link", { name: /V4PermissionedSwaps/ })).toBeVisible();
+  await expect(list.getByRole("link", { name: /StablePairHook/ })).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/\?tab=all$/);
+  await expect(list.getByRole("link", { name: /StablePairHook/ })).toBeVisible();
+  expect(feedFetches, "a tab or chip click went to the server").toEqual([]);
+  expect(errs).toEqual([]);
+});
+
+test("search keeps letters typed before the page hydrated", async ({ page }) => {
+  test.skip(phone(), "phones open the search box from the dock, after hydration");
+  const errs = watch(page);
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  await page.route("**/_next/static/chunks/**", async (route) => {
+    await gate; // hold the scripts: the box is server-rendered HTML until they run
+    await route.continue();
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  const box = page.getByRole("searchbox", { name: "Search hooks, projects or addresses" });
+  await box.pressSequentially("stable");
+  release();
+  await expect(page.getByRole("complementary", { name: "Hook projects" }).getByText("1 match for “stable”")).toBeVisible();
+  await expect(box).toHaveValue("stable");
+  expect(errs).toEqual([]);
+});
+
+test("desktop at 1094px: the watchlist tab fits the tab bar, and an empty watchlist says what it is for", async ({ page }) => {
+  test.skip(phone(), "the 320px list column is a desktop layout");
+  await page.setViewportSize({ width: 1094, height: 800 });
+  await page.goto("/");
+  const list = page.getByRole("complementary", { name: "Hook projects" });
+  const star = page.getByRole("button", { name: /^Watchlist, 0 saved$/ });
+  const [s, l] = [(await star.boundingBox())!, (await list.boundingBox())!];
+  expect(s.x + s.width, "the star tab pokes past the list panel").toBeLessThanOrEqual(l.x + l.width);
+  await star.click();
+  await expect(star).toHaveAttribute("aria-pressed", "true");
+  await expect(list.getByText("Star a project to keep it here.")).toBeVisible();
+});
+
 test("phone pages never overflow the viewport", async ({ page }) => {
   test.skip(!phone(), "phone only");
   for (const width of [375, 360]) {
@@ -121,6 +179,11 @@ test("route handlers keep their content type and compress when asked", async ({ 
   const hooks = await request.get("/api/hooks", { headers: { "Accept-Encoding": "gzip" } });
   expect(hooks.headers()["content-type"]).toContain("application/json");
   expect(Object.keys(await hooks.json()).length).toBeGreaterThan(0);
+  const rows = await request.get("/api/rows?v=x", { headers: { "Accept-Encoding": "gzip" } });
+  expect(rows.headers()["content-type"]).toContain("application/json");
+  const packed = await rows.json();
+  expect(packed.keys).toContain("slug");
+  expect(packed.rows.length).toBeGreaterThan(0);
 });
 
 test("unknown project: 404 with a message", async ({ page }) => {

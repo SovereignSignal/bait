@@ -238,7 +238,6 @@ export interface RowView {
   vol24h: number | null;
   tvlUsd: number;
   routable: Eligibility;
-  audited: boolean;
   rank?: number;
 }
 
