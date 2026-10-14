@@ -36,8 +36,10 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .list { display: flex; flex-direction: column; max-height: calc(100vh - 150px); position: sticky; top: 76px; }
 .rankNote { margin: 0; padding: 6px 14px; font-size: 12px; color: var(--fg3); border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .rankNote a { color: var(--fg2); }
-.tabs { display: flex; gap: 4px; padding: 12px 12px 0; border-bottom: 1px solid var(--line); align-items: flex-end; flex-shrink: 0; }
-.tab { white-space: nowrap; padding: 8px 8px 10px; font-weight: 600; color: var(--fg2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+/* Four labels and the star need ~280px; the 320px column (820-1180px) holds 294, so the old 8px padding and 4px gap
+   pushed the star past the panel edge. Wrapping is the fallback if a label ever grows, never clipping. */
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 12px 12px 0; border-bottom: 1px solid var(--line); align-items: flex-end; flex-shrink: 0; }
+.tab { white-space: nowrap; padding: 8px 6px 10px; font-weight: 600; color: var(--fg2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .tab:hover { color: var(--fg); }
 .tab[aria-current="page"] { color: var(--fg); border-color: var(--pink); }
 .watchTab { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
@@ -57,6 +59,9 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .n { font-feature-settings: "calt" 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .s { font-size: 12px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .r { text-align: right; flex: 0 0 auto; }
+.more { display: block; width: 100%; margin-top: 6px; padding: 10px; border-radius: 12px; background: var(--panel2); color: var(--fg2); font-weight: 600; font-size: 12px; }
+.more:hover:not(:disabled) { color: var(--fg); }
+.more:disabled { opacity: .6; cursor: default; }
 .v { font-weight: 600; }
 .d { font-size: 12px; font-weight: 600; }
 .win { margin-left: 3px; font-size: 10px; font-weight: 500; color: var(--fg3); }

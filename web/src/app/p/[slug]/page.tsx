@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { Terminal } from "@/components/Terminal";
 import { getFreshness } from "@/db/health";
-import { getAllSlugs, getProject, getRows, slugForAlias, usingFixtures } from "@/db/queries";
+import { getAllSlugs, getProject, getRowSet, slugForAlias, usingFixtures } from "@/db/queries";
 import { SAMPLE_NOW } from "@/fixtures/sample";
-import { movers } from "@/lib/feed";
+import { feedSeed, movers } from "@/lib/feed";
 
 export const revalidate = 3600;
 export const dynamicParams = true;
@@ -29,12 +29,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function ProjectPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [p, rows, fresh] = await Promise.all([getProject(slug), getRows(), getFreshness()]);
+  const [p, { rows, version }, fresh] = await Promise.all([getProject(slug), getRowSet(), getFreshness()]);
   if (!p) {
     const moved = await slugForAlias(slug);   // renamed or merged since this link was shared
     if (moved) permanentRedirect(`/p/${moved}`);
     notFound();
   }
   const sample = usingFixtures();
-  return <Terminal rows={rows} moverRows={movers(rows, 60)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} fresh={fresh} />;
+  // Static: no URL query here, so the list seeds the default tab and the client re-filters from the URL.
+  return <Terminal seed={feedSeed(rows, { tab: "trending" }, version)} moverRows={movers(rows, 60)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} fresh={fresh} />;
 }

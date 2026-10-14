@@ -19,6 +19,7 @@ import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate, usd } from "@/lib/format";
 import { digestItem, firstWebUrl, hookKeys, toRow } from "@/lib/present";
+import { packRows, rowsVersion, type PackedRows } from "@/lib/rows";
 import type {
   Category,
   ChainId,
@@ -76,8 +77,24 @@ function rowOf(p: ProjectDetail): RowView {
 
 /** Every non-spam project as a light row (the terminal list, movers, search). */
 export async function getRows(): Promise<RowView[]> {
+  return (await getRowSet()).rows;
+}
+
+type RowSet = { rows: RowView[]; packed: PackedRows; version: string };
+// Keyed by the cached loadAll array: every page render and /api/rows call between two loads shares one set and hash.
+const rowSets = new WeakMap<ProjectDetail[], RowSet>();
+
+/** The rows, packed for GET /api/rows, and the version a page hands the client to fetch them by. */
+export async function getRowSet(): Promise<RowSet> {
   const all = await loadAll();
-  return all.filter((p) => !p.isSpam).map(rowOf);
+  let set = rowSets.get(all);
+  if (!set) {
+    const rows = all.filter((p) => !p.isSpam).map(rowOf);
+    const packed = packRows(rows);
+    set = { rows, packed, version: rowsVersion(packed) };
+    rowSets.set(all, set);
+  }
+  return set;
 }
 
 /** slug -> hook addresses for 0x search (GET /api/hooks): the same projects as getRows. */
