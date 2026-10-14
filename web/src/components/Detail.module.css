@@ -8,6 +8,9 @@
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .badges a { text-decoration: none; }
 .badges a:hover { text-decoration: underline; }
+/* one team's per-chain and per-version hooks, merged into this project (lib/variants) */
+.variants { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.variants .b { white-space: normal; font-weight: 500; }
 .badgeHelp { margin-top: 6px; font-size: 12px; color: var(--fg2); }
 .badgeHelp summary { cursor: pointer; color: var(--fg3); min-height: 24px; display: inline-flex; align-items: center; }
 .badgeHelp dl { margin: 6px 0 0; display: grid; gap: 4px; }

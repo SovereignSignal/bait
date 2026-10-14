@@ -71,7 +71,8 @@ afterRemoveLiquidityReturnsDelta AND not dynamicFee. Published rule, no list exi
 1. same normalized name -> same project
 2. same code_hash (eth_getCode via Blockscout) -> same project
 3. remaining long tail: one-time Claude classification (Haiku 4.5) into project + category
-4. factories flagged is_factory; card shows "748 hooks" as a stat, one card
+4. one team's projects merge: same name stem plus a shared signal (see "Same-team merge", 2026-10-14)
+5. factories flagged is_factory; card shows "748 hooks" as a stat, one card
 
 Categories: dynamic-fee, launchpad, orders (limit/TWAMM), lp-management,
 compliance, oracle, mev-lvr, lending, gaming-nft, other.
@@ -423,7 +424,35 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
   5xx) is asked again next run; Cloudflare 403 is a miss. The log line carries per-source outcomes.
 - **Spend.** Paid POSTs retry only on connect errors and 429; a response lost after sending is recorded as ambiguous
   spend.
-- **Out of scope:** a teams alias map (FablesRamp, FablesRampETH, FablesRWA stay separate cards).
+- **Out of scope:** a teams alias map. FablesRamp, FablesRampETH and FablesRWA have three stems, so the same-team
+  merge (below) leaves them three cards even though they share a website.
+- **Same-team merge (rule 4, 2026-10-14).** The registry lists one team's hooks under per-chain and per-version names,
+  so "Aegis", "Aegis v2 Hook (Unichain)" and "Aegis v3 Hook (Unichain)" were three cards and Clanker fifteen.
+  `rules.name_stem` drops versions ("v2", "V6", "v2.3.0"), chain words after the first word ("(Unichain)", "Base",
+  "Robinhood Chain", "X Layer"; never the first word, Zora and Base are names), "L2" / "mainnet", the static / dynamic
+  fee mode and "hook": Clanker Static Fee Hook v2 (Base) and ClankerHookDynamicFee are both `clanker`. "ETH" is an
+  asset, not a chain. A stem is a candidate, never evidence: projects with one stem merge only when they share a
+  signal that one name root owns (`stem_root`, the stem's first word):
+  - a deployer that is not a CREATE2 factory, on any chain (hooklist `deployer`);
+  - non-proxy bytecode, or its template (`code_shape`), on any chain: a team redeploys one template per chain, and the
+    shape zeroes the per-chain immutables;
+  - the same hooklist audit URL;
+  - two of website host, GitHub owner and X handle, with none of the three disagreeing. Enrichment is found by
+    searching the name, so one matching link mostly repeats the name. Shared hosts and platform accounts (github.com,
+    uniswap.org, @Uniswap, ...) never count.
+
+  "Owns" is the guard against templates: a signal that names with two roots carry (an OpenZeppelin hook deployed under
+  two names, an auditor's portfolio URL) or that a generic name carries is nobody's. Unlisted projects neither count
+  for nor against (rule 2b folds those). Generic names, names.py's "Name 0x1234…abcd" two-team splits, and auto-named
+  projects holding proxies never take part. Curated projects do: this is the one rule that moves them. The kept
+  project is the curated one with the richest enrichment, then the fewest deployment words ("Aegis" over "Aegis v2
+  Hook (Unichain)"), then the most hooks; it takes the oldest `first_seen_at`, the others' missing enrichment and their
+  receipts, and every old slug redirects (`project_aliases`, reason `merge:team`). Its name loses the deployment words
+  its members disagree on ("Clanker Hook"; two chains of "Aegis v3 Hook (...)" become "Aegis v3 Hook"), unless another
+  project already has that name. The rule runs last in the group step, so a hook under a new per-chain name folds in
+  the night it appears, and the shape fill asks for rule 4 candidates' shapes right after unassigned hooks. It is
+  idempotent. The project page lists the merged registry names as chips under the badges (`lib/variants`), a
+  trailing "(Chain)" folded into the chip's chain list.
 
 ## Update 2026-10-10: the live layout, freshness, payload, indexer resilience
 
