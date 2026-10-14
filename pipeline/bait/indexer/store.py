@@ -7,7 +7,8 @@ from datetime import date, timedelta
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 
-from ..db import HOOK_POOL_PREFIX, as_utc, hook_pool_counts, indexer_state, pool_daily_onchain, pool_wallet_day, upsert, utcnow, v4_pools
+from ..db import (HOOK_POOL_PREFIX, as_utc, hook_pool_counts, indexer_state, pool_daily_onchain, pool_lookup_queue, pool_wallet_day,
+                  upsert, utcnow, v4_pools)
 
 CHUNK = 500
 WALLET_RETAIN_DAYS = 30
@@ -182,9 +183,50 @@ def all_pools(conn: sa.Connection, chain_id: int) -> dict[str, tuple[str, str]]:
         .where(v4_pools.c.chain_id == chain_id).order_by(v4_pools.c.pool_id))}
 
 
+def queue_lookups(conn: sa.Connection, chain_id: int, owed: dict[str, tuple]) -> None:
+    """owed: pool id -> (from_block, seen_block, from_time) for the ids a swap page left uncounted, written in that page's
+    transaction. An id already queued keeps its from_block and from_time (its first page left out) and only moves
+    seen_block up: pages in between that did not carry it owe nothing."""
+    if not owed:
+        return
+    ins = _ins(conn)
+    q = pool_lookup_queue.c
+    rows = [{"chain_id": chain_id, "pool_id": p, "from_block": f, "seen_block": s, "from_time": t}
+            for p, (f, s, t) in sorted(owed.items())]
+    for i in range(0, len(rows), CHUNK):
+        stmt = ins(pool_lookup_queue).values(rows[i:i + CHUNK])
+        conn.execute(stmt.on_conflict_do_update(index_elements=["chain_id", "pool_id"], set_={
+            "seen_block": sa.case((q.seen_block > stmt.excluded.seen_block, q.seen_block), else_=stmt.excluded.seen_block)}))
+
+
+def queued_lookups(conn: sa.Connection, chain_id: int) -> dict[str, tuple[int, int]]:
+    """pool id -> (from_block, seen_block): the owed range of every queued id of the chain, oldest first."""
+    q = pool_lookup_queue.c
+    return {r.pool_id: (r.from_block, r.seen_block) for r in conn.execute(
+        sa.select(q.pool_id, q.from_block, q.seen_block).where(q.chain_id == chain_id).order_by(q.from_block, q.pool_id))}
+
+
+def lookup_backlog(conn: sa.Connection, chain_id: int) -> tuple[int, int | None]:
+    """-> (ids queued, oldest from_block among them)."""
+    n, oldest = conn.execute(sa.select(sa.func.count(), sa.func.min(pool_lookup_queue.c.from_block))
+                             .where(pool_lookup_queue.c.chain_id == chain_id)).one()
+    return n or 0, oldest
+
+
+def settle_lookups(conn: sa.Connection, chain_id: int, pool_ids) -> int:
+    """Delete these ids from the queue -> rows deleted (the caller checks it against what it settled)."""
+    ids, n = sorted(set(pool_ids)), 0
+    for i in range(0, len(ids), CHUNK):
+        n += conn.execute(sa.delete(pool_lookup_queue).where(pool_lookup_queue.c.chain_id == chain_id,
+                                                             pool_lookup_queue.c.pool_id.in_(ids[i:i + CHUNK]))).rowcount or 0
+    return n
+
+
 def reset_swaps_from(conn: sa.Connection, chain_id: int, day: date) -> None:
     """Swap counting (re)starts at the first block of `day`: drop what was counted from that day on so the
-    incremental upserts below never double count. Days of a hook's aggregate pool also come out of its all-time totals."""
+    incremental upserts below never double count. Days of a hook's aggregate pool also come out of its all-time totals.
+    The lookup queue goes too, since the new window queues afresh; owed swaps before `day` are given up with it (a reset
+    is a chain's first run or an RPC-mode hole, both rare)."""
     folded = conn.execute(sa.select(pool_daily_onchain.c.pool_id, sa.func.sum(pool_daily_onchain.c.swaps),
                                     sa.func.sum(pool_daily_onchain.c.volume_usd))
                           .where(pool_daily_onchain.c.chain_id == chain_id, pool_daily_onchain.c.day >= day,
@@ -193,6 +235,7 @@ def reset_swaps_from(conn: sa.Connection, chain_id: int, day: date) -> None:
     add_hook_usage(conn, chain_id, {p[len(HOOK_POOL_PREFIX):]: [0, -(n or 0), -(v or 0.0)] for p, n, v in folded})
     conn.execute(sa.delete(pool_daily_onchain).where(pool_daily_onchain.c.chain_id == chain_id, pool_daily_onchain.c.day >= day))
     conn.execute(sa.delete(pool_wallet_day).where(pool_wallet_day.c.chain_id == chain_id, pool_wallet_day.c.day >= day))
+    conn.execute(sa.delete(pool_lookup_queue).where(pool_lookup_queue.c.chain_id == chain_id))
 
 
 def apply_swaps(conn: sa.Connection, chain_id: int, daily: dict[tuple[str, date], list], wallets: dict[tuple[str, date, str], int]) -> None:

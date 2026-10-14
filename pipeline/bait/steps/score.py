@@ -29,7 +29,7 @@ from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VO
                      is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
                      is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
-from .onchain import ready_chains
+from .onchain import owed_before, ready_chains
 
 _D = timedelta(days=1)
 
@@ -166,13 +166,14 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 def _ready(conn, ctx: RunContext, end: date) -> list[int]:
     """Chains whose on-chain days through `end` are complete. The nightly run (day = today) uses onchain.ready_chains,
     freshness included. A re-score of a past day (package 9) must not depend on the indexer's freshness at re-score time:
-    backfilled and the swap cursor's block time past the end of `end` is enough."""
+    backfilled, the swap cursor's block time past the end of `end` and nothing owed from before it is enough."""
     if ctx.day >= ctx.now.astimezone(timezone.utc).date():
         return ready_chains(conn, ctx)
     boundary = datetime.combine(end + _D, datetime.min.time(), tzinfo=timezone.utc)
     return [st.chain_id for st in conn.execute(sa.select(indexer_state).order_by(indexer_state.c.chain_id))
             if (not ctx.chains or st.chain_id in ctx.chains) and st.backfilled
-            and st.swap_block_time is not None and as_utc(st.swap_block_time) >= boundary]
+            and st.swap_block_time is not None and as_utc(st.swap_block_time) >= boundary
+            and not owed_before(conn, st.chain_id, boundary)]
 
 
 def _custom(hook: str | None) -> bool:

@@ -12,7 +12,8 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
    A capped hook whose pools past both caps swapped gets a pools row for its aggregate pool 'hook:<address>' (the
    indexer folds those swaps there per day), so step 3 treats it like a pool and pool_stats.vol_source says 'hook_total'. A Postgres size line (pg_database_size vs DISK_LIMIT_GB) is logged every night.
    token0/token1 are only set on insert, so GeckoTerminal/subgraph symbols survive; created_at = Initialize block time.
-3. Usage (chains whose indexer_state is backfilled and updated within ONCHAIN_MAX_STALE_HOURS): for each pool with
+3. Usage (chains whose indexer_state is backfilled and updated within ONCHAIN_MAX_STALE_HOURS, with no swap before the
+   reference day's end still owed to pool_lookup_queue): for each pool with
    pool_daily_onchain rows in day-14..day, pool_snapshots gets one row per day from `start` (volume_usd_day, tx_count_day;
    the legacy cumulative columns zero-seeded the day before), replacing the pool's rows from `start` on; older rows and the
    seed day's daily values are kept so a past day can be re-scored. TVL keeps the latest GeckoTerminal/subgraph reserve (the indexer does not compute TVL). pool_stats(day) gets
@@ -32,8 +33,8 @@ from datetime import date, datetime, time as dtime, timedelta, timezone
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 
-from ..db import (HOOK_POOL_PREFIX, as_utc, hook_pool_counts, hook_pool_id, hooks, indexer_state, onchain_watermarks, pool_daily_onchain, pool_snapshots, pool_stats, pools,
-                  upsert, v4_pools)
+from ..db import (HOOK_POOL_PREFIX, as_utc, hook_pool_counts, hook_pool_id, hooks, indexer_state, onchain_watermarks, pool_daily_onchain,
+                  pool_lookup_queue, pool_snapshots, pool_stats, pools, upsert, v4_pools)
 from ..indexer.chains import CHAINS
 from ..rules import custom_accounting, flags_from_address
 from . import RunContext, log
@@ -246,10 +247,18 @@ def ref_day(ctx: RunContext) -> date:
     return ctx.day - timedelta(days=1) if ctx.day >= ctx.now.astimezone(timezone.utc).date() else ctx.day
 
 
+def owed_before(conn, chain_id: int, t: datetime) -> int:
+    """Pool ids whose swaps before t the indexer left out and has not settled yet (pool_lookup_queue): until they are, a
+    day before t is not final for every pool (a launchpad's pools past the cap are the ones that wait)."""
+    q = pool_lookup_queue.c
+    return conn.execute(sa.select(sa.func.count()).select_from(pool_lookup_queue).where(
+        q.chain_id == chain_id, sa.or_(q.from_time.is_(None), q.from_time < t))).scalar() or 0
+
+
 def ready_chains(conn, ctx: RunContext, out: dict | None = None) -> list[int]:
-    """Chains whose on-chain usage may replace keyless numbers: backfilled, written within ONCHAIN_MAX_STALE_HOURS, and the
-    swap cursor's block time past the end of the reference day. updated_at alone is not enough: Initialize pages keep
-    bumping it while swap queries fail every loop."""
+    """Chains whose on-chain usage may replace keyless numbers: backfilled, written within ONCHAIN_MAX_STALE_HOURS, the
+    swap cursor's block time past the end of the reference day, and no swap before that end still owed to the lookup
+    queue. updated_at alone is not enough: Initialize pages keep bumping it while swap queries fail every loop."""
     stale_h = _env_int("ONCHAIN_MAX_STALE_HOURS", 6)
     ref_end = datetime.combine(ref_day(ctx) + timedelta(days=1), dtime.min, tzinfo=timezone.utc)
     ready = []
@@ -258,12 +267,13 @@ def ready_chains(conn, ctx: RunContext, out: dict | None = None) -> list[int]:
             continue
         fresh = st.updated_at is not None and as_utc(st.updated_at) >= ctx.now - timedelta(hours=stale_h)
         swaps_done = st.swap_block_time is not None and as_utc(st.swap_block_time) >= ref_end
-        if fresh and swaps_done:
+        owed = owed_before(conn, st.chain_id, ref_end) if fresh and swaps_done else 0
+        if fresh and swaps_done and not owed:
             ready.append(st.chain_id)
         elif out is not None:
             out["chains_stale"] += 1
-            log.warning("onchain chain_id=%s not ready (updated_at=%s swap_block_time=%s, need >= %s); keyless usage kept",
-                        st.chain_id, st.updated_at, st.swap_block_time, ref_end)
+            log.warning("onchain chain_id=%s not ready (updated_at=%s swap_block_time=%s, need >= %s; %d pool ids owe swaps from "
+                        "before it); keyless usage kept", st.chain_id, st.updated_at, st.swap_block_time, ref_end, owed)
     return ready
 
 

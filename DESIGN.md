@@ -263,7 +263,7 @@ v4 pool on every chain it covers shows up as soon as it is initialized, with exa
   how many pools a launchpad has (`hooks.pools_total`, `pools_n`) without a row per coin. A first-come cap invites
   griefing: anyone can initialize junk pools on a victim hook until the cap is full, so its later real pools are never
   stored at Initialize. The defence is that a pool past the cap that swaps is looked up by pool id and inserted
-  (`sampled`), and a swap page with pool ids left unresolved waits for the next loop instead of dropping swaps. That path
+  (`sampled`), and its swaps from before the lookup are owed, not dropped (see "Update 2026-10-14"). That path
   alone would let an attacker bypass the cap with one dust swap per junk pool, so it has its own limits: a late row needs a
   priced swap of at least `INDEXER_LATE_INSERT_MIN_USD` ($10; unpriced never qualifies) and stops at
   `INDEXER_SAMPLED_POOLS_PER_HOOK` (1,000) per hook. Nothing is lost past both caps: those swaps and wallets are kept per day
@@ -445,3 +445,37 @@ action and smart money, semantic green and amber) still hold.
   pay off long scans in budgeted slices (BNB and Robinhood after 2026-10-09: a few hours behind head, health ok).
 - **Builds.** Base images come from ECR Public (`public.ecr.aws/docker/library/...`), and Dockerfiles carry no
   `# syntax=` line: Railway's builders could not reach Docker Hub on 2026-10-09.
+
+## Update 2026-10-14: swap pages never wait for pool lookups
+
+Base, the biggest hook chain, sat ~708K blocks (~16 days) behind on swaps while every other chain was caught up. A swap
+page in scan mode with pool ids that were neither rows nor known unhooked was held until a HyperSync Initialize scan by
+pool id over `[floor, page end)` settled them. On Base each ~200-block page carried ~200 unknown ids (~25 new to the
+process), the floor sits near the PoolManager's deployment, and a scan of that range is ~45 calls; with 30 lookup calls
+per loop the cursor gained ~80-200 blocks per loop against a gap that grows ~30 blocks a minute. It could never catch up.
+
+- **Rule now:** a swap page commits what it can count (rows, and keys of pools past the cap the process holds) and owes
+  the rest: each other unknown id goes in `pool_lookup_queue` with the block range its swaps were left out of, in the
+  page's transaction. After the pages, the resolver works the queue within the same per-loop call budget, in chunks of
+  `INDEXER_LOOKUP_CHUNK` (2,000) ids per scan; a scan costs the same calls for one id or thousands, so one scan settles
+  everything queued during the previous one. An unhooked id is deleted. A hooked one gets its swaps re-read by pool id
+  over its own range and counted (late row or hook aggregate, as on a page) in one transaction with its queue delete,
+  behind a compare-and-set on the unchanged swap cursor. No swap is skipped or counted twice, across restarts too.
+- **Honest completeness:** `backfilled` flips only when both cursors are at the head and no queued id owes swaps from
+  before the block where the swap cursor first reached it. Not "queue empty": after catch-up a Base scan spans several
+  loops while new ids arrive every loop, so the queue is rarely empty. The live edge is covered per day instead: the
+  nightly step (and a past-day re-score) treats a day as final only when no queued id owes swaps from before its end
+  (`from_time`), so usage on a chain still settling keeps the keyless numbers, as before. The resolver asks the oldest
+  owed ids first, so a backlog is never starved by newer ids.
+- **Fairness:** unchanged. `INDEXER_MAX_PAGES` (40) still bounds swap pages per chain per loop and the lookup budget
+  still bounds resolver calls; a busy chain now spends its slice on pages instead of waiting on scans. Chains without a
+  capped hook never queue anything (every hooked pool is a row there).
+- **Options weighed.** (a) "After the Initialize backfill, an id that is not a row is unhooked": true only on chains with
+  no capped hook, which is already how they run (no floor, no lookups). Where a hook is past the per-hook cap or was
+  pruned, its pools are hooked and deliberately not rows; treating them as unhooked would drop a launchpad's swaps and
+  undo the griefing defence. (b) Resolve by pool id with one topic1-filtered query: already the lookup; the cost is the
+  block range it walks, so the fix is more ids per scan, not a different query. (c) Decouple ingestion from resolution:
+  adopted, with the queue in Postgres so a restart cannot lose what is owed. Not adopted: a full in-memory or stored index
+  of every pool id past the cap (millions on Base; it would undo the cap's storage saving).
+- **Unverified on this date:** HyperSync's limit on topic values per query. 2,000 ids is ~140 KB of JSON; if HyperSync
+  refuses a lookup body (HTTP 4xx), the process halves the chunk (down to 100) and logs it.

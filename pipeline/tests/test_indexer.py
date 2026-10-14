@@ -778,22 +778,33 @@ def test_capped_pool_from_before_this_process_is_looked_up_by_pool_id(engine):
                              resolver=resolver)
     pools, daily, _, _ = _tables(engine)
     assert pools[LAUNCH].sampled and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
-    asked = _lookups(fake)
-    assert asked.count([PB]) == 1 and [LAUNCH] in asked and PB in resolver.absent and st.lookups == resolver.calls >= 2
+    # both pages' unknown ids go in one chunk: one scan of [floor 1600, 2400) asks for both, then LAUNCH's swaps are re-read
+    assert _lookups(fake) == [[PB, LAUNCH], [PB, LAUNCH]] and PB in resolver.absent and LAUNCH in resolver.recent
+    assert not resolver.held and st.lookups == resolver.calls == 3 and _queue(engine) == {}
 
 
-def test_lookup_budget_holds_the_swap_page_for_the_next_loop(engine):
+def _queue(engine):
+    with engine.connect() as c:
+        return {r.pool_id: (r.from_block, r.seen_block) for r in c.execute(sa.select(db.pool_lookup_queue))}
+
+
+def test_a_spent_lookup_budget_never_holds_a_swap_page_and_the_owed_swaps_are_counted_later(engine):
+    """Live 2026-10-14: Base was 708K blocks behind, ~200 unknown ids per 200-block swap page, and a page waited until its
+    lookups (a ~45-call scan from the floor) were done: ~100 blocks per loop. Now the page commits what it can count and
+    owes the rest; backfilled waits for the owed swaps."""
     fake = _launchpad_fake()
     core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
     resolver = core.PoolResolver()
     st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1, pool_lookups=0), now=NOW,
                              resolver=resolver)
     _, daily, _, state = _tables(engine)
-    assert (state.swap_block, daily, st.error) == (1000, {}, None)       # page not committed, swaps not skipped
-    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pools_per_hook=1), now=NOW,
-                        resolver=resolver)
-    _, daily, _, state = _tables(engine)
-    assert state.swap_block == 3100 and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+    assert state.swap_block == HEAD - BASE.lag + 1 and st.swap_lag == 0 and not state.backfilled   # every page committed
+    assert daily[(PA, date(2026, 9, 22))] == (3, 2, 6000.0) and (LAUNCH, date(2026, 9, 22)) not in daily
+    assert _queue(engine) == {PB: (1000, 1700), LAUNCH: (1700, 2400)} and (st.queued, st.backlog, st.lookups) == (2, 2, 0)
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1), now=NOW, resolver=resolver)
+    pools, daily, _, state = _tables(engine)
+    assert daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0) and pools[LAUNCH].sampled and (st.owed, st.late) == (1, 1)
+    assert _queue(engine) == {} and state.backfilled and daily[(PA, date(2026, 9, 22))] == (3, 2, 6000.0)
 
 
 def test_a_lookup_cut_by_the_budget_resumes_where_it_stopped_next_loop():
@@ -818,7 +829,7 @@ def test_a_lookup_cut_by_the_budget_resumes_where_it_stopped_next_loop():
     with pytest.raises(core.LookupBudget, match=r"1 ids left.*resumes at block 1100"):
         resolver.resolve(hs, BASE, {LAUNCH, PB}, 1000, 1750, s, budget=3)    # PB is new and starts at the floor
     assert froms()[6:9] == [1600, 1700, 1000]                                # the chunk closest to done goes first
-    assert LAUNCH in resolver.pending and resolver.scanned == {PB: 1100}     # LAUNCH found and settled; PB cut after 1 call
+    assert LAUNCH in resolver.held and resolver.scanned == {PB: 1100}        # LAUNCH found (held until settled); PB cut after 1 call
     resolver.start_loop()
     assert resolver.resolve(hs, BASE, {PB}, 1000, 1750, s, budget=10) == {} and PB in resolver.absent and not resolver.scanned
     assert froms()[9] == 1100                                                # PB resumed, not restarted
@@ -867,7 +878,7 @@ def test_runner_keeps_one_resolver_per_chain_across_loops(engine, monkeypatch):
 
 def test_griefing_a_hook_up_to_its_cap_never_hides_a_later_pools_swaps(engine):
     """Junk pools fill HOOK's cap first; the real pool initialized after them is not a row, but its swap makes it one,
-    with the swap counted, even when the first loop's lookup budget is spent (the page waits, nothing is dropped)."""
+    with the swap counted, even when the first loop's lookup budget is spent (the swap is owed, nothing is dropped)."""
     fake = FakeHyperSync()
     fake.inits += [init_log(pid(0x100 + n), TOKX, USDC, HOOK, 1500 + n) for n in range(3)]      # junk, blocks 1500-1502
     fake.inits.append(init_log(LAUNCH, ZERO, USDC, HOOK, 1600))                                  # the real launch
@@ -877,13 +888,13 @@ def test_griefing_a_hook_up_to_its_cap_never_hides_a_later_pools_swaps(engine):
     assert LAUNCH not in _tables(engine)[0] and _counter(engine).pools_total == 5
     resolver = core.PoolResolver()                                                                # restarted: nothing in memory
     core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pool_lookups=0, **s), now=NOW, resolver=resolver)
-    assert _tables(engine)[3].swap_block == 1000                                                 # held, not skipped
-    for _ in range(3):                                                                            # the next loops carry on
+    assert LAUNCH in _queue(engine) and (LAUNCH, date(2026, 9, 22)) not in _tables(engine)[1]    # owed, not skipped
+    for _ in range(3):                                                                            # the next loops settle it
         core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pool_lookups=1, **s), now=NOW,
                             resolver=resolver)
     pools, daily, _, state = _tables(engine)
     assert state.swap_block >= 2400 and pools[LAUNCH].sampled and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
-    assert daily[(PA, date(2026, 9, 22))] == (3, 2, 6000.0) and _counter(engine).pools_total == 5
+    assert daily[(PA, date(2026, 9, 22))] == (3, 2, 6000.0) and _counter(engine).pools_total == 5 and _queue(engine) == {}
 
 
 def test_lookup_budget_from_env_is_at_least_one_call_so_a_held_page_always_moves(monkeypatch):
@@ -965,10 +976,12 @@ def test_lookup_cost_is_logged_per_page_and_shown_in_the_heartbeat(engine, caplo
     with caplog.at_level("INFO", logger="bait.indexer"):
         st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=3, pools_per_hook=1), now=NOW,
                                  resolver=core.PoolResolver())
-    # PB: one call over [1600, 1700); LAUNCH: [1600, 2400) is two 700-block responses, both counted against the budget
-    assert (st.unknown, st.lookups, st.chunk_calls) == (2, 3, 2)
-    assert ",unknown=2" in heartbeat(1, "hypersync", {"base": st}) and ",chunk_calls=2" in heartbeat(1, "hypersync", {"base": st})
-    assert any("swap page 1700-2400" in m and "unknown=1" in m and "calls=2" in m for m in caplog.messages)
+    # PB and LAUNCH in one chunk: [1600, 2400) is two 700-block responses, both counted; then one re-read of LAUNCH's swaps
+    assert (st.unknown, st.lookups, st.chunk_calls, st.queued, st.owed, st.backlog) == (2, 3, 2, 2, 1, 0)
+    hb = heartbeat(1, "hypersync", {"base": st})
+    assert all(k in hb for k in (",unknown=2", ",chunk_calls=2", ",queued=2", ",owed=1")) and "backlog" not in hb
+    assert any("swap page 1700-2400 unknown=1 late=0 queued=1" in m for m in caplog.messages)
+    assert any("lookup queue 2 -> 0 ids: settled hooked=1 unhooked=1 owed_swaps=1, asked=2 calls=3 of 10" in m for m in caplog.messages)
 
 
 def test_lookup_budget_triples_while_the_swap_cursor_is_far_behind(monkeypatch):
@@ -1029,3 +1042,175 @@ def test_a_history_reset_floors_lookups_at_the_pool_managers_deployment_block_wh
         store.widen_lookup_floor(c, BASE.chain_id)
     assert _counter(engine).first_block == 120
     assert all(c.deploy_block is None or c.deploy_block >= 0 for c in chains.CHAINS)
+
+
+# ------------------------------------------------------------------ lookup queue: swap pages never wait for lookups (2026-10-14)
+
+UNHOOKED = [pid(0x400 + n) for n in range(40)]
+LAUNCH_SWAPS = (1650, 2500, 3900, 4100, 6020, 9001)
+
+
+def _busy_fake(span=100):
+    """A Base-like chain in miniature: a new unhooked pool id swaps every 50 blocks (each one needs a lookup to prove it is
+    not a hooked pool past the cap), and LAUNCH, past HOOK's cap of 1, swaps now and then over two days."""
+    fake = FakeHyperSync(span=span)
+    fake.inits.append(init_log(LAUNCH, ZERO, USDC, HOOK, 1600))
+    fake.inits += [init_log(p, ZERO, USDC, ZERO, 700 + n) for n, p in enumerate(UNHOOKED)]
+    fake.swaps += [(swap_log(p, 1000 + 50 * n, -(10 ** 15), 2 * 10 ** 6), W3) for n, p in enumerate(UNHOOKED)]
+    fake.swaps += [(swap_log(LAUNCH, b, -(10 ** 17), 200 * 10 ** 6, idx=1), W1 if b % 2 else W2) for b in LAUNCH_SWAPS]
+    return fake
+
+
+def _truth():
+    """The same chain with no cap: every hooked pool is a row, nothing is looked up. What the capped run must end with."""
+    e = db.make_engine("sqlite://")
+    db.create_all(e)
+    _sync_until_done(e, _busy_fake(span=700), core.Settings(pools_per_hook=0))
+    return _tables(e)[1]
+
+
+def _init_only(engine, fake, **s):
+    """Initialize history to the head and nothing else, so the next loops are all swap pages."""
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=-(-(HEAD - BASE.lag + 1) // fake.span), **s),
+                        now=NOW)
+    assert _tables(engine)[3].swap_block == 1000
+
+
+def test_a_busy_chain_gains_max_pages_per_loop_however_many_ids_need_a_lookup(engine):
+    fake, s = _busy_fake(), dict(pools_per_hook=1, pool_lookups=3)
+    _init_only(engine, fake, **s)
+    resolver = core.PoolResolver()                   # restarted: LAUNCH is not in memory, every unknown id needs a lookup
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=10, **s), now=NOW, resolver=resolver)
+    assert _tables(engine)[3].swap_block == 2000 and st.pages == 10          # 10 pages of 100 blocks, lookups or not
+    assert st.lookups <= 3 + 1 and st.backlog > 0                            # the budget, plus a re-read; the rest waits
+    for loop in range(100):
+        st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=10, **s), now=NOW,
+                                 resolver=resolver)
+        if _tables(engine)[3].backfilled:
+            break
+    pools, daily, _, state = _tables(engine)
+    assert loop < 60 and state.swap_block == HEAD - BASE.lag + 1 and _queue(engine) == {}
+    assert daily == _truth() and pools[LAUNCH].sampled and not set(UNHOOKED) & set(pools)
+
+
+def test_owed_ranges_count_every_swap_once_across_restarts(engine):
+    """LAUNCH is past both caps (sampled_per_hook=0), so it is never a row: each process counts it only from memory, and
+    a restarted one owes it again from its next swap. Restarting every other loop must still count each swap once."""
+    fake, s = _busy_fake(span=700), dict(pools_per_hook=1, pool_lookups=50, sampled_per_hook=0)
+    _init_only(engine, fake, **s)
+    resolver = core.PoolResolver()
+    for loop in range(40):
+        if loop % 2:
+            resolver = core.PoolResolver()             # a deploy: recent, held, absent and scan cursors are gone
+        core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=2, **s), now=NOW, resolver=resolver)
+        if _tables(engine)[3].backfilled:
+            break
+    truth, (pools, daily, _, _) = _truth(), _tables(engine)
+    agg = db.hook_pool_id(HOOK)
+    assert LAUNCH not in pools and _queue(engine) == {}
+    assert {d: v for (p, d), v in daily.items() if p == agg} == {d: v for (p, d), v in truth.items() if p == LAUNCH}
+    k = _counter(engine)
+    assert (k.swaps_total, k.volume_usd_total, k.sampled_total) == (len(LAUNCH_SWAPS), 200.0 * len(LAUNCH_SWAPS), 0)
+    assert {k_: v for k_, v in daily.items() if k_[0] != agg} == {k_: v for k_, v in truth.items() if k_[0] != LAUNCH}
+
+
+class RefusesBigLookups(FakeHyperSync):
+    """HyperSync refusing an Initialize-by-id body over `limit` ids (the limit is not documented; 413 is what a body cap says)."""
+
+    def __init__(self, limit, **kw):
+        super().__init__(**kw)
+        self.limit = limit
+
+    def __call__(self, request):
+        sel = (json.loads(request.content).get("logs") or [{}])[0] if request.content else {}
+        if sel.get("topics", [[None]])[0] == [INITIALIZE_TOPIC] and len(sel["topics"]) > 1 and len(sel["topics"][1]) > self.limit:
+            self.requests.append(request)
+            return httpx.Response(413, text="payload too large")
+        return super().__call__(request)
+
+
+def test_a_refused_lookup_halves_the_chunk_for_the_process_and_the_queue_still_drains(engine, monkeypatch, caplog):
+    monkeypatch.setattr(core.PoolResolver, "MIN_CHUNK", 1)
+    fake = RefusesBigLookups(2)
+    fake.inits += [init_log(p, ZERO, USDC, ZERO, 700 + n) for n, p in enumerate(UNHOOKED[:5])]
+    fake.swaps += [(swap_log(p, 1100 + n, -(10 ** 15), 2 * 10 ** 6), W3) for n, p in enumerate(UNHOOKED[:5])]
+    fake.inits.append(init_log(LAUNCH, ZERO, USDC, HOOK, 1600))
+    s = dict(pools_per_hook=1, lookup_chunk=8)
+    resolver = core.PoolResolver()
+    with caplog.at_level("INFO", logger="bait.indexer"):
+        st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=80, **s), now=NOW, resolver=resolver)
+    # PB and the 5 new ids, one chunk of 6: refused, so the process asks 3 at a time from the next loop on
+    assert resolver.chunk == 3 and st.error is None and any("HyperSync refused a 6-id lookup (HTTP 413)" in m for m in caplog.messages)
+    assert _tables(engine)[3].swap_block == HEAD - BASE.lag + 1 and len(_queue(engine)) == 6   # the swap pages never waited
+    for _ in range(3):
+        core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=80, **s), now=NOW, resolver=resolver)
+    assert _queue(engine) == {} and resolver.chunk == 1 and _tables(engine)[3].backfilled
+
+
+def test_the_queue_keeps_an_ids_first_range_and_a_swap_window_reset_clears_it(engine):
+    t = core.utc(T0 + 1000 * BT)
+    with engine.begin() as c:
+        store.queue_lookups(c, BASE.chain_id, {PA: (1000, 1100, t), PB: (1000, 1100, t)})
+        store.queue_lookups(c, BASE.chain_id, {PA: (1300, 1400, core.utc(T0 + 1300 * BT))})
+        store.queue_lookups(c, BASE.chain_id, {PA: (900, 1000, None)})         # never moves seen_block back
+        store.queue_lookups(c, 10, {PC: (5, 6, None)})
+    with engine.connect() as c:
+        assert store.queued_lookups(c, BASE.chain_id) == {PA: (1000, 1400), PB: (1000, 1100)}
+        assert db.as_utc(c.execute(sa.select(db.pool_lookup_queue.c.from_time).where(db.pool_lookup_queue.c.pool_id == PA)).scalar()) == t
+    with engine.begin() as c:
+        assert store.settle_lookups(c, BASE.chain_id, [PB, PC]) == 1
+        store.reset_swaps_from(c, BASE.chain_id, date(2026, 9, 22))
+    assert _queue(engine) == {PC: (5, 6)}                                      # other chains keep theirs
+
+
+def test_settling_against_a_cursor_another_process_moved_writes_nothing(engine):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1, pool_lookups=0), now=NOW)
+    before = _tables(engine)
+    resolver = core.PoolResolver()
+    with engine.connect() as c:
+        floor = store.capped_floor(c, BASE.chain_id)
+    with pytest.raises(store.CursorMoved):
+        core.settle_queue(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1), resolver, floor, 2400, HEAD, 10,
+                          core.ChainStats())
+    after = _tables(engine)                                               # PB is unhooked: dropping it owes nothing under any cursor
+    assert (after[0].keys(), after[1], _queue(engine)) == (before[0].keys(), before[1], {LAUNCH: (1700, 2400)})
+    assert LAUNCH in resolver.held and LAUNCH not in resolver.recent       # not counted, so pages must not count it either
+    asked = len(_lookups(fake))
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1), now=NOW, resolver=resolver)
+    assert len(_lookups(fake)) == asked and _queue(engine) == {}            # settled from `held`, no second lookup
+    assert _tables(engine)[1][(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+
+
+def test_chains_without_a_capped_hook_never_queue(engine):
+    fake = FakeHyperSync()
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(), now=NOW)
+    assert st.mode == "hypersync/topic" and (st.queued, st.backlog, st.lookups) == (0, 0, 0) and _queue(engine) == {}
+    many = core.sync_hypersync(engine, BASE, _hs(FakeHyperSync()), FakePrices(), core.Settings(topic_filter_max=1), now=NOW)
+    assert many.mode == "hypersync/scan" and (many.queued, many.lookups) == (0, 0) and _queue(engine) == {}
+
+
+def test_lookup_chunk_from_env(monkeypatch):
+    assert core.Settings().lookup_chunk == 2000
+    monkeypatch.setenv("INDEXER_LOOKUP_CHUNK", "0")
+    assert core.Settings.from_env().lookup_chunk == 1
+
+
+def test_backfilled_waits_for_ids_owed_from_the_backfill_not_for_the_live_edge(engine):
+    """On Base a lookup scan spans several loops and new ids arrive every loop, so the queue is rarely empty. Backfill is
+    complete once nothing is owed from before the block where the swap cursor first reached the head."""
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    resolver, end = core.PoolResolver(), HEAD - BASE.lag + 1
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1, pool_lookups=0), now=NOW,
+                        resolver=resolver)
+    assert resolver.backfill_at == end and not _tables(engine)[3].backfilled          # PB and LAUNCH owed from the backfill
+    edge = pid(0x999)                                                                  # an id a page at the head queued
+    with engine.begin() as c:
+        store.queue_lookups(c, BASE.chain_id, {edge: (end, end + 1, core.utc(T0 + end * BT))})
+    # [1600, end + 1) is 30 calls of 700 blocks: the chunk of PB and LAUNCH (oldest owed first) finishes, edge's is cut
+    st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(pools_per_hook=1, pool_lookups=30, lookup_chunk=2),
+                             now=NOW, resolver=resolver)
+    assert _queue(engine) == {edge: (end, end + 1)} and st.backlog == 1 and _tables(engine)[3].backfilled
+    assert _tables(engine)[1][(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0) and resolver.backfill_at is None
