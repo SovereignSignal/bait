@@ -406,10 +406,11 @@ def _fill_shapes(conn, ctx, out: dict, first: set[int] = frozenset()) -> None:
     cap = _shape_max()
     if cap == 0:
         return
-    later = hooks.c.project_id.not_in(sorted(first)) if first else sa.true()
+    # no term at all when `first` is empty: a bare constant in ORDER BY is an error on Postgres 15+
+    later = [hooks.c.project_id.not_in(sorted(first))] if first else []
     todo = conn.execute(sa.select(hooks.c.address, hooks.c.chain_id)
                         .where(hooks.c.code_shape.is_(None), hooks.c.code_hash.is_not(None), hooks.c.is_proxy.is_(False))
-                        .order_by(hooks.c.project_id.is_not(None), later, hooks.c.first_seen_at.desc(), hooks.c.chain_id,
+                        .order_by(hooks.c.project_id.is_not(None), *later, hooks.c.first_seen_at.desc(), hooks.c.chain_id,
                                   hooks.c.address)
                         .limit(cap)).all()
     if not todo:
