@@ -439,6 +439,14 @@ action and smart money, semantic green and amber) still hold.
   "Nightly update incomplete"), else "Indexer catching up"; a swap-lag warning alone shows none. The footer names the
   same day. One pure function decides (`lib/health.freshness`) over the same reads as `/api/health` (`db/health.ts`),
   cached 60 s. The Live trades dot is green only when the feed answered and its newest trade is under an hour old.
+- **Live trades freshness (2026-10-14).** `/api/trades` serves a cached pool list stale for at most 10 minutes; past
+  that it refetches before answering and falls back to the old list only when GeckoTerminal fails (an idle pool's first
+  visitor saw Hookr MOW/WETH trades "3d" old, Aegis 8h old, while GeckoTerminal had newer ones). Each browser poll gives
+  up after 12 s with "Trade feed did not answer", so the panel never stays on "Loading trades…". When the newest trade
+  is over an hour old the panel says so ("No trades over $10 in the last hour; the newest is 10h old.") and, then or
+  when the list is empty, adds the indexer's closed-day figure for the pool, so it never contradicts the stat tiles
+  silently. GeckoTerminal itself was not stale on 2026-10-14: its Robinhood feed for MOW/WETH matched its own h24 counts
+  (the pool simply went quiet after 15:52 UTC), and the Ink feed for Aegis held a 00:36 trade Bait's cache had not.
 - **Stat tiles** follow the pane by container query (6 columns from 720px, 3 by default, 2 under 420px) and never
   ellipsize a value. Week over week above +999% reads ">999%" (prose: "more than 999%"); weeks under $1K are no basis.
 - **Payload.** Every non-spam project ships with the page as a list row (1,658 on 2026-10-10), so rows stay lean:

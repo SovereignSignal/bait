@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { clip, dayLabel, deltaWords, fmtDelta, nextDigestDay, NONE, usd, usdWhole } from "./format";
 import { activePool, dayWindow, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric, seriesLabels } from "./present";
 import { emptyCopy, moversFor, searchRows } from "./feed";
-import { liveDotOn, tradesNote } from "./trades";
+import { indexerLine, liveDotOn, quietNote, tradesNote } from "./trades";
 import { respond, respondJson } from "./http";
 import { gunzipSync } from "node:zlib";
 import { loadHookIndex, resetHookIndex } from "./hook-index";
@@ -48,6 +48,24 @@ test("tradesNote separates nothing-traded from feed-unavailable", () => {
   assert.equal(tradesNote("rate_limited", 0), "Trade feed unavailable, retrying in 60s.");
   assert.equal(tradesNote("unknown_pool", 0), "No live trade data for this pool.");
   assert.equal(tradesNote("upstream_error", 3), null);
+  assert.equal(tradesNote("timeout", 0), "Trade feed did not answer, retrying in 60s.");   // never "Loading…" forever
+});
+
+test("quietNote names the newest trade's age once the feed has gone an hour without one", () => {
+  const now = Date.parse("2026-10-14T02:00:00Z");
+  // Hookr MOW/WETH on Robinhood 10/14: GeckoTerminal's newest trade over $10 was 15:52 the day before
+  const quiet = [{ ts: "2026-10-13T15:44:33Z" }, { ts: "2026-10-13T15:52:49Z" }];
+  assert.equal(quietNote(quiet, now), "No trades over $10 in the last hour; the newest is 10h old.");
+  assert.equal(quietNote([{ ts: "2026-10-14T01:30:00Z" }, ...quiet], now), null);
+  assert.equal(quietNote([], now), null);
+  assert.equal(liveDotOn("ok", quiet, now), false);
+});
+
+test("indexerLine shows the pool's closed-day figure, or nothing without one", () => {
+  assert.equal(indexerLine({ vol24h: 17_100_000, wallets24h: 809, walletsExact: true }), "Indexer, last closed day: $17.1M from 809 wallets in this pool.");
+  assert.equal(indexerLine({ vol24h: 292_000, wallets24h: 41, walletsExact: false }), "Indexer, last closed day: $292K from up to 41 wallets in this pool.");
+  assert.equal(indexerLine({ vol24h: 5_000, wallets24h: null, walletsExact: true }), "Indexer, last closed day: $5K in this pool.");
+  assert.equal(indexerLine({ vol24h: null, wallets24h: 3, walletsExact: true }), null);
 });
 
 test("a week-over-week change past +999% reads >999%, in tiles and in prose", () => {
