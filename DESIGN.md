@@ -478,9 +478,9 @@ action and smart money, semantic green and amber) still hold.
   (the pool simply went quiet after 15:52 UTC), and the Ink feed for Aegis held a 00:36 trade Bait's cache had not.
 - **Stat tiles** follow the pane by container query (6 columns from 720px, 3 by default, 2 under 420px) and never
   ellipsize a value. Week over week above +999% reads ">999%" (prose: "more than 999%"); weeks under $1K are no basis.
-- **Payload.** Every non-spam project ships with the page as a list row (1,658 on 2026-10-10), so rows stay lean:
-  whole dollars, no hook addresses. `GET /api/hooks` serves the address index; the list fetches it the first time a
-  search starts with "0x".
+- **Payload.** Rows stay lean: whole dollars, no hook addresses. `GET /api/hooks` serves the address index; the list
+  fetches it the first time a search starts with "0x". Superseded 2026-10-14 for the rows themselves: see "Feed payload
+  and client filtering" below.
 - **Indexer resilience.** Every HyperSync request has a wall-clock deadline (`HYPERSYNC_DEADLINE`, 120 s), since the
   idle timeout cannot end a request whose socket stays fed. Pool lookups spend at most their budget per chain per loop,
   checked before every call, and a cut scan resumes from its block next loop; the per-page log line shows rate-limit
@@ -541,3 +541,26 @@ per loop the cursor gained ~80-200 blocks per loop against a gap that grows ~30 
   v4-core / v4-periphery audits.
 - **One snapshot per page.** A project page's detail is cached per list load and pinned to that load's day, and takes
   its name and rank from the rows it ships with. Project, OG and week pages revalidate every 10 minutes (was 1 h).
+
+## Update 2026-10-14: feed payload and client filtering
+
+- **Pages ship one page of rows.** "/" and "/p/[slug]" no longer carry every project. A page server-renders the first
+  100 rows of its own view (`lib/feed.feedSeed`: the URL's tab, chain and category; the default tab on the static
+  project page) plus the category chips and the counts. On 2026-10-14 the full set (2,318 rows) was ~0.99 MB of every
+  "/" and "/p/[slug]" response and of every project-link prefetch, and "/?tab=all" also rendered all 2,318 rows as HTML
+  (2.44 MB). Per row that was ~430 bytes on every terminal page plus ~560 bytes of HTML on All; now it is 0 past the
+  seeded 100.
+- **The full set comes from `GET /api/rows`** (`lib/rows.ts`): packed as arrays under one key list (~170 bytes a row,
+  ~25 gzipped, about 58 KB for the set), fetched once per visit on mount and kept across client navigations. The page
+  passes a content hash (`?v=`); a reply that matches it is cached for a day, anything else for a minute.
+- **Tab, category and chain change on the client.** The rules in `lib/feed.ts` are pure, so the list re-filters the
+  loaded rows in the same frame and `history.pushState` moves the URL (Next's `useSearchParams` follows it), so links,
+  reloads and Back still work and the first paint stays server-rendered. On a project page the list re-filters beside
+  the open project (`/p/<slug>?tab=all`) instead of leaving it. The detail pane on "/" keeps the project the server
+  picked for the first URL. Tab and chip links do not prefetch.
+- **Lists page by 100** ("Show 100 more · N in all"); a new view starts again at one page, scrolled to the top.
+- **Search box** is uncontrolled, so letters typed before hydration are kept and handed to the list on mount. Enter
+  before the rows or the address index arrive goes to the top match once it appears.
+- **Watchlist tab** fits the 320 px list column on one row: the In Uniswap app tab shows as "In app" there (full name
+  kept as its accessible name and tooltip), with 6 px tab padding and a 2 px gap; the bar wraps rather than clips if a
+  label grows. An empty watchlist reads "Star a project to keep it here."

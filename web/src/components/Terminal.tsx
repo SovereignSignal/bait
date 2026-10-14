@@ -2,6 +2,7 @@
 // List, movers and the back link read the URL on the client; on the statically rendered
 // project page they suspend and the fallback renders the default tab.
 import { Suspense } from "react";
+import type { FeedSeed } from "@/lib/feed";
 import type { Freshness } from "@/lib/health";
 import type { LaunchView, ProjectDetail, RowView } from "@/lib/types";
 import { Detail, EmptyDetail } from "./Detail";
@@ -11,7 +12,7 @@ import { TradePanel } from "./TradePanel";
 import s from "./Terminal.module.css";
 
 export function Terminal({
-  rows,
+  seed,
   moverRows,
   project,
   view,
@@ -22,7 +23,8 @@ export function Terminal({
   launchesNow,
   fresh,
 }: {
-  rows: RowView[];
+  /** the list rows this URL shows first; the full set comes from /api/rows */
+  seed: FeedSeed;
   moverRows: RowView[];
   project: ProjectDetail | null;
   /** phone: "list" on "/", "detail" on "/p/[slug]" */
@@ -43,8 +45,8 @@ export function Terminal({
       </Suspense>
       <main className={s.app} id="main" tabIndex={-1}>
         {view === "list" && <h1 className={s.listTitle}>Hook projects</h1>}
-        <Suspense fallback={<ProjectListFallback rows={rows} selected={project?.slug} view={view} now={now} />}>
-          <ProjectList rows={rows} selected={project?.slug} view={view} now={now} launches={launches} launchesNow={launchesNow} />
+        <Suspense fallback={<ProjectListFallback seed={seed} selected={project?.slug} view={view} now={now} />}>
+          <ProjectList seed={seed} selected={project?.slug} view={view} now={now} launches={launches} launchesNow={launchesNow} />
         </Suspense>
         <section className={s.detail} aria-label="Project">
           {view === "detail" && (
