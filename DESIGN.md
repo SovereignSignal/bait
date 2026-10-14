@@ -450,8 +450,9 @@ action and smart money, semantic green and amber) still hold.
 
 - **Unnamed labels.** An unnamed project is labelled by one pool everywhere (list, Leaders, project page, week page, OG
   image, RSS): most 7-day volume over closed days, then most TVL, then the lowest pool id (`lib/unlisted.compareTopPool`,
-  mirrored by the `topPools` query). Digests store the Monday name; the week page and RSS render today's name for the
-  same slug.
+  mirrored by the `topPools` query). The project page's Trade panel shows that same pool (`lib/present.tradePool`), not
+  the first pool by TVL. Digests store the Monday name; the week page and RSS render today's name for the same slug. A
+  family's pair label ("X/Y hook family · 0x…") is still unnamed, so it stays out of Trending, New and the movers.
 - **Traded projects.** /leaders "Projects traded, last 7 days" and the digest intro count the same set: non-spam,
   non-wash, 7-day volume > 0 (`totals.traded`, with TVL and volume summed over it). Digests written before 2026-10-14
   only carry `totals.projects` (every tracked project) and say "projects tracked".

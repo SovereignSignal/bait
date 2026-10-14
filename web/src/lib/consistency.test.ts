@@ -1,7 +1,7 @@
 // One project, one set of figures across pages: names, counts, TVL and audit badges (demo smoke, 2026-10-14).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditLinks, digestIntro, poolTvlNote, toRow, withCurrentNames } from "./present";
+import { auditLinks, digestIntro, poolTvlNote, toRow, tradePool, withCurrentNames } from "./present";
 import type { DigestItem } from "./types";
 
 const item = (slug: string, name: string, kind: DigestItem["kind"] = "trending"): DigestItem => ({ slug, name, kind, line: "", vol7d: 1 });
@@ -55,4 +55,16 @@ test("the list row's audited flag follows the link, not the count", () => {
   } as unknown as Parameters<typeof toRow>[0];
   assert.equal(toRow(p).audited, false);
   assert.equal(toRow({ ...p, signals: { ...p.signals, auditUrl: "https://a.org/x" } }).audited, true);
+});
+
+test("the Trade panel offers the pool the title is named after, not the first pool by TVL", () => {
+  const pools = [
+    { poolId: "0xeqvta", chainId: 8453 },   // loadPools order: most TVL first
+    { poolId: "0xLUCKY", chainId: 8453 },   // topPool: most 7-day volume
+    { poolId: "0xlucky", chainId: 999999 }, // same id on an unknown chain never matches
+  ];
+  assert.equal(tradePool(pools, { poolId: "0xlucky", chainId: 8453 })?.poolId, "0xLUCKY");
+  assert.equal(tradePool(pools, { poolId: "0xgone", chainId: 8453 })?.poolId, "0xeqvta");  // topPool not in the list: first known-chain pool
+  assert.equal(tradePool(pools, null)?.poolId, "0xeqvta");
+  assert.equal(tradePool([{ poolId: "0xa", chainId: 999999 }], { poolId: "0xa", chainId: 999999 }), null);
 });

@@ -8,7 +8,8 @@ export function isUnlisted(name: string): boolean {
   return UNLISTED.test(name);
 }
 
-const PAIR_LABEL = /^\S+\/\S+ hook · 0x[0-9a-fA-F]{4}…/;
+// "hook family ·" too: a family's pair label must stay out of Trending/New just like its placeholder name.
+const PAIR_LABEL = /^\S+\/\S+ hook(?: family)? · 0x[0-9a-fA-F]{4}…/;
 
 /** A display name nobody chose: "Unlisted hook 0x…" or the pair label above. Kept out of Trending, New and the movers
  * (no team, site or source to point anyone at); still listed in All and found by search. */

@@ -1,5 +1,5 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
-import { CHAINS } from "./chains";
+import { CHAINS, knownChain } from "./chains";
 import { weekDelta } from "./feed";
 import { clip, deltaWords, fmtDelta, int, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
@@ -157,6 +157,17 @@ export function digestItem(
   kind: DigestItem["kind"],
 ): DigestItem {
   return { slug: c.slug, name: c.name, kind, line: c.what_line ?? "", vol7d: c.vol_7d ?? null };
+}
+
+/** The pool the Trade panel shows: the one the project is labelled by (topPool, busiest 7 days), so a family titled
+ * "LUCKYKEY/WETH hook family" never offers an EQVTA/WETH pool beside it. Else the first pool on a chain we link to. */
+export function tradePool<P extends { poolId: string; chainId: number }>(
+  pools: P[],
+  top: { poolId: string; chainId: number } | null,
+): P | null {
+  const known = (x: P) => knownChain(x.chainId);
+  const id = top?.poolId.toLowerCase();
+  return (top && pools.find((x) => x.poolId.toLowerCase() === id && x.chainId === top.chainId && known(x))) || pools.find(known) || null;
 }
 
 /** A digest stores the name a project had on Monday ("Unlisted hook family 0x0f48…"); render the name every other page
