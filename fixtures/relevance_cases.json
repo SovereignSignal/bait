@@ -88,5 +88,11 @@
     "title": "Big shot launches a v4 hook",
     "source": "blog.example.com",
     "keep": false
+  },
+  {
+    "project": "Aegis",
+    "title": "How to Investigate DeFi Exploits for Recovery - Aegis Financial Forensics",
+    "source": "aegisfinancialforensics.com",
+    "keep": false
   }
 ]

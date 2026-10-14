@@ -7,6 +7,14 @@ export function isUnlisted(name: string): boolean {
   return UNLISTED.test(name);
 }
 
+const PAIR_LABEL = /^\S+\/\S+ hook · 0x[0-9a-fA-F]{4}…/;
+
+/** A display name nobody chose: "Unlisted hook 0x…" or the pair label above. Kept out of Trending, New and the movers
+ * (no team, site or source to point anyone at); still listed in All and found by search. */
+export function isUnnamed(displayName: string): boolean {
+  return isUnlisted(displayName) || PAIR_LABEL.test(displayName);
+}
+
 export function unlistedLabel(name: string, sym0: string | null, sym1: string | null): string {
   const m = UNLISTED.exec(name);
   if (!m || !sym0 || !sym1) return name;
