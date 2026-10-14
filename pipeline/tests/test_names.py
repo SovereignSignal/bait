@@ -296,7 +296,8 @@ def test_backfill_unlisted_aliases_covers_only_hooks_that_once_had_an_unlisted_s
     conn.execute(sa.update(db.hooks).where(db.hooks.c.chain_id == 4663).values(hooklisted=True))
     conn.execute(sa.update(db.hooks).where(db.hooks.c.address == found).values(name_checked_at=NOW))
     assert names.backfill_unlisted_aliases(conn, NOW) == 1
-    assert _aliases(conn) == {"unlisted-hook-0x7bc2-2aec": (named, "backfill")}
+    backfilled = {k: v for k, v in _aliases(conn).items() if v[1] == "backfill"}   # the sample's Bonker merge adds two
+    assert backfilled == {"unlisted-hook-0x7bc2-2aec": (named, "backfill")}
 
 
 def test_explorers_never_downgrade_a_proxy(conn, ctx):
