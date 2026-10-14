@@ -36,8 +36,10 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .list { display: flex; flex-direction: column; max-height: calc(100vh - 150px); position: sticky; top: 76px; }
 .rankNote { margin: 0; padding: 6px 14px; font-size: 12px; color: var(--fg3); border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .rankNote a { color: var(--fg2); }
-/* Four labels and the star need ~280px; the 320px column (820-1180px) holds 294, so the old 8px padding and 4px gap
-   pushed the star past the panel edge. Wrapping is the fallback if a label ever grows, never clipping. */
+/* The 320px column (820-1180px) leaves 294px for the bar. With "In Uniswap app" spelled out the tabs measured 318px
+   (labels 250 + 5 x 12 padding + 4 x 2 gap), so the star wrapped onto a row of its own; it shows as "In app"
+   (TAB_SHORT), which brings it to 253px (measured at 1094, 1180 and 1440px). Wrapping stays the fallback if a label
+   or the star count grows. */
 .tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 12px 12px 0; border-bottom: 1px solid var(--line); align-items: flex-end; flex-shrink: 0; }
 .tab { white-space: nowrap; padding: 8px 6px 10px; font-weight: 600; color: var(--fg2); border-bottom: 2px solid transparent; margin-bottom: -1px; }
 .tab:hover { color: var(--fg); }

@@ -12,7 +12,7 @@ import { emptyCopy, feedHref, feedHrefAt, feedQs, LIST_PAGE, listFor, moversFor,
 import { ago, NONE, usd } from "@/lib/format";
 import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
 import { loadRows, peekRows } from "@/lib/rows";
-import { CATEGORY_SHORT, TABS, type FeedQuery, type HookIndex, type LaunchView, type RowView } from "@/lib/types";
+import { CATEGORY_SHORT, TAB_SHORT, TABS, type FeedQuery, type HookIndex, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
 import { StarIcon } from "./Icons";
 import { JustLaunched } from "./JustLaunched";
@@ -158,8 +158,15 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
     <aside className={`panel ${s.list}`} aria-label="Hook projects">
       <nav className={s.tabs} aria-label="Feed views">
         {TABS.map(([id, label]) => (
-          <Link key={id} className={s.tab} aria-current={!watching && !searching && query.tab === id ? "page" : undefined} {...feedLink({ ...query, tab: id })}>
-            {label}
+          <Link
+            key={id}
+            className={s.tab}
+            aria-current={!watching && !searching && query.tab === id ? "page" : undefined}
+            aria-label={TAB_SHORT[id] && label}
+            title={TAB_SHORT[id] && label}
+            {...feedLink({ ...query, tab: id })}
+          >
+            {TAB_SHORT[id] ?? label}
           </Link>
         ))}
         <button

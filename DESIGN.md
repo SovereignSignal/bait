@@ -465,5 +465,6 @@ action and smart money, semantic green and amber) still hold.
 - **Lists page by 100** ("Show 100 more · N in all"); a new view starts again at one page, scrolled to the top.
 - **Search box** is uncontrolled, so letters typed before hydration are kept and handed to the list on mount. Enter
   before the rows or the address index arrive goes to the top match once it appears.
-- **Watchlist tab** fits the 320 px list column (6 px tab padding, 2 px gap; the bar wraps rather than clips), and an
-  empty watchlist reads "Star a project to keep it here."
+- **Watchlist tab** fits the 320 px list column on one row: the In Uniswap app tab shows as "In app" there (full name
+  kept as its accessible name and tooltip), with 6 px tab padding and a 2 px gap; the bar wraps rather than clips if a
+  label grows. An empty watchlist reads "Star a project to keep it here."

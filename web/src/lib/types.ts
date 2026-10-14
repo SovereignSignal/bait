@@ -27,6 +27,9 @@ export const TABS: Array<[Tab, string]> = [
   ["all", "All"],
 ];
 
+/** Visible label in the 320 px list column, where the full names plus the star need ~318 px of ~294; the full name stays the accessible name. */
+export const TAB_SHORT: Partial<Record<Tab, string>> = { verified: "In app" };
+
 export interface HookFlags {
   beforeInitialize: boolean;
   afterInitialize: boolean;
