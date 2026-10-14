@@ -6,6 +6,7 @@ import { FRESH_NOTE, type Freshness } from "@/lib/health";
 import { activePool, categoryLine, chainNames, poolsNote, poolVolume, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
+import { indexerLine } from "@/lib/trades";
 import { LiveTrades } from "./LiveTrades";
 import { ProjectHeading } from "./ProjectHeading";
 import { WatchStar } from "./WatchStar";
@@ -153,7 +154,13 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
         <div className={`panel ${s.blk}`}>
           <h2>Activity</h2>
           {busy && knownChain(busy.chainId) && (
-            <LiveTrades chainId={busy.chainId} chainSlug={chainSlug(busy.chainId)} poolId={busy.poolId} pair={`${poolPair(busy)} on ${CHAINS[busy.chainId]?.name ?? ""}`} />
+            <LiveTrades
+              chainId={busy.chainId}
+              chainSlug={chainSlug(busy.chainId)}
+              poolId={busy.poolId}
+              pair={`${poolPair(busy)} on ${CHAINS[busy.chainId]?.name ?? ""}`}
+              indexer={indexerLine(busy)}
+            />
           )}
           {busy && <div className={s.sub}>Signals</div>}
           <div className={s.feed}>

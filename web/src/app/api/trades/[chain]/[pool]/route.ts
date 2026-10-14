@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 
 const TTL_MS = 120_000;
 const ERROR_TTL_MS = 30_000;
+// Past this an idle pool's cached list is refetched before answering, not served first: a page opened after hours
+// without visitors showed trades "3d" old for a pool that traded that morning.
+const MAX_STALE_MS = 600_000;
 const MIN_USD = 10;
 const LIMIT = 25;
 const NO_STORE = "no-store";
@@ -29,8 +32,8 @@ type GtTrade = {
 };
 
 // In-process stale-while-revalidate cache (single replica): 120 s per pool, 30 s after an error or an empty list,
-// hard cap of 500 pools. GeckoTerminal's keyless tier is ~30 calls/min; we spend at most 20.
-const cache = createSwrCache<Payload>({ ttlMs: TTL_MS, max: 500 });
+// served stale for at most 10 min (older only when the refetch fails), hard cap of 500 pools. GeckoTerminal's keyless tier is ~30 calls/min; we spend at most 20.
+const cache = createSwrCache<Payload>({ ttlMs: TTL_MS, max: 500, maxStaleMs: MAX_STALE_MS });
 const gtBucket = createTokenBucket({ capacity: 20, refillPerSec: 20 / 60 });
 class RateLimited extends Error {}
 
