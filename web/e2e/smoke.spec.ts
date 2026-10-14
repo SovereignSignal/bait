@@ -74,8 +74,8 @@ test("search keeps letters typed before the page hydrated", async ({ page }) => 
   const errs = watch(page);
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
-  await page.route("**/_next/static/chunks/**", async (route) => {
-    await gate; // hold the scripts: the box is server-rendered HTML until they run
+  await page.route("**/_next/static/chunks/*.js", async (route) => {
+    await gate; // hold the scripts only: the CSS shares this folder, and holding it would hold DOMContentLoaded too
     await route.continue();
   });
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -90,11 +90,15 @@ test("search keeps letters typed before the page hydrated", async ({ page }) => 
 test("desktop at 1094px: the watchlist tab fits the tab bar, and an empty watchlist says what it is for", async ({ page }) => {
   test.skip(phone(), "the 320px list column is a desktop layout");
   await page.setViewportSize({ width: 1094, height: 800 });
+  const rowsLoaded = page.waitForResponse((r) => r.url().includes("/api/rows"));
   await page.goto("/");
+  await rowsLoaded; // fetched on mount, so the star's click handler is attached by now
   const list = page.getByRole("complementary", { name: "Hook projects" });
   const star = page.getByRole("button", { name: /^Watchlist, 0 saved$/ });
-  const [s, l] = [(await star.boundingBox())!, (await list.boundingBox())!];
+  const first = page.getByRole("navigation", { name: "Feed views" }).getByRole("link", { name: "Trending", exact: true });
+  const [s, l, f] = [(await star.boundingBox())!, (await list.boundingBox())!, (await first.boundingBox())!];
   expect(s.x + s.width, "the star tab pokes past the list panel").toBeLessThanOrEqual(l.x + l.width);
+  expect(s.y, "the star tab wrapped onto a second row").toBeLessThan(f.y + f.height / 2);
   await star.click();
   await expect(star).toHaveAttribute("aria-pressed", "true");
   await expect(list.getByText("Star a project to keep it here.")).toBeVisible();
