@@ -16,6 +16,17 @@ export function isUnnamed(displayName: string): boolean {
   return isUnlisted(displayName) || PAIR_LABEL.test(displayName);
 }
 
+/** The pool an unnamed project is labelled by: most 7-day volume, then most TVL, then the lowest pool id, so every page
+ * (list, detail, week, OG, RSS) names a family by the same pair. queries.ts topPools orders by exactly these keys; keep
+ * them in step. Unknown (null) sorts below any number. */
+export function compareTopPool(
+  a: { vol7d: number | null; tvlUsd: number | null; poolId: string },
+  b: { vol7d: number | null; tvlUsd: number | null; poolId: string },
+): number {
+  const desc = (x: number | null, y: number | null) => (y ?? -Infinity) - (x ?? -Infinity) || 0;
+  return desc(a.vol7d, b.vol7d) || desc(a.tvlUsd, b.tvlUsd) || (a.poolId < b.poolId ? -1 : a.poolId > b.poolId ? 1 : 0);
+}
+
 export function unlistedLabel(name: string, sym0: string | null, sym1: string | null): string {
   const m = UNLISTED.exec(name);
   if (!m || !sym0 || !sym1) return name;

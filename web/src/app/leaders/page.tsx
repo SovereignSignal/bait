@@ -70,7 +70,7 @@ export default async function LeadersPage() {
             <div className={`${s.v} num`}>{int(t.wallets24h)}</div>
           </div>
           <div className={s.tot}>
-            <div className={s.k}>Active hook projects</div>
+            <div className={s.k}>Projects traded, last 7 days</div>
             <div className={`${s.v} num`}>{int(t.projects)}</div>
           </div>
           <div className={s.tot}>
