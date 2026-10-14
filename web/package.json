@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "test": "tsx --test src/lib/routable.test.ts src/lib/radar.test.ts src/lib/symbols.test.ts src/lib/relevance.test.ts src/lib/unlisted.test.ts src/lib/swr-cache.test.ts src/lib/xml.test.ts src/lib/token-bucket.test.ts src/lib/health.test.ts src/lib/ux.test.ts src/lib/windows.test.ts src/lib/variants.test.ts"
+    "test": "tsx --test src/lib/routable.test.ts src/lib/radar.test.ts src/lib/symbols.test.ts src/lib/relevance.test.ts src/lib/unlisted.test.ts src/lib/swr-cache.test.ts src/lib/xml.test.ts src/lib/token-bucket.test.ts src/lib/health.test.ts src/lib/ux.test.ts src/lib/windows.test.ts src/lib/variants.test.ts src/lib/consistency.test.ts src/lib/project-page.test.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",

@@ -161,5 +161,19 @@ def test_digest_leaves_wash_out_of_the_week_and_names_the_window(conn, ctx):
     digest.run(conn, ctx)
     body = conn.execute(sa.select(db.digests.c.body)).scalar_one()
     assert body["window_end"] == "2026-10-05"
-    assert body["totals"] == {"projects": 1, "tvl_usd": 100.0, "vol_7d": 50_000.0}
+    assert body["totals"] == {"projects": 1, "traded": 1, "tvl_usd": 100.0, "vol_7d": 50_000.0}
     assert [c["slug"] for c in body["trending"]] == ["real"]
+
+
+def test_digest_counts_projects_traded_this_week_as_leaders_does(conn, ctx):
+    # /leaders "Projects traded, last 7 days" = non-spam, non-wash, vol_7d > 0; the digest totals use the same set
+    a = insert_project(conn, "Busy", NOW - timedelta(days=40), slug="busy")
+    b = insert_project(conn, "Idle", NOW - timedelta(days=40), slug="idle")
+    c = insert_project(conn, "Unknown", NOW - timedelta(days=40), slug="unknown")
+    conn.execute(sa.insert(db.project_daily).values(project_id=a, day=DAY, tvl_usd=100.0, vol_7d=5_000.0, pools_n=1, score_trending=0.0))
+    conn.execute(sa.insert(db.project_daily).values(project_id=b, day=DAY, tvl_usd=40.0, vol_7d=0.0, pools_n=1, score_trending=0.0))
+    conn.execute(sa.insert(db.project_daily).values(project_id=c, day=DAY, tvl_usd=7.0, vol_7d=None, pools_n=1, score_trending=0.0))
+    ctx.force_digest = True
+    digest.run(conn, ctx)
+    totals = conn.execute(sa.select(db.digests.c.body)).scalar_one()["totals"]
+    assert totals == {"projects": 3, "traded": 1, "tvl_usd": 100.0, "vol_7d": 5_000.0}

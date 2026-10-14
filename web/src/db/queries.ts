@@ -17,8 +17,8 @@ import { SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixture
 import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
-import { longDate, usd } from "@/lib/format";
-import { digestItem, firstWebUrl, hookKeys, toRow } from "@/lib/present";
+import { longDate } from "@/lib/format";
+import { auditLinks, digestIntro, digestItem, hookKeys, toRow, withCurrentNames } from "@/lib/present";
 import type {
   Category,
   ChainId,
@@ -97,25 +97,39 @@ export async function getFeed(q: FeedQuery): Promise<ProjectSummary[]> {
 }
 
 export async function getProject(slug: string): Promise<ProjectDetail | null> {
+  return (await getProjectPage(slug)).project;
+}
+
+/**
+ * A project page: the detail and the sidebar rows from one list load. The detail is cached per load generation and pinned
+ * to that load's day, and takes its display name from the list row, so the header, the sidebar, its rank and every other
+ * page agree even when the snapshot is up to an hour old.
+ */
+export async function getProjectPage(slug: string): Promise<{ project: ProjectDetail | null; rows: RowView[] }> {
   const db = getDb();
+  const all = await loadAll();
+  const live = all.filter((p) => !p.isSpam);
+  const rows = live.map(rowOf);
   let detail: ProjectDetail | null;
   if (!db) {
     const p = usingFixtures() ? SAMPLE_PROJECTS.find((x) => x.slug === slug) : undefined;
     detail = p ? derive(p) : null;
   } else {
-    await refreshIfNewDay(db);
     // Unknown slugs never reach the cache: random URLs cannot fill it.
     // (An empty list means an empty or failing database: fall through so a failure throws rather than 404s.)
-    const known = await getAllSlugs();
-    if (known.length && !known.includes(slug)) return null;
+    const base = live.find((p) => p.slug === slug);
+    if (live.length && !base) return { project: null, rows };
+    const gen = (all as Loaded).gen;
+    const pin = gen != null ? { latest: (all as Loaded).day ?? null } : {};
     // No safe() here: a database error throws (Next keeps the last good page) instead of becoming a cached 404.
-    const rows = await cached(`project:${slug}`, () => loadFromDb(db, { slug, full: true }), degradedTtl);
-    detail = rows[0] ?? null;
+    const loaded = await cached(`project:${gen ?? "-"}:${slug}`, () => loadFromDb(db, { slug, full: true, ...pin }), degradedTtl);
+    detail = loaded[0] ?? null;
+    // the list row's name and top pool: symbol lookups can differ between two loads, the label must not
+    if (detail && base) detail = { ...detail, name: base.name, topPool: base.topPool };
   }
-  if (!detail || detail.isSpam) return null; // spam 404s; a wash-like project keeps its page (Detail shows why)
-  const rows = await getRows();
+  if (!detail || detail.isSpam) return { project: null, rows }; // spam 404s; a wash-like project keeps its page (Detail shows why)
   const rank = applyTab(rows, { tab: "trending" }).find((x) => x.slug === slug)?.rank;
-  return { ...detail, rank };
+  return { project: { ...detail, rank }, rows };
 }
 
 /**
@@ -222,15 +236,26 @@ export async function getWalletLabels(chainId: ChainId, addresses: string[]): Pr
 export async function getDigest(week: string): Promise<DigestView | null> {
   const db = getDb();
   if (!db) return usingFixtures() ? (SAMPLE_DIGESTS.find((d) => d.week === week) ?? null) : null;
-  const [row] = await safe("getDigest", () => db.select().from(t.digests).where(eq(t.digests.weekOf, week)).limit(1), []);
-  return row ? toDigest(row) : null;
+  const [[row], names] = await Promise.all([
+    safe("getDigest", () => db.select().from(t.digests).where(eq(t.digests.weekOf, week)).limit(1), []),
+    currentNames(),
+  ]);
+  return row ? toDigest(row, names) : null;
 }
 
 export async function listDigests(limit = 12): Promise<DigestView[]> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_DIGESTS.slice(0, limit) : [];
-  const rows = await safe("listDigests", () => db.select().from(t.digests).orderBy(desc(t.digests.weekOf)).limit(limit), []);
-  return rows.map(toDigest);
+  const [rows, names] = await Promise.all([
+    safe("listDigests", () => db.select().from(t.digests).orderBy(desc(t.digests.weekOf)).limit(limit), []),
+    currentNames(),
+  ]);
+  return rows.map((r) => toDigest(r, names));
+}
+
+/** slug -> the display name the list, the project page, the OG image and RSS show (one load, one top-pool rule). */
+async function currentNames(): Promise<Map<string, string>> {
+  return new Map((await loadAll()).map((p) => [p.slug, p.name]));
 }
 
 /** Fixtures are opt-in (BAIT_FIXTURES=1) so a build with no DATABASE_URL prerenders empty pages, never sample figures. */
@@ -260,7 +285,8 @@ export function cached<T>(key: string, fn: () => Promise<T>, ttl?: Ttl<T>): Prom
 }
 
 /** A load where a usage sub-query fell back to null (outage, or a table that is not there yet) is retried after 60 s, not 1 h. */
-type Loaded = ProjectDetail[] & { degraded?: boolean };
+type Loaded = ProjectDetail[] & { degraded?: boolean; day?: string | null; gen?: number };
+let loads = 0;   // generation stamp: a detail is cached per list load, never mixed with another one
 const DEGRADED_TTL_MS = 60_000;
 const degradedTtl = (r: Loaded): number => (r.degraded ? DEGRADED_TTL_MS : 3_600_000);
 
@@ -281,28 +307,28 @@ async function refreshIfNewDay(db: NonNullable<ReturnType<typeof getDb>>): Promi
 
 // ---------- loading ----------
 
+let lastGen: number | undefined;
 async function loadAll(): Promise<ProjectDetail[]> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_PROJECTS.map(derive) : [];
   await refreshIfNewDay(db);
-  return safe("loadAll", () => cached("loadAll", () => loadFromDb(db, { full: false }), degradedTtl), []);
+  const all: Loaded = await safe("loadAll", () => cached<Loaded>("loadAll", () => loadFromDb(db, { full: false }), degradedTtl), []);
+  // a new list load retires the details cached against the old one (they would never be read again)
+  if (all.gen != null && all.gen !== lastGen) {
+    if (lastGen !== undefined) cache.invalidate(`project:${lastGen}:`);
+    lastGen = all.gen;
+  }
+  return all;
 }
 
 /** digests.body (pipeline shape) -> DigestView. Title and intro are rendered here, not stored. */
-function toDigest(row: typeof t.digests.$inferSelect): DigestView {
+function toDigest(row: typeof t.digests.$inferSelect, names: ReadonlyMap<string, string>): DigestView {
   const week = String(row.weekOf);
   const b = row.body;
   const card = (kind: DigestItem["kind"]) => (c: t.DigestCard): DigestItem => digestItem(c, kind);
-  const fresh = (b.new ?? []).map(card("new"));
-  const hot = (b.trending ?? []).map(card("trending"));
-  const totals = b.totals ?? { projects: 0, tvl_usd: 0, vol_7d: 0 };
-  const intro = [
-    fresh.length === 0 ? "No new projects cleared the bar." : `${fresh.length} new project${fresh.length === 1 ? "" : "s"} cleared the bar.`,
-    hot.length > 0 ? `${hot[0].name} led trending.` : null,
-    `${totals.projects.toLocaleString("en-US")} projects with usage, ${usd(totals.tvl_usd)} TVL, ${usd(totals.vol_7d)} 7d volume.`,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const fresh = withCurrentNames((b.new ?? []).map(card("new")), names);
+  const hot = withCurrentNames((b.trending ?? []).map(card("trending")), names);
+  const intro = digestIntro(fresh, hot, b.totals ?? { projects: 0, tvl_usd: 0, vol_7d: 0 });
   return { week, title: `Week of ${longDate(week)}`, intro, items: [...fresh, ...hot], createdAt: b.generated_at ?? `${week}T06:00:00Z` };
 }
 
@@ -342,7 +368,7 @@ function num(v: unknown): number | null {
 type NansenValue = { labeled?: Array<{ labels?: unknown }>; smart_money?: boolean };
 type GithubValue = { last_commit_at?: string | null };
 type ExaValue = { latest?: string | null };
-type Enrichment = { secondary_categories?: Category[]; color?: string; parallel?: { audit_url?: string | null } };
+type Enrichment = { secondary_categories?: Category[]; color?: string; parallel?: { audit_url?: string | null; team?: string | null } };
 
 type TopPoolRow = {
   project_id: number; pool_id: string; chain_id: number; hook_address: string;
@@ -356,8 +382,9 @@ type SmartRow = { project_id: number; smart: unknown };
  * top pool and 24h usage. `full` adds pools, the daily volume series and top
  * wallets, and is only used for the project page.
  */
-async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promise<Loaded> {
-  const latest = await latestDay(db);
+async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?: string | null }): Promise<Loaded> {
+  // a detail load pins the day of the list it sits beside, so a run landing in between cannot split the page
+  const latest = opts.latest !== undefined ? opts.latest : await latestDay(db);
   const projectRows = await db
     .select()
     .from(t.projects)
@@ -381,17 +408,29 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
           .where(inArray(t.receipts.projectId, ids))
           .orderBy(sql`${t.receipts.publishedAt} desc nulls last`)
       : [],
-    end
+    latest && end
       ? db.execute<TopPoolRow>(sql`
-          select distinct on (h.project_id) h.project_id, p.pool_id, p.chain_id, p.hook_address,
-                 p.token0->>'symbol' as token0_symbol, p.token1->>'symbol' as token1_symbol,
-                 p.token0->>'id' as token0_id, p.token1->>'id' as token1_id
-          from ${t.pools} p
-          join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
-          join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${end}
-          -- 'hook:<address>' is a capped hook's aggregate of pools the indexer does not store: usage, not a pool
-          where h.project_id = any(${idArray}) and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'
-          order by h.project_id, s.tvl_usd desc nulls last`)
+          with pp as (
+            select h.project_id, p.pool_id, p.chain_id, p.hook_address, p.token0, p.token1
+            from ${t.pools} p
+            join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
+            -- 'hook:<address>' is a capped hook's aggregate of pools the indexer does not store: usage, not a pool
+            where h.project_id = any(${idArray}) and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'),
+          w as (
+            -- as score: 7-day volume over closed days, TVL from the latest row up to the running day (the pool rows' TVL)
+            select s.pool_id, s.chain_id,
+                   sum(case when s.day between ${shiftDay(end, -6)} and ${end} then greatest(s.volume_usd_day, 0) end) as vol7d,
+                   (array_agg(s.tvl_usd order by s.day desc))[1] as tvl
+            from ${t.poolSnapshots} s
+            join pp on pp.pool_id = s.pool_id and pp.chain_id = s.chain_id
+            where s.day between ${shiftDay(end, -13)} and ${latest}
+            group by s.pool_id, s.chain_id)
+          select distinct on (pp.project_id) pp.project_id, pp.pool_id, pp.chain_id, pp.hook_address,
+                 pp.token0->>'symbol' as token0_symbol, pp.token1->>'symbol' as token1_symbol,
+                 pp.token0->>'id' as token0_id, pp.token1->>'id' as token1_id
+          from pp join w on w.pool_id = pp.pool_id and w.chain_id = pp.chain_id
+          -- the same keys as lib/unlisted.ts compareTopPool, ending on the pool id so ties never flip between loads
+          order by pp.project_id, w.vol7d desc nulls last, w.tvl desc nulls last, pp.pool_id`)
       : [],
     // Rolling 24h volume and buy/sell counts, latest pool_stats day. Table may be missing: null, not a failure.
     safe(
@@ -455,6 +494,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
 
   const out: Loaded = [];
   out.degraded = statsUsage === null || smartUsage === null;
+  out.day = latest;
+  out.gen = ++loads;
   for (const p of projectRows) {
     const d = dailyBy.get(p.id);
     // Registry hooks span ~22 chains; Bait covers the ten in CHAINS. Unknown ids would crash every CHAINS[...] lookup.
@@ -466,8 +507,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
     const enrichment = (p.enrichment ?? {}) as Enrichment;
     const top = topBy.get(p.id);
     const recs = (receiptsBy.get(p.id) ?? []).filter((r) => receiptRelevant(p.name, r.title ?? "", r.source ?? "")).map(toReceipt);
-    const auditUrls = new Set(hs.map((h) => h.auditUrl).filter(Boolean));
-    if (enrichment.parallel?.audit_url) auditUrls.add(enrichment.parallel.audit_url);
+    const audits = auditLinks(hs.map((h) => h.auditUrl), enrichment.parallel, isUnlisted(p.name));
     const su = statsBy?.get(p.id);
 
     let pools: PoolView[] = [];
@@ -530,8 +570,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
           lastCommitAt: gh?.last_commit_at ?? null,
           lastExaHitAt: exa?.latest ?? null,
           routable: "unknown", // derive() computes it from hooks and pools
-          auditCount: auditUrls.size,
-          auditUrl: firstWebUrl(auditUrls),
+          auditCount: audits.length,
+          auditUrl: audits[0] ?? null,
         },
         receipts: recs,
         topPool:
@@ -585,7 +625,7 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
   const [rows, stats] = await Promise.all([
     db.execute<PoolRow>(sql`
       select p.pool_id, p.chain_id, p.hook_address, p.token0, p.token1, p.fee, p.tick_spacing, p.created_at,
-             s.tvl_usd,
+             lt.tvl_usd,
              -- closed UTC days: 7d = from7..end, 24h = end. No row reads as 0; NULL cumulative (unknown on-chain volume) stays NULL
              case when s.pool_id is not null and s.volume_usd_cum is null then null else coalesce(w.vol7d, 0) end as vol7d,
              w.tx7d,
@@ -594,6 +634,12 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
       from ${t.pools} p
       join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
       left join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${end}
+      -- TVL as score sums it into the header: the latest row up to the running day, so the rows add up to the header
+      left join lateral (
+        select x.tvl_usd from ${t.poolSnapshots} x
+        where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${shiftDay(end, -13)} and ${latest}
+        order by x.day desc limit 1
+      ) lt on true
       left join lateral (
         select sum(x.volume_usd_day) as vol7d,
                -- as score: a 7-day count only when every day is known; days before the pool existed count as 0 and a
@@ -607,8 +653,8 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
       ) w on true
       where h.project_id = ${projectId} and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'
       -- active pools first, so the 50 rows hold them on a launchpad with hundreds of idle ones
-      order by (coalesce(s.tvl_usd, 0) > 0 or coalesce(s.volume_usd_day, 0) > 0 or coalesce(w.vol7d, 0) > 0 or coalesce(w.tx7d, 0) > 0) desc,
-               s.tvl_usd desc nulls last, s.volume_usd_day desc nulls last
+      order by (coalesce(lt.tvl_usd, 0) > 0 or coalesce(s.volume_usd_day, 0) > 0 or coalesce(w.vol7d, 0) > 0 or coalesce(w.tx7d, 0) > 0) desc,
+               lt.tvl_usd desc nulls last, s.volume_usd_day desc nulls last, p.pool_id
       limit 50`),
     safe<unknown>(
       "pools:pool_stats",

@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { Terminal } from "@/components/Terminal";
 import { getFreshness } from "@/db/health";
-import { getAllSlugs, getProject, getRows, slugForAlias, usingFixtures } from "@/db/queries";
+import { getAllSlugs, getProject, getProjectPage, slugForAlias, usingFixtures } from "@/db/queries";
 import { SAMPLE_NOW } from "@/fixtures/sample";
 import { movers } from "@/lib/feed";
 
-export const revalidate = 3600;
+export const revalidate = 600; // demo window: a first visit is at most ten minutes behind the list
 export const dynamicParams = true;
 
 export async function generateStaticParams() {
@@ -29,7 +29,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function ProjectPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const [p, rows, fresh] = await Promise.all([getProject(slug), getRows(), getFreshness()]);
+  // the detail and the sidebar from one list load, so ranks and figures agree within the page
+  const [{ project: p, rows }, fresh] = await Promise.all([getProjectPage(slug), getFreshness()]);
   if (!p) {
     const moved = await slugForAlias(slug);   // renamed or merged since this link was shared
     if (moved) permanentRedirect(`/p/${moved}`);
