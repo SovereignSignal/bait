@@ -62,3 +62,20 @@ test("a per-call ttl shortens one entry's lifetime, by number or by value", asyn
   await c.get("long", async () => ++n);
   assert.equal(n, 5);                                // default ttl still applies
 });
+
+test("past maxStaleMs the caller waits for the refresh; a failed refresh still falls back to the stale value", async () => {
+  let t = 0;
+  const c = createSwrCache<string>({ ttlMs: 10, max: 10, maxStaleMs: 100, now: () => t });
+  assert.equal(await c.get("k", async () => "v1"), "v1");
+  t = 50;                                            // stale but inside the bound: old value now, refresh behind
+  assert.equal(await c.get("k", async () => "v2"), "v1");
+  await tick();
+  assert.equal(await c.get("k", async () => "v3"), "v2");
+  t = 10_000;                                        // idle for ages: never answer with the days-old value
+  let calls = 0;
+  const slow = async () => (++calls, "v4");
+  const [a, b] = await Promise.all([c.get("k", slow), c.get("k", slow)]);
+  assert.deepEqual([a, b, calls], ["v4", "v4", 1]);  // both callers share the one refresh
+  t = 20_000;
+  assert.equal(await c.get("k", async () => { throw new Error("upstream down"); }), "v4");
+});
