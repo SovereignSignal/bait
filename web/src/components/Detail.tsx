@@ -5,6 +5,7 @@ import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, sh
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
 import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolVolume, seriesLabels, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
+import { variants } from "@/lib/variants";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
 import { indexerLine } from "@/lib/trades";
 import { LiveTrades } from "./LiveTrades";
@@ -14,6 +15,7 @@ import s from "./Detail.module.css";
 
 const DAY = 86_400_000;
 const POOLS_SHOWN = 8;
+const VARIANTS_SHOWN = 6;
 
 /** Most active pool (closed-day volume), else the deepest. */
 export function busiestPool(p: ProjectDetail): PoolView | null {
@@ -66,6 +68,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       : []),
   ];
   const partial = p.chains.filter((c) => fresh?.partialChains?.includes(c));
+  const vs = variants(p.hooks);
   const busy = busiestPool(p);
   const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
@@ -99,6 +102,16 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
                 ),
               )}
             </div>
+            {vs.length > 0 && (
+              <div className={s.variants} data-testid="variants" aria-label="Deployments">
+                {vs.slice(0, VARIANTS_SHOWN).map((v) => (
+                  <span key={v.label} className="b b-n" title={`${v.hooks} hook${v.hooks === 1 ? "" : "s"} registered as ${v.label}`}>
+                    {v.label} · {chainNames(v.chains, ", ")}
+                  </span>
+                ))}
+                {vs.length > VARIANTS_SHOWN && <span className="b b-n">+{vs.length - VARIANTS_SHOWN} more</span>}
+              </div>
+            )}
             {/* the titles above are hover-only; this works on touch and keyboard */}
             <details className={s.badgeHelp}>
               <summary>What these badges mean</summary>
