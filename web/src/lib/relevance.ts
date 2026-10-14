@@ -2,7 +2,7 @@
 // Exa matches on the name alone, so "Angstrom" returns a fighting-game character and LinkedIn profiles.
 // Mirrors pipeline/bait/rules.py receipt_relevant(); keep the two in sync (shared cases in fixtures/relevance_cases.json).
 
-const DOMAIN_WORDS = ["uniswap", "hook", "v4", "liquidity", "swap", "pool", "defi", "amm", "dex", "lp", "mev", "fee"];
+const DOMAIN_WORDS = ["uniswap", "hook", "v4", "liquidity", "swap", "pool", "amm", "dex", "lp", "mev", "fee"];
 const BLOCKED_HOSTS = ["linkedin.com", "wikipedia.org", "netlify.app", "facebook.com", "instagram.com", "tiktok.com"];
 
 export function nameTokens(projectName: string): string[] {

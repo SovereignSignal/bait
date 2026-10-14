@@ -108,7 +108,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
           <div style={{ fontSize: 20, color: T.fg2 }}>What it does</div>
           <div style={{ fontSize: 34, lineHeight: 1.25, color: T.fg, letterSpacing: -0.5 }}>{p.whatLine}</div>
           <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-            {p.chains.filter((id) => CHAINS[id]).slice(0, 4).map((id) => (
+            {p.chains.filter((id) => CHAINS[id]).slice(0, 5).map((id) => (
               <div key={id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px 6px 6px", borderRadius: 999, background: T.surface, border: `1px solid ${T.border}`, fontSize: 20, color: T.fg }}>
                 <div style={{ width: 24, height: 24, borderRadius: 12, background: CHAINS[id].color }} />
                 {CHAINS[id].name}
@@ -119,7 +119,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
         </div>
         <div style={{ display: "flex", flexDirection: "column", background: T.well, borderRadius: 28, padding: 24, gap: 14 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {money !== null && (money > 0 ? sig(true, `◆ ${money} smart money LP${money === 1 ? "" : "s"}`, true) : sig(false, "◇ No smart money yet"))}
+            {money !== null && money > 0 && sig(true, `◆ ${money} smart money LP${money === 1 ? "" : "s"}`, true)}
             {sig(p.signals.routable === "eligible", p.signals.routable === "eligible" ? "● Routes in Uniswap app" : p.signals.routable === "ineligible" ? "○ Not routable in app" : "○ Routing unknown")}
             {sig(p.signals.auditCount > 0, p.signals.auditCount > 0 ? "✓ Audit linked" : "○ No audit linked")}
           </div>

@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from ..db import (HOOK_POOL_PREFIX, as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
 from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
-                     is_new, is_spam, is_symmetric, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
+                     is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
                      is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
 from .onchain import ready_chains
@@ -295,6 +295,9 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
         "vol_tvl": {k: (v, is_wash_vol_tvl(v, tvl.get(k), w7[k])) for k, v in vol7.items()},
         "no_liquidity": {k: (v, is_wash_no_liquidity(v, tvl.get(k), w7[k], k in custom)) for k, v in vol7.items()},
         "symmetric": {k: (r.vol_24h_rolling or 0.0, sym[k]) for k, r in stats.items()},
+        "uniform": {k: (r.vol_24h_rolling or 0.0, is_uniform(top.get(k, []), r.vol_24h_rolling,
+                                                             r.wallets_24h if r.wallets_24h else r.traders_24h))
+                    for k, r in stats.items()},
     }
     reasons: dict[int, list[str]] = {}
     for reason in (r for r in WASH_REASONS if r in judged):

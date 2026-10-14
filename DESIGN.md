@@ -358,6 +358,9 @@ A project gets a reason when the pools that rule flags carry >= 50% of its volum
 - `symmetric`: the pool's top 10 wallets that day each have equal buys and sells and carry > 50% of its rolling 24h
   volume (>= $10K), with at least 5 such wallets or 3 round trips each. Data from the activity step: the top 30 non-wash
   pools plus up to 10 24h-wash candidates (`ACTIVITY_WASH_POOLS`).
+- `uniform`: >= $1M rolling 24h, the pool's top 10 wallets (at least 8) each made exactly one trade, their sizes within 3%
+  of each other, and the pool's volume per wallet is at least 80% of their median size (a buy cap gives a uniform top but
+  a much lower average). Hookr MOW/WETH 10/13: ten one-trade buys of $22,450-$22,515, $17.1M from 809 wallets.
 - `unverified`: not a rule. A project that escaped the spam rule only by moving $1M or more, matched no rule and has no
   wallet data at all is listed as wash-like rather than ranked.
 - Live cases: OUROBOROS/CRCL on Robinhood (866x, 13 buyers + 13 sellers, symmetric bots) -> 24h, vol_tvl, symmetric;

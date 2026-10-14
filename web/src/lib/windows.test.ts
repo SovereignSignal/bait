@@ -11,7 +11,7 @@ const row = (over: Partial<RowView>): RowView => ({
   tvlUsd: 0, routable: "unknown", audited: false, ...over,
 });
 
-test("wash rows: in All with the rest, never in Trending, New or movers", () => {
+test("wash rows: in All after the rest, never in Trending, New or movers", () => {
   const rows = [
     row({ slug: "real", scoreTrending: 5, vol7d: 50_000, vol7dPrev: 20_000 }),
     row({ slug: "wash", isWash: true, scoreTrending: 9, vol7d: 9e8, isNew: true }),
@@ -19,7 +19,7 @@ test("wash rows: in All with the rest, never in Trending, New or movers", () => 
   ];
   assert.deepEqual(applyTab(rows, { tab: "trending" }).map((r) => r.slug), ["real"]);
   assert.deepEqual(applyTab(rows, { tab: "new" }).map((r) => r.slug), ["fresh"]);
-  assert.deepEqual(applyTab(rows, { tab: "all" }).map((r) => r.slug), ["wash", "real", "fresh"]);
+  assert.deepEqual(applyTab(rows, { tab: "all" }).map((r) => r.slug), ["real", "fresh", "wash"]);
   assert.ok(!movers(rows).some((r) => r.slug === "wash"));
 });
 test("wash rows are listed in All only, not in the In Uniswap app tab", () => {

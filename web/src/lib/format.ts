@@ -70,6 +70,7 @@ export function pctDelta(cur: number, prev: number, isNew = false): { text: stri
   if (isNew || prev < 1000) return { text: "new", dir: "new" };
   const d = (cur / prev - 1) * 100;
   const rounded = Math.abs(d) >= 10 ? Math.round(d) : Math.round(d * 10) / 10;
+  if (rounded > 999) return { text: ">999%", dir: "up" }; // as fmtDelta: past +999% the figure only says "from almost nothing"
   return { text: `${d >= 0 ? "+" : ""}${rounded}%`, dir: d >= 0 ? "up" : "down" };
 }
 
