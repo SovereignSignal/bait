@@ -48,7 +48,7 @@ def test_score_hand_computed(conn, ctx):
     assert d.is_new is False           # pipeline first saw it 3d ago, but its pool is 60d old: not new
     assert d.is_spam is False
     assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_24h": 0, "wash_7d": 0,
-                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_unverified": 0,
+                   "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_uniform": 0, "wash_unverified": 0,
                    "wash_concentrated": 0}
 
 

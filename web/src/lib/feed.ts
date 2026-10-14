@@ -1,6 +1,7 @@
 // Tab / filter / ranking rules shared by the server (which project "/" selects)
 // and the client list (search, watchlist). Pure: no server-only imports.
 import { CHAINS, parseChainParam } from "./chains";
+import { isUnnamed } from "./unlisted";
 import { CATEGORIES, CATEGORY_LABEL, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type HookIndex, type RowView, type Tab } from "./types";
 
 export const TRENDING_TOP_N = 20;
@@ -54,7 +55,7 @@ export function inApp(r: { routable: Eligibility }): boolean {
   return r.routable === "eligible";
 }
 
-type FeedItem = Pick<RowView, "slug" | "isNew" | "isWash" | "firstSeenAt" | "scoreTrending" | "vol7d" | "tvlUsd" | "chains" | "category" | "secondaryCategories" | "routable" | "audited">;
+type FeedItem = Pick<RowView, "slug" | "name" | "isNew" | "isWash" | "firstSeenAt" | "scoreTrending" | "vol7d" | "tvlUsd" | "chains" | "category" | "secondaryCategories" | "routable" | "audited">;
 
 function matches(p: FeedItem, q: FeedQuery): boolean {
   if (q.chain && !p.chains.includes(q.chain)) return false;
@@ -65,7 +66,7 @@ function matches(p: FeedItem, q: FeedQuery): boolean {
 /** Trending order over every row (not the filtered view), so ranks stay stable across filters. */
 export function trendingOrder<T extends FeedItem>(all: T[]): T[] {
   return [...all]
-    .filter((p) => !p.isWash && p.vol7d != null && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
+    .filter((p) => !p.isWash && !isUnnamed(p.name) && p.vol7d != null && p.vol7d >= TRENDING_MIN_VOL && p.scoreTrending > 0)
     .sort((a, b) => b.scoreTrending - a.scoreTrending || b.tvlUsd - a.tvlUsd || a.slug.localeCompare(b.slug))
     .slice(0, TRENDING_TOP_N);
 }
@@ -81,10 +82,10 @@ export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & 
   const trending = trendingOrder(all);
   const rankOf = new Map(trending.map((p, i) => [p.slug, i + 1]));
   let rows: T[];
-  if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
+  if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash && !isUnnamed(p.name)).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
   else if (q.tab === "verified") rows = all.filter((p) => inApp(p) && !p.isWash).sort(byVol7d);
-  else rows = [...all].sort(byVol7d);
+  else rows = [...all].sort((a, b) => Number(a.isWash) - Number(b.isWash) || byVol7d(a, b)); // wash-like rows after the rest
   return rows.filter((p) => matches(p, q)).map((p) => ({ ...p, rank: rankOf.get(p.slug) }));
 }
 
@@ -108,7 +109,7 @@ export function movers(all: RowView[], n = 10): RowView[] {
     return v7 * (d != null && d > 0 ? 1 + d / 100 : 1);
   };
   return all
-    .filter((p) => !p.isWash && ((p.isNew && (p.vol7d ?? 0) > 0) || trending.has(p.slug)))
+    .filter((p) => !p.isWash && !isUnnamed(p.name) && ((p.isNew && (p.vol7d ?? 0) > 0) || trending.has(p.slug)))
     .sort((a, b) => key(b) - key(a))
     .slice(0, n);
 }

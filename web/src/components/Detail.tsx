@@ -38,8 +38,10 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       v: walletsText(u.wallets24h, u.walletsExact),
       title: u.walletsExact === false ? "Upper bound: buyers + sellers per pool, so a wallet that bought and sold counts twice." : undefined,
     },
-    // the closed UTC day, from score: no longer GeckoTerminal's rolling buys + sells
-    { k: "Swaps 24h", v: int(u.tx24h) },
+    // the closed UTC day, from score; when a day is missing, the rolling buys + sells the trade card shows, marked "≈"
+    (u.tx24h == null || (u.tx24h === 0 && (u.wallets24h ?? 0) > 0)) && u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0
+      ? { k: "Swaps 24h", v: `≈ ${int(u.buys24h + u.sells24h)}`, title: "Rolling 24h buys + sells from the pool feed; the closed-day count is not in yet." }
+      : { k: "Swaps 24h", v: int(u.tx24h) },
   ];
   const badges: Array<{ cls: string; label: string; why: string; href?: string }> = [
     ...(p.isWash ? [{ cls: "b-r", label: "Wash-like volume", why: washLine(p.washReason) }] : []),
@@ -59,6 +61,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       ? [{ cls: "b-p", label: `◆ ${u.smartWallets} smart wallet${u.smartWallets === 1 ? "" : "s"}`, why: "Wallets Nansen labelled as smart money (labels collected until October 2026) traded here in the last day." }]
       : []),
   ];
+  const partial = p.chains.filter((c) => fresh?.partialChains?.includes(c));
   const busy = busiestPool(p);
   const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
@@ -128,6 +131,11 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
           <p className={s.fresh} data-testid="freshness">
             <span>Figures through {dayLabel(fresh.through)}, updated nightly</span>
             {fresh.note && <span className="b b-a">{FRESH_NOTE[fresh.note]}</span>}
+            {partial.length > 0 && (
+              <span className="b b-a" title="On-chain history for this chain is still loading, so pool counts, volume and wallets here are a partial view." data-testid="partial-chain">
+                {chainNames(partial, ", ")} still indexing: figures partial
+              </span>
+            )}
           </p>
         )}
       </div>
@@ -338,7 +346,7 @@ function events(p: ProjectDetail, busy: PoolView | null, now: number): Ev[] {
       text: `${deltaWords(d)} week over week, ${usd(p.metrics.vol7d)} in 7 days`,
     });
   }
-  if (busy && busy.vol24h != null) {
+  if (busy && busy.vol24h != null && busy.vol24h > 0) {
     out.push({
       cls: "b-n",
       label: "Top pool",
@@ -386,7 +394,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
         {p.topWallets.length > 0 && <span>by volume in the latest ~300 trades of each busy pool</span>}
       </div>
       {p.topWallets.length === 0 ? (
-        <div className="mut">No wallet data for this project yet. It usually fills in within a day.</div>
+        <div className="mut">No wallet data for this project yet.</div>
       ) : (
         <div className={s.tw}>
           <table className={s.table}>

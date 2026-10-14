@@ -31,8 +31,8 @@ export default function AboutPage() {
             Buys and sells are GeckoTerminal&apos;s rolling 24-hour counts. Top wallets come from GeckoTerminal&apos;s latest ~300 trades in each
             of Bait&apos;s 30 busiest pools, once a day. Distinct wallet counts come from the indexer where it has caught up, otherwise from those
             trades; a &quot;≤&quot; marks an upper bound. The live trade feed on a project page reads GeckoTerminal&apos;s recent trades for the project&apos;s
-            busiest pool, hides trades under $10, and refreshes every minute while you watch. Wallet labels and the &quot;Smart money&quot; pill are
-            Nansen labels collected until October 2026; they are no longer updated.
+            busiest pool, hides trades under $10, and refreshes every minute while you watch. Wallet labels and the &quot;Smart money&quot; pill come
+            from Nansen labels collected through early October 2026.
           </p>
           <h3>Grouping</h3>
           <p>
