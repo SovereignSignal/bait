@@ -217,6 +217,9 @@ export interface ProjectDetail extends ProjectSummary {
   series: (number | null)[];
   /** top wallets across the project's pools, latest pool_top_wallets day; project page only */
   topWallets: WalletView[];
+  /** YYYY-MM-DD: the closed UTC day the series, the pools' day volume and the day's wallets/swaps end on (the latest
+   * run's day - 1); project page only, absent in fixtures */
+  through?: string | null;
 }
 
 /** The light row the terminal list, movers and client search work from. */
