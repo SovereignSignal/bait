@@ -555,6 +555,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean }): Promi
         pools,
         series,
         topWallets,
+        through: end,
       }),
     );
   }
