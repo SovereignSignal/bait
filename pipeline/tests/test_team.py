@@ -272,3 +272,21 @@ def test_shapes_fill_rule4_candidates_before_newer_hooks(conn, ctx, monkeypatch)
     assert sorted(asked) == sorted([ha, hb]) and out["team_merged"] == 1      # shaped and merged the same night
     group.run(conn, ctx)
     assert asked[2:] == [newer]
+
+
+def test_shapes_fill_query_has_no_constant_order_term_without_candidates(conn, ctx, monkeypatch):
+    """With no rule 4 candidates the shape query must not carry a bare `true` in ORDER BY: Postgres 15+ rejects it as a
+    non-integer constant, and SQLite (which these tests run on) does not, so compile it for Postgres here."""
+    from sqlalchemy.dialects import postgresql
+    _hook(conn, _proj(conn, "MemeRocketHook"), 8453)
+    seen = []
+
+    @sa.event.listens_for(conn, "before_execute")
+    def grab(c, stmt, *_a):
+        if isinstance(stmt, sa.Select) and "code_shape IS NULL" in str(stmt):
+            seen.append(str(stmt.compile(dialect=postgresql.dialect())))
+    monkeypatch.setattr(group, "_rpc_shapes", lambda ctx, rows, deadline: {})
+    group._fill_shapes(conn, ctx, {"shapes_filled": 0}, set())
+    assert len(seen) == 1
+    order = seen[0].split("ORDER BY", 1)[1]
+    assert "true" not in order.lower() and "NOT IN" not in order
