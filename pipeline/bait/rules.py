@@ -175,6 +175,138 @@ def merge_evidence(a, b) -> str | None:
     return None
 
 
+# --- same-team stems (group rule 4, DESIGN.md "Same-team merge") ---
+# Words that name one deployment of a team's hook, not the team: chains, "L2" / "mainnet", versions, the static or
+# dynamic fee mode, and "hook". A chain word is never the first word (Zora and Base are also names). "ETH" is an asset,
+# not a chain: FablesRampETH keeps its own stem.
+STEM_CHAINS = frozenset({
+    "ethereum", "base", "arbitrum", "optimism", "unichain", "polygon", "avalanche", "avax", "bnb", "bsc", "ink",
+    "robinhood", "monad", "worldchain", "soneium", "megaeth", "celo", "blast", "linea", "xlayer", "arc", "tempo", "zora"})
+STEM_CHAIN_PAIRS = (("x", "layer"), ("world", "chain"), ("mega", "eth"))
+STEM_DEPLOY = frozenset({"l2", "mainnet"})
+_FEE_MODES = frozenset({"static", "dynamic"})
+_VERSION_WORD = re.compile(r"^v?\d+(?:\.\d+)*$")                     # "v2", "V6", "v2.3.0", "1.1.2"
+# names.py tells same-named contracts apart with "Name 0x1234…abcd": two teams by design, never a stem.
+ADDRESS_SUFFIX = re.compile(r"\s0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$")
+KEEP, CHAIN, VERSION, FEE = "keep", "chain", "version", "fee"
+
+
+def _stem_words(name: str | None) -> list[tuple[str, str]]:
+    """(word as written, kind) for each word of `name`, camelCase and digits split ("ZoraV4CoinHook" -> Zora V4 Coin
+    Hook, "AngstromL2" -> Angstrom L2). kind is CHAIN (chains, "L2", "mainnet"), VERSION, FEE (static / dynamic fee)
+    or KEEP; "hook" is KEEP here (a display name keeps it) and dropped from the stem by _stem_parts."""
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", name or "")
+    s = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", s)
+    s = re.sub(r"(\d)([A-Z])", r"\1 \2", s)
+    words = re.findall(r"(?i)v?\d+(?:\.\d+)+|[A-Za-z0-9]+", s)
+    low = [w.lower() for w in words]
+    out: list[tuple[str, str]] = []
+    i = 0
+    while i < len(words):
+        w, first = low[i], not any(k == KEEP for _, k in out)
+        pair = next((p for p in STEM_CHAIN_PAIRS if tuple(low[i:i + len(p)]) == p), None)
+        if w in STEM_CHAINS and low[i + 1:i + 2] == ["chain"]:
+            pair = (w, "chain")                              # "(Robinhood Chain)", "(BNB Chain)"
+        if w in _FEE_MODES and low[i + 1:i + 2] == ["fee"]:
+            out += [(words[i], FEE), (words[i + 1], FEE)]
+            i += 2
+        elif pair and not first:
+            out += [(x, CHAIN) for x in words[i:i + len(pair)]]
+            i += len(pair)
+        else:
+            kind = (VERSION if _VERSION_WORD.match(w) else FEE if w in ("staticfee", "dynamicfee")
+                    else CHAIN if not first and (w in STEM_CHAINS or w in STEM_DEPLOY) else KEEP)
+            out.append((words[i], kind))
+            i += 1
+    return out
+
+
+def _stem_parts(name: str) -> list[str]:
+    parts = []
+    for w, kind in _stem_words(name):
+        w = w.lower()
+        if kind != KEEP or w in ("hook", "hooks"):
+            continue
+        w = re.sub(r"(?<=[a-z]{3})v\d+$", "", w)          # "lendinghookv4": a version glued on in lowercase
+        for suf in _SUFFIXES:
+            if w.endswith(suf) and len(w) > len(suf):
+                w = w[: -len(suf)]
+                break
+        parts.append(w)
+    return parts
+
+
+def name_stem(name: str | None) -> str | None:
+    """The team part of a name: 'Clanker Static Fee Hook v2 (Base)', 'ClankerHookDynamicFee' -> 'clanker'; 'Aegis v3
+    Hook (Unichain)' -> 'aegis'; 'AngstromL2' -> 'angstrom'; 'Zora Post Hook v2.3.0 (Base)' -> 'zorapost'. None for
+    unlisted, generic and address-suffixed names, or when under 3 characters are left. A stem is a candidate only: a
+    merge also needs evidence (group._merge_same_team)."""
+    n = (name or "").strip()
+    if not n or n.startswith("Unlisted hook") or ADDRESS_SUFFIX.search(n) or useful_name(n, max_len=None) is None:
+        return None
+    stem = "".join(_stem_parts(n))
+    return stem if len(stem) >= 3 and not GENERIC.match(stem) else None
+
+
+def stem_root(name: str | None) -> str | None:
+    """The stem's first word, address suffix ignored: who a name says it belongs to ('Zora Post Hook' -> 'zora'). None
+    when the name has no stem. A signal that names with two roots share (an OpenZeppelin template, an auditor's
+    portfolio page) is nobody's team signal."""
+    n = ADDRESS_SUFFIX.sub("", (name or "").strip())
+    return _stem_parts(n)[0] if name_stem(n) else None
+
+
+def deployment_words(name: str | None) -> dict[str, frozenset[str]]:
+    """{kind: lowercased words} for the CHAIN, VERSION and FEE words of a name."""
+    out: dict[str, set[str]] = {CHAIN: set(), VERSION: set(), FEE: set()}
+    for w, kind in _stem_words(name):
+        if kind != KEEP:
+            out[kind].add(w.lower())
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+def team_name(name: str, drop: set[str] | frozenset[str] = frozenset({CHAIN, VERSION, FEE})) -> str:
+    """The name without the `drop` kinds of deployment words, as written; a kept chain goes in parentheses at the end.
+    'Clanker Static Fee Hook v2 (Base)' -> 'Clanker Hook'; with drop={CHAIN}, 'Aegis v3 Hook (Unichain)' -> 'Aegis v3
+    Hook'; with drop={FEE}, 'Bonker Static Fee Hook (Arc)' -> 'Bonker Hook (Arc)'."""
+    words = _stem_words(name)
+    body = " ".join(w for w, k in words if k not in drop and k != CHAIN)
+    chain = " ".join(w for w, k in words if k == CHAIN) if CHAIN not in drop else ""
+    return (f"{body} ({chain})" if chain else body) or name
+
+
+# Hosts, GitHub owners and X handles many unrelated projects point at: never one team's link.
+SHARED_HOSTS = frozenset({
+    "github.com", "x.com", "twitter.com", "linktr.ee", "medium.com", "mirror.xyz", "paragraph.xyz", "substack.com",
+    "t.me", "discord.gg", "discord.com", "docs.google.com", "notion.so", "notion.site", "gitbook.io", "youtube.com",
+    "uniswap.org", "app.uniswap.org", "docs.uniswap.org", "blog.uniswap.org", "uniswapfoundation.org", "warpcast.com",
+    "farcaster.xyz", "dexscreener.com", "geckoterminal.com", "coingecko.com", "etherscan.io", "basescan.org"})
+SHARED_GITHUB = frozenset({"uniswap", "uniswapfoundation", "openzeppelin", "hooklist", "v4-template"})
+SHARED_X = frozenset({"uniswap", "unichain", "uniswapfnd", "uniswapfoundation", "base", "buildonbase", "openzeppelin"})
+
+
+def team_links(website: str | None, github: str | None, x_handle: str | None) -> dict[str, str]:
+    """Enrichment links reduced to what identifies a team: website host (no www), GitHub owner, X handle, lowercased.
+    Shared hosts and platform accounts are dropped."""
+    out = {}
+    host = re.sub(r"^(?:https?://)?(?:www\.)?", "", (website or "").strip().lower()).split("/")[0].split("?")[0]
+    if host and "." in host and host not in SHARED_HOSTS:
+        out["website"] = host
+    m = re.search(r"github\.com/([A-Za-z0-9_.-]+)", github or "")
+    if m and m.group(1).lower() not in SHARED_GITHUB:
+        out["github"] = m.group(1).lower()
+    x = re.sub(r"^(?:https?://)?(?:www\.)?(?:x|twitter)\.com/", "", (x_handle or "").strip()).lstrip("@").split("/")[0].lower()
+    if x and x not in SHARED_X:
+        out["x"] = x
+    return out
+
+
+def audit_key(url: str | None) -> str | None:
+    """A hooklist audit URL compared as written, minus scheme, query, fragment and trailing slash."""
+    u = re.sub(r"^https?://(?:www\.)?", "", (url or "").strip()).split("#")[0].split("?")[0].rstrip("/")
+    return u.lower() or None
+
+
 def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return s or "project"
