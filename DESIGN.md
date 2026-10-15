@@ -637,3 +637,13 @@ its known deployer wallets on their own chains, CREATE2 factories excluded; NULL
 is unknown, 0.0 when a deployer is known and did not trade. The project page names the deployer per hook with an
 explorer link and shows "Deployer's swaps"; an amber badge appears at 50% or more. First cut: the deployer wallet
 itself, not wallets it funded.
+
+## Category fallback (2026-10-15)
+
+89% of listed projects sat in "other" because a category only came from enrichment (a few dozen projects a night).
+`rules.fallback_category` now guesses one for every project enrichment has not described, at the end of the group
+step each night: words in the hooks' names, descriptions and verified contract names first (orders, lending, MEV/LVR,
+oracle, compliance, LP management, gaming/NFT, launchpad, dynamic fee), then the launchpad pattern (a factory, or a hook
+that initialized `LAUNCHPAD_MIN_POOLS` = 100 pools), then a dynamic fee (registry property or a pool's fee flag).
+Nothing matching stays unguessed, never "other" by rule. `projects.category_source` (migration 0020) says `rules` or
+`enrich`; enrichment overwrites a guess and the guess is re-made nightly while the project is unenriched.

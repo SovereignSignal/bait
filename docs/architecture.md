@@ -80,7 +80,8 @@ slugs redirect.
   `unknown` without a known pool. Hand-allowlisted hooks still read as not routable because no public list exists.
 
 Categories: dynamic-fee, launchpad, orders, lp-management, compliance, oracle, mev-lvr, lending, gaming-nft, other,
-assigned during enrichment.
+assigned during enrichment; until then `rules.fallback_category` guesses from hook properties, pool fee flags, the
+factory pattern and name words (`projects.category_source` = `rules`).
 
 ## Web
 

@@ -575,3 +575,38 @@ def receipt_relevant(project_name: str, title: str, source: str) -> bool:
     named = any(re.search(rf"(^|[^a-z0-9]){re.escape(t)}", words) or (len(t) >= 8 and t in flat) for t in toks)
     defi = any(re.search(rf"(^|[^a-z0-9]){w}([^a-z0-9]|$)", words) for w in _DOMAIN_WORDS)
     return named and defi
+
+
+# ---------- category fallback (2026-10-15) ----------
+# Categories come from enrichment (Claude reads the sources) and that reaches a few dozen projects a night, so most of
+# the feed sat in "other". For a project with no generated category, a deterministic guess from what the chain and
+# registry already say: a dynamic fee is a property or a pool fee flag, a launchpad is a factory or a hook with many
+# pools, the rest are words in the hook's own name or description. Replaced the night enrichment writes a category.
+CATEGORIES = ("dynamic-fee", "launchpad", "orders", "lp-management", "compliance", "oracle", "mev-lvr", "lending", "gaming-nft", "other")
+LAUNCHPAD_MIN_POOLS = 100           # one hook initializing this many pools is a launchpad pattern, factory or not
+_CATEGORY_WORDS = (
+    ("orders", re.compile(r"\b(limit[ -]?orders?|twamm|dca|order ?book|stop[ -]?loss)\b", re.I)),
+    ("lending", re.compile(r"\b(lend(ing)?|borrow(ing)?|collateral|money market|euler)\b", re.I)),
+    ("mev-lvr", re.compile(r"\b(mev|lvr|auction|arbitrage|sandwich|angstrom)\b", re.I)),
+    ("oracle", re.compile(r"\b(oracle|twap|price feed)\b", re.I)),
+    ("compliance", re.compile(r"\b(kyc|whitelist|allow[ -]?list|permission(ed|s)?|compliance|gated|sanction(s|ed)?)\b", re.I)),
+    ("lp-management", re.compile(r"\b(rebalanc(e|ing)|vault|range order|liquidity manag(er|ement)|lp manag(er|ement)|alm|just[ -]in[ -]time|jit)\b", re.I)),
+    ("gaming-nft", re.compile(r"\b(nft|game|gaming|lottery|raffle|casino)\b", re.I)),
+    ("launchpad", re.compile(r"\b(launch ?pad|launcher|token factory|bonding curve|meme ?coin|fair launch|pump)\b", re.I)),
+    ("dynamic-fee", re.compile(r"\b(dynamic[ -]?fee|fee hook|surge fee|volatility fee)\b", re.I)),
+)
+
+
+def fallback_category(texts, properties, pool_fees, is_factory: bool, pools_total_max: int | None) -> str | None:
+    """A category for a project the enrichment has not described, or None when nothing says. Word matches on the hooks'
+    names and descriptions win, then the launchpad pattern, then a dynamic fee; "other" is never guessed."""
+    # registry and contract names are CamelCase ("LimitOrderHook"): split them so word boundaries exist
+    blob = " ".join(re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", t) for t in texts if t)
+    for cat, rx in _CATEGORY_WORDS:
+        if blob and rx.search(blob):
+            return cat
+    if is_factory or (pools_total_max or 0) >= LAUNCHPAD_MIN_POOLS:
+        return "launchpad"
+    if any((p or {}).get("dynamicFee") for p in properties) or any(is_dynamic_fee(f) for f in pool_fees):
+        return "dynamic-fee"
+    return None

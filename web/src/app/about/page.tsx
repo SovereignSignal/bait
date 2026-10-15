@@ -48,6 +48,11 @@ export default function AboutPage() {
           </p>
           <h3>Categories</h3>
           <p className="muted">Dynamic fee · Launchpad · Orders (limit, TWAMM) · LP management · Compliance · Oracle · MEV / LVR · Lending · Gaming / NFT · Other</p>
+          <p>
+            A category comes from the generated description where one exists. Until then it is guessed from what the chain and the registry
+            already say: a dynamic-fee property or pool, a factory or a hook with many pools, or words in the hook&apos;s own name or description
+            (limit order, lending, auction, oracle, KYC, vault, NFT). A guess is replaced the night the description is written.
+          </p>
         </section>
 
         <section className="block" id="scoring">

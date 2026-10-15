@@ -9,9 +9,9 @@ import time
 
 import sqlalchemy as sa
 
-from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow
+from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow, pools
 from ..rules import (SHARED_DEPLOYERS, audit_key, code_evidence, deployment_words, merge_evidence, name_stem, normalize_name,
-                     proxy_flag, shape_evidence, slugify, stem_root, team_links, team_name, useful_name)
+                     proxy_flag, shape_evidence, slugify, stem_root, team_links, team_name, useful_name, fallback_category)
 from . import RunContext, log
 from .names import add_alias, backfill_unlisted_aliases, detach_project, hook_rows, retire_project, unique_slug
 
@@ -176,7 +176,46 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     if factory_ids:
         conn.execute(sa.update(projects).values(is_factory=True).where(projects.c.id.in_(factory_ids)))
     out["factories"] = len(factory_ids)
+    out["categories_guessed"] = _fallback_categories(conn)
     return out
+
+
+def _fallback_categories(conn) -> int:
+    """Projects enrichment has not categorised get rules.fallback_category from their hooks and pools; a guess is
+    re-made every night (the inputs change as hooks and pools arrive) and overwritten the night enrichment writes one."""
+    cands = conn.execute(sa.select(projects.c.id, projects.c.is_factory, projects.c.category, projects.c.category_source)
+                         .where(projects.c.enriched_at.is_(None),
+                                sa.or_(projects.c.category.is_(None), projects.c.category == "other",
+                                       projects.c.category_source == "rules"))).all()
+    if not cands:
+        return 0
+    ids = [c.id for c in cands]
+    by_project: dict[int, dict] = {c.id: {"texts": [], "props": [], "fees": [], "pools_total": None, "factory": bool(c.is_factory),
+                                          "current": (c.category, c.category_source)} for c in cands}
+    for h in conn.execute(sa.select(hooks.c.project_id, hooks.c.name, hooks.c.description, hooks.c.contract_name, hooks.c.properties,
+                                    hooks.c.pools_total).where(hooks.c.project_id.in_(ids))):
+        b = by_project[h.project_id]
+        b["texts"] += [h.name, h.description, h.contract_name]
+        b["props"].append(h.properties or {})
+        if h.pools_total is not None:
+            b["pools_total"] = max(b["pools_total"] or 0, h.pools_total)
+    for r in conn.execute(sa.select(hooks.c.project_id, pools.c.fee)
+                          .select_from(pools.join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
+                          .where(hooks.c.project_id.in_(ids), pools.c.fee.is_not(None)).distinct()):
+        by_project[r.project_id]["fees"].append(r.fee)
+    n = 0
+    for pid, b in by_project.items():
+        cat = fallback_category(b["texts"], b["props"], b["fees"], b["factory"], b["pools_total"])
+        if cat:
+            new = (cat, "rules")
+        elif b["current"][1] == "rules":
+            new = (None, None)                       # our own earlier guess no longer holds; never touch another source
+        else:
+            continue
+        if new != b["current"]:
+            conn.execute(sa.update(projects).values(category=new[0], category_source=new[1]).where(projects.c.id == pid))
+            n += 1
+    return n
 
 
 def _unassigned(conn):
