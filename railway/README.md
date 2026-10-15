@@ -4,8 +4,8 @@ Live setup (configured 2026-10-08 through the Railway CLI and GraphQL API):
 
 | Service | Source | Settings |
 |---|---|---|
-| `bait` (web) | repo `SovereignSignal/bait`, branch `main` | Root Directory `/web`, Dockerfile `Dockerfile`, healthcheck `/` (120 s), restart on failure (5), watch `/web/**`, domain `bait-production-2706.up.railway.app` |
-| `pipeline` | same repo | Root Directory `/pipeline`, Dockerfile `Dockerfile`, cron `0 6 * * *` (06:00 UTC), restart never, watch `/pipeline/**` |
+| `bait` (web) | repo `SovereignSignal/bait`, branch `main` | Root Directory `/web`, Dockerfile `Dockerfile`, healthcheck `/api/ready` (60 s; 503 until the schema the build reads exists, so a deploy against an unmigrated database fails and the previous build keeps serving), restart on failure (5), watch `/web/**`, domain `bait-production-2706.up.railway.app` |
+| `pipeline` | same repo | Root Directory `/pipeline`, Dockerfile `Dockerfile`, cron `0 6 * * *` (06:00 UTC), restart never, watch `/pipeline/**`. Start command is a wrapper: `python -m bait run` when the UTC hour is 05 to 07, otherwise `python -m bait repair all --since 14 --pools 2800 --stop-at 04:30 --yes`, so a manual `deploymentRestart` outside that window runs a repair, not the nightly (checked 2026-10-15) |
 | `Postgres` | Railway database | none |
 
 Variables: `DATABASE_URL=${{Postgres.DATABASE_URL}}` on both code services; `NEXT_PUBLIC_SITE_URL=https://${{RAILWAY_PUBLIC_DOMAIN}}` on `bait`.
@@ -15,7 +15,7 @@ live on the services. To recreate them from the CLI:
 
 ```sh
 railway api 'mutation { serviceInstanceUpdate(serviceId: "<id>", environmentId: "<env>",
-  input: { rootDirectory: "/web", dockerfilePath: "Dockerfile", healthcheckPath: "/", healthcheckTimeout: 120,
+  input: { rootDirectory: "/web", dockerfilePath: "Dockerfile", healthcheckPath: "/api/ready", healthcheckTimeout: 60,
            restartPolicyType: ON_FAILURE, restartPolicyMaxRetries: 5, watchPatterns: ["/web/**"] }) }'
 railway api 'mutation { serviceInstanceUpdate(serviceId: "<id>", environmentId: "<env>",
   input: { rootDirectory: "/pipeline", dockerfilePath: "Dockerfile", cronSchedule: "0 6 * * *",
