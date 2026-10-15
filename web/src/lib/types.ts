@@ -18,6 +18,9 @@ export type Category =
 /** Routing eligibility (rules in lib/routable.ts): automatic-rule pass / review required / not enough data. Never proves current executable routing. */
 export type Eligibility = "eligible" | "ineligible" | "unknown";
 
+/** Pipeline classification of the scored seven-day window. null/absent = legacy row, not yet evaluated. */
+export type ActivityStatus = "active" | "dormant" | "unknown";
+
 export type Tab = "trending" | "new" | "verified" | "all";
 
 export const TABS: Array<[Tab, string]> = [
@@ -200,11 +203,17 @@ export interface ProjectSummary {
   topPool: { poolId: string; chainId: ChainId; token0Symbol: string | null; token1Symbol: string | null; hookAddress: string | null } | null;
   usage: Usage;
   isNew: boolean;
-  /** DESIGN.md spam filter: no pools, or all pools under $100 TVL and < 10 txs lifetime, unless $1M+ moved. Hidden everywhere (404). */
+  /** Pipeline listing decision, including qualifying historical usage. Spam remains hidden everywhere (404). */
   isSpam: boolean;
   /** wash-like volume: listed in All and on its page with a badge, never in Trending, New, movers or Leaders */
   isWash: boolean;
-  /** Retained registered project with no qualifying recent activity; never ranked. */
+  /** Latest earlier wash finding retained for research when no current activity is observed. */
+  washHistorical?: boolean;
+  /** Prior qualifying usage recorded independently of the recent metrics; identity metadata alone never qualifies. */
+  hasHistoricalUsage?: boolean;
+  /** Observed recent activity, confirmed inactivity, or incomplete coverage. Never inferred from priced volume alone. */
+  activityStatus?: ActivityStatus | null;
+  /** Historical usage and a fully covered zero-swap window, classified by the pipeline; never ranked. */
   isDormant?: boolean;
   /** comma list of reasons: 24h, 7d, concentrated, vol_tvl, no_liquidity, symmetric, uniform, unverified */
   washReason: string | null;
@@ -239,8 +248,10 @@ export interface RowView {
   firstSeenAt: string;
   isNew: boolean;
   isWash: boolean;
-  /** Retained registered project with no qualifying recent activity; never ranked. */
+  washHistorical?: boolean;
+  /** Historical usage and a fully covered zero-swap window, classified by the pipeline; never ranked. */
   isDormant?: boolean;
+  activityStatus?: ActivityStatus | null;
   scoreTrending: number;
   /** null = unknown (see Metrics.vol7d) */
   vol7d: number | null;

@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SAMPLE_PROJECTS } from '../fixtures/sample';
-import { activityPace, githubUrl, researchProject, retainedDormant, routingNote, webUrl, xHandle } from './research';
-import { applyTab, movers, searchRows } from './feed';
+import { activityNote, activityPace, githubUrl, researchProject, retainedDormant, routingNote, webUrl, xHandle } from './research';
+import { applyTab, listFor, movers, searchRows } from './feed';
 import { hookKeys, toRow } from './present';
 import { evaluateCoverage, evaluateHealth, freshness, type HealthChain } from './health';
 
@@ -30,9 +30,11 @@ test('malformed stored provider fields do not become public hrefs', () => {
   const out = researchProject(project);
   assert.equal(out.website, null); assert.equal(out.github, null); assert.equal(out.xHandle, null); assert.deepEqual(out.receipts, []);
 });
-test('registered verified quiet hooks retain research pages without becoming ranked', () => {
-  const project = p(); project.isSpam = true; project.isWash = false; project.metrics.vol7d = 0;
-  project.metrics.poolsN = 1; project.hooks[0].hooklisted = true; project.hooks[0].verifiedSource = true;
+test('pipeline-confirmed dormant projects remain in All, search and watchlists without becoming ranked', () => {
+  const project = p(); project.isSpam = false; project.isWash = false; project.metrics.vol7d = 0;
+  project.hasHistoricalUsage = true; project.activityStatus = 'dormant'; project.metrics.swaps7d = 0;
+  // Historical usage can qualify without registry membership or source verification.
+  project.hooks.forEach(h => { h.hooklisted = false; h.verifiedSource = false; });
   project.isNew = true; project.scoreTrending = 100;
   const out = researchProject(project);
   assert.equal(out.isDormant, true); assert.equal(out.isSpam, false); assert.equal(out.isNew, false); assert.equal(out.scoreTrending, 0);
@@ -41,18 +43,51 @@ test('registered verified quiet hooks retain research pages without becoming ran
   for (const tab of ['new', 'trending', 'verified'] as const) assert.deepEqual(applyTab([row], { tab }), []);
   assert.deepEqual(movers([row]), []);
   assert.equal(searchRows([row], row.name).length, 1);
+  assert.equal(listFor([row], {tab:'trending'}, {search:'',watchlist:[row.slug]}).length, 1);
 });
-test('dormant retention never promotes wash, unregistered, unverified, unknown-volume or pool-less spam', () => {
-  const base = p(); base.isSpam = true; base.isWash = false; base.metrics.vol7d = 0; base.metrics.poolsN = 1;
-  base.hooks = [{ ...base.hooks[0], hooklisted: true, verifiedSource: true }];
+test('legacy metadata and an old dormant flag cannot resurrect spam or establish historical usage', () => {
+  const project = p(); project.isSpam = true; project.isWash = false; project.metrics.vol7d = 0;
+  project.metrics.swaps7d = 0; project.metrics.poolsN = 10; project.isDormant = true;
+  project.hooks.forEach(h => { h.hooklisted = true; h.verifiedSource = true; });
+  const out = researchProject(project);
+  assert.equal(out.isSpam, true); assert.equal(out.isDormant, false);
+});
+test('dormancy requires history, pipeline coverage and zero swaps; positive unpriced swaps are active', () => {
+  const base = p(); base.isSpam = false; base.isWash = false; base.metrics.vol7d = 0;
+  base.hasHistoricalUsage = true; base.activityStatus = 'dormant'; base.metrics.swaps7d = 0;
   for (const alter of [
     (x: typeof base) => { x.isWash = true; x.isDormant = true; },
-    (x: typeof base) => { x.hooks[0].hooklisted = false; },
-    (x: typeof base) => { x.hooks[0].verifiedSource = false; },
-    (x: typeof base) => { x.metrics.vol7d = null; },
-    (x: typeof base) => { x.metrics.poolsN = 0; },
+    (x: typeof base) => { x.hasHistoricalUsage = false; },
+    (x: typeof base) => { x.activityStatus = null; },
+    (x: typeof base) => { x.activityStatus = 'unknown'; },
+    (x: typeof base) => { x.activityStatus = 'active'; x.metrics.vol7d = null; x.metrics.swaps7d = 2; },
+    (x: typeof base) => { x.metrics.swaps7d = null; },
+    (x: typeof base) => { x.metrics.swaps7d = 1; },
     (x: typeof base) => { x.metrics.vol7d = 1; },
   ]) { const x = structuredClone(base); alter(x); assert.equal(retainedDormant(x), false); }
+  const unknownUsd = structuredClone(base); unknownUsd.metrics.vol7d = null;
+  assert.equal(retainedDormant(unknownUsd), true); // exact zero swaps, not USD pricing, establishes inactivity
+});
+test('historical legitimacy does not replace missing recent data or suppress revival and wash controls', () => {
+  const project = p(); project.isSpam = false; project.hasHistoricalUsage = true;
+  project.activityStatus = 'unknown'; project.metrics.vol7d = null; project.metrics.swaps7d = null;
+  project.isNew = false; project.scoreTrending = 0;
+  const out = researchProject(project);
+  assert.equal(out.isSpam, false); assert.equal(out.isDormant, false); assert.equal(out.metrics.vol7d, null);
+  assert.match(activityNote(out)?.detail ?? '', /inactivity has not been established/);
+  project.activityStatus = 'active'; project.metrics.vol7d = 20_000; project.metrics.swaps7d = 40; project.scoreTrending = 12;
+  assert.equal(applyTab([toRow(researchProject(project))], {tab:'trending'}).length, 1);
+  project.isWash = true;
+  const wash = toRow(researchProject(project));
+  assert.equal(applyTab([wash], {tab:'all'}).length, 1);
+  assert.deepEqual(applyTab([wash], {tab:'trending'}), []);
+});
+test('dormancy evidence names the scored window without claiming shutdown or identity verification', () => {
+  const project = p(); project.hasHistoricalUsage = true; project.activityStatus = 'dormant';
+  project.metrics.swaps7d = 0; project.metrics.vol7d = 0; project.isWash = false; project.through = '2026-10-14';
+  assert.match(activityNote(project)?.detail ?? '', /seven closed UTC days ending 2026-10-14/);
+  assert.match(activityNote(project)?.detail ?? '', /does not establish shutdown/);
+  assert.doesNotMatch(activityNote(project)?.detail ?? '', /source-verified|Registered/);
 });
 test('all distinct addresses are searchable, including beyond the former eight-address cap', () => {
   const addresses = Array.from({length: 20}, (_, i) => `0x${i.toString(16).padStart(40,'0')}`);

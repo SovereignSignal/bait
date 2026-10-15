@@ -2,7 +2,7 @@
 import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
-import { routingNote } from "@/lib/research";
+import { activityNote, routingNote } from "@/lib/research";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
 import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
@@ -51,13 +51,14 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       : { k: `Swaps ${win.short}`, v: int(u.tx24h), title: win.note },
   ];
   const routing = routingNote(p.signals.routable);
+  const activity = activityNote(p);
   const badges: Array<{ cls: string; label: string; why: string; href?: string }> = [
-    ...(p.isWash ? [{ cls: "b-r", label: "Wash-like volume", why: washLine(p.washReason) }] : []),
+    ...(p.isWash ? [{ cls: "b-r", label: p.washHistorical ? "Historical wash-like volume" : "Wash-like volume", why: washLine(p.washReason, p.washHistorical) }] : []),
     p.hooklisted
       ? { cls: "b-v", label: "✓ Hooklist", why: "Listed in the Uniswap hooklist, the public registry of v4 hooks." }
       : { cls: "b-n", label: "Not in hooklist", why: "Found on-chain from its pools; not in the hooklist registry." },
     { cls: "b-n", label: routing.label, why: routing.detail },
-    ...(p.isDormant ? [{ cls: "b-n", label: "Dormant in available data", why: "Registered, source-verified hook with initialized pools and no qualifying activity in the available seven-day snapshot. This does not establish shutdown or complete historical coverage." }] : []),
+    ...(activity ? [{ cls: "b-n", label: activity.label, why: activity.detail }] : []),
     // only with a link to follow: a count without a URL is not an audit anyone can read
     p.signals.auditUrl
       ? { cls: "b-g", label: "Audit linked", why: `Audit link: ${p.signals.auditUrl}. It says nothing about scope or findings.`, href: p.signals.auditUrl }
@@ -163,6 +164,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
         <div className={s.why}>{why}</div>
         <p className="mut3">Usage describes the available seven-day window{through ? ` ending ${dayLabel(through)} UTC` : ""}. Volume alone does not establish organic demand, safety, or returns.</p>
         {p.isDormant && <p className="mut">Retained for research and search. Excluded from New, Trending, Movers and automatic-routing discovery.</p>}
+        {p.hasHistoricalUsage && p.activityStatus === "unknown" && <p className="mut">Retained on historical usage evidence. Missing recent coverage is not evidence of zero activity.</p>}
         {p.whyBlurb && (
           <details className={s.badgeHelp}>
             <summary>Historical generated context{p.whyBlurbAt ? ` · ${dayLabel(p.whyBlurbAt.slice(0, 10))}` : " · date unknown"}</summary>
@@ -368,7 +370,7 @@ type Ev = { cls: string; label: string; text: string; at?: string };
 /** The mock's derived events: the fallback when live trades are empty, and context under them. */
 function events(p: ProjectDetail, busy: PoolView | null, now: number, day: string): Ev[] {
   const out: Ev[] = [];
-  if (p.isWash) out.push({ cls: "b-r", label: "Wash-like", text: washLine(p.washReason) });
+  if (p.isWash) out.push({ cls: "b-r", label: p.washHistorical ? "Historical wash-like" : "Wash-like", text: washLine(p.washReason, p.washHistorical) });
   for (const x of p.pools.slice(0, 20)) {
     if (x.createdAt && (now - Date.parse(x.createdAt)) / DAY <= 14) {
       out.push({ cls: "b-p", label: "New pool", text: `${poolPair(x)} on ${CHAINS[x.chainId]?.name ?? x.chainId}`, at: x.createdAt });

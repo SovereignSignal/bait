@@ -76,7 +76,7 @@ def test_score_cold_start_sums_known_days_never_all_time(conn, ctx):
     insert_snap(conn, "0xpc", 1, END, 10_000, 9_020_000, 90_100, vol_day=20_000.0, tx_day=100)
     score.run(conn, ctx)
     d = daily(conn, p)
-    assert (d.vol_7d, d.vol_7d_prev, d.vol_24h) == (20_000, 0, 20_000)
+    assert (d.vol_7d, d.vol_7d_prev, d.vol_24h) == (20_000, None, 20_000)  # no prior-week daily evidence is unknown
     assert d.swaps_7d is None and d.swaps_24h == 100     # six days of the week unknown: no 7-day count
     assert d.score_trending == 0.0                       # no prior week to grow from
 
@@ -188,12 +188,15 @@ def test_swaps_are_null_unless_every_day_of_the_window_is_known(conn, ctx):
     insert_pool(conn, "0xquiet", 8453, "0xg", created=NOW - timedelta(days=60))
     week = {END - timedelta(days=i): 1_000.0 for i in range(7)}
     series(conn, "0xgp", 8453, week, tx={d: 3_000 for d in week if d != END - timedelta(days=3)})       # one day unknown
-    insert_snap(conn, "0xquiet", 8453, END - timedelta(days=9), 10, 0.0, 0, vol_day=0.0)               # no volume this week: adds 0
+    insert_snap(conn, "0xquiet", 8453, END - timedelta(days=9), 10, 0.0, 0, vol_day=0.0)               # missing week: unknown
     score.run(conn, ctx)
     d = daily(conn, p)
-    assert (d.swaps_7d, d.swaps_24h, d.vol_7d) == (None, 3_000, 7_000)       # never one day presented as seven
+    assert (d.swaps_7d, d.swaps_24h, d.vol_7d) == (None, None, 7_000)        # zero priced volume is not zero swaps
     conn.execute(sa.update(db.pool_snapshots).where(db.pool_snapshots.c.pool_id == "0xgp",
                                                     db.pool_snapshots.c.day == END - timedelta(days=3)).values(tx_count_day=3_000))
+    score.run(conn, ctx)
+    assert daily(conn, p).swaps_7d is None                                # the other pool still has missing coverage
+    series(conn, "0xquiet", 8453, {d: 0.0 for d in week}, tx={d: 0 for d in week})
     score.run(conn, ctx)
     assert daily(conn, p).swaps_7d == 21_000
 
@@ -228,10 +231,12 @@ def test_windows_schema_is_additive_on_an_existing_database():
     added = set(db.add_missing_columns(e))
     assert {"project_daily.window_end", "project_daily.vol_24h", "project_daily.swaps_24h", "project_daily.wallets_24h",
             "project_daily.wallets_exact", "project_daily.is_wash", "project_daily.wash_reason",
+            "project_daily.has_historical_usage", "project_daily.activity_status", "project_daily.wash_historical",
             "pool_snapshots.volume_usd_day", "pool_snapshots.tx_count_day", "pool_snapshots.estimated",
             "pool_stats.vol_24h_rolling", "pool_stats.wallets_24h", "pool_stats.window_end"} <= added
     with e.connect() as c:
         assert c.execute(sa.text("SELECT is_wash, wash_reason FROM project_daily")).one() == (0, None)
+        assert c.execute(sa.text("SELECT has_historical_usage, activity_status, wash_historical FROM project_daily")).one() == (0, None, 0)
 
 
 def test_project_wallets_distinct_on_ready_chains_upper_bound_elsewhere(conn, ctx):

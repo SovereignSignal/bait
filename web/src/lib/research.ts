@@ -34,11 +34,24 @@ export function xHandle(value: unknown): string | null {
   return text;
 }
 
-/** A registered, source-verified project with initialized pools remains searchable when its recent snapshot is quiet.
- * This is an observation about Bait's window, not a claim that the protocol shut down or was safe historically. */
+/** Only the pipeline can establish historical usage and complete recent zero-swap coverage. A zero USD value,
+ * registry membership, verified source or an old frontend flag cannot establish dormancy or override spam. */
 export function retainedDormant(p: ProjectDetail): boolean {
-  return !p.isWash && (!!p.isDormant || (p.isSpam && p.metrics.vol7d === 0 && p.metrics.poolsN > 0
-    && p.hooks.some(h => h.hooklisted === true && h.verifiedSource)));
+  return !p.isWash && p.hasHistoricalUsage === true && p.activityStatus === 'dormant'
+    && p.metrics.swaps7d === 0 && (p.metrics.vol7d == null || p.metrics.vol7d === 0);
+}
+
+/** Evidence labels describe the scored period, not a project's current operating status or contract safety. */
+export function activityNote(p: ProjectDetail): { label: string; detail: string } | null {
+  if (retainedDormant(p)) return {
+    label: 'Dormant in reported window',
+    detail: `Prior qualifying usage is recorded. Complete swap coverage shows zero swaps over the seven closed UTC days${p.through ? ` ending ${p.through}` : ''}. This does not establish shutdown or contract safety.`,
+  };
+  if (p.hasHistoricalUsage && p.activityStatus === 'unknown') return {
+    label: 'Recent activity unknown',
+    detail: 'Prior qualifying usage is recorded. Recent swap coverage is incomplete or unavailable, so inactivity has not been established.',
+  };
+  return null;
 }
 
 export function researchProject(p: ProjectDetail): ProjectDetail {
@@ -47,7 +60,6 @@ export function researchProject(p: ProjectDetail): ProjectDetail {
   return {
     ...p,
     isDormant,
-    isSpam: p.isSpam && !isDormant,
     isNew: !isDormant && p.isNew,
     scoreTrending: isDormant ? 0 : p.scoreTrending,
     website: unidentified ? null : webUrl(p.website),

@@ -4,7 +4,8 @@ import { desc, sql } from "drizzle-orm";
 import { runReceipts } from "@/db/schema";
 import { freshness, type Freshness, type HealthChain, type HealthReceipt } from "@/lib/health";
 import { getDb, type Db } from "./client";
-import { cached } from "./queries";
+import { cached, usingFixtures } from "./queries";
+import { SAMPLE_FRESHNESS } from "@/fixtures/sample";
 
 type IndexerRow = {
   chain_id: number | string;
@@ -76,10 +77,10 @@ export async function readHealth(db: Db): Promise<{ receipt: HealthReceipt | nul
   return { receipt, stepStatus, chains, queryReasons, reportedThrough };
 }
 
-/** The freshness line: fixtures have no status; failed production reads display coverage unavailable. */
+/** The freshness line: explicit candidate fixtures may replay captured status; failed DB reads show coverage unavailable. */
 export async function getFreshness(): Promise<Freshness | null> {
   const db = getDb();
-  if (!db) return null;
+  if (!db) return usingFixtures() ? SAMPLE_FRESHNESS : null;
   // cached a minute: dynamic pages render it on every request, and a chip should clear soon after health recovers
   return cached("freshness", async () => {
     const { receipt, chains, queryReasons, reportedThrough } = await readHealth(db);

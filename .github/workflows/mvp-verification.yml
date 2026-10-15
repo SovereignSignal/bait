@@ -1,16 +1,11 @@
-name: MVP verification
+name: Production baseline evidence (manual)
+# This captures the deployed site, not the candidate checkout. Candidate verification is in ci.yml.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/mvp-verification.yml'
-      - 'scripts/mvp-*.py'
-      - 'web/**'
-      - 'pipeline/**'
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: mvp-verification-${{ github.head_ref }}
+  group: production-baseline-evidence
   cancel-in-progress: true
 jobs:
   evidence:

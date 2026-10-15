@@ -76,11 +76,12 @@ function plainClick(e: React.MouseEvent): boolean {
 function Delta({ r }: { r: RowView }) {
   if (r.isWash)
     return (
-      <span className="b b-r" title="Wash-like volume: listed here, never ranked.">
-        Wash
+      <span className="b b-r" title={r.washHistorical ? "Historical wash-like volume: an earlier finding, not evidence of wash in the current window." : "Wash-like volume: listed here, never ranked."}>
+        {r.washHistorical ? "Past wash" : "Wash"}
       </span>
     );
   if (r.isDormant) return <span className="b b-n">Dormant</span>;
+  if (r.activityStatus === "unknown") return <span className="b b-n" title="Recent coverage cannot establish zero activity.">Unknown</span>;
   if (r.isNew) return <span className="b b-p">New</span>;
   const d = deltaText(r);
   if (!d) return <span className="mut3">{NONE}</span>;

@@ -16,6 +16,7 @@ import type {
   WalletView,
 } from "@/lib/types";
 import data from "./terminal-sample.json";
+import { loadE2eFixtures } from "./e2e";
 
 const NOW = Date.parse("2026-10-08T16:00:00Z");
 const DAY = 86_400_000;
@@ -235,7 +236,10 @@ function build(raw: Raw, i: number): ProjectDetail {
   };
 }
 
-export const SAMPLE_PROJECTS: ProjectDetail[] = (data as Raw[]).map(build);
+const candidateFixtures = loadE2eFixtures();
+export const SAMPLE_PROJECTS: ProjectDetail[] = candidateFixtures?.projects ?? (data as Raw[]).map(build);
+export const SAMPLE_ALIASES: Record<string, string> = candidateFixtures?.aliases ?? {};
+export const SAMPLE_FRESHNESS = candidateFixtures?.freshness ?? null;
 
 /** wallet_labels stand-in: every sample top wallet with a label. Key: `${chainId}:${address}`. */
 export const SAMPLE_WALLET_LABELS: Map<string, WalletLabel> = new Map(
@@ -268,4 +272,4 @@ export const SAMPLE_DIGESTS: DigestView[] = [
   },
 ];
 
-export const SAMPLE_NOW = NOW;
+export const SAMPLE_NOW = candidateFixtures ? Date.parse(candidateFixtures.observedAt) : NOW;
