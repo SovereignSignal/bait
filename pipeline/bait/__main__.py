@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
 
-from . import db, logsetup, repair
+from . import db, historical_evidence, logsetup, repair
 from .config import CHAIN_BY_SLUG
 from .costs import Meter, format_preview, preview
 from .steps import STEP_ORDER, RunContext, log
@@ -53,6 +53,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     i.add_argument("--database-url", default=None)
     rp = sub.add_parser("repair", help="one-off data repair (package 9): backfill-days, rescore, prose, verify, all")
     repair.add_parsers(rp.add_subparsers(dest="repair_cmd", required=True))
+    historical_evidence.add_parser(sub)
     return ap.parse_args(argv)
 
 
@@ -60,6 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     logsetup.configure()
     args = parse_args(sys.argv[1:] if argv is None else argv)
     engine = db.make_engine(args.database_url)
+    if args.cmd == "historical-evidence":
+        # A preview must not create/alter schema or write receipts before it reaches the read-only command.
+        return historical_evidence.main(args, engine)
     if args.cmd == "init-db":
         db.create_all(engine)
         db.add_missing_columns(engine)

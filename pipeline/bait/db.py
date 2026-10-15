@@ -295,6 +295,35 @@ pool_daily_onchain = sa.Table(
     sa.Index("pool_daily_onchain_day_idx", "day"),
 )
 
+# Retained, reviewed historical proof (0017), independent of rolling indexer windows and recent metric snapshots.
+# No foreign keys: pruning a pool must not erase proof or be blocked by it. Import validates the current pool identity;
+# score rechecks the pool/hook match. A transaction's standard/custom log pair is deduplicated by the scorer.
+historical_swap_evidence = sa.Table(
+    "historical_swap_evidence", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("transaction_hash", sa.Text, primary_key=True),
+    sa.Column("log_index", sa.Integer, primary_key=True, autoincrement=False),
+    sa.Column("pool_id", sa.Text, nullable=False),
+    sa.Column("hook_address", sa.Text, nullable=False),
+    sa.Column("block_number", sa.BigInteger, nullable=False),
+    sa.Column("block_hash", sa.Text, nullable=False),
+    sa.Column("block_timestamp", TS, nullable=False),
+    sa.Column("event_kind", sa.Text, nullable=False),
+    sa.Column("positive", sa.Boolean, nullable=False),
+    sa.Column("usd_lower_bound", sa.Numeric(38, 18)),
+    sa.Column("evidence", JSONType, nullable=False),
+    sa.Column("evidence_sha256", sa.Text, nullable=False),
+    sa.Column("bundle_sha256", sa.Text, nullable=False),
+    sa.Column("imported_at", TS, nullable=False),
+    sa.CheckConstraint("chain_id > 0", name="historical_evidence_chain_positive"),
+    sa.CheckConstraint("log_index >= 0", name="historical_evidence_log_nonnegative"),
+    sa.CheckConstraint("block_number >= 0", name="historical_evidence_block_nonnegative"),
+    sa.CheckConstraint("usd_lower_bound IS NULL OR usd_lower_bound >= 0", name="historical_evidence_usd_nonnegative"),
+    sa.CheckConstraint("usd_lower_bound IS NULL OR positive", name="historical_evidence_priced_positive"),
+    sa.UniqueConstraint("chain_id", "block_hash", "log_index", name="historical_evidence_physical_log_unique"),
+    sa.Index("historical_swap_evidence_pool_time_idx", "chain_id", "pool_id", "block_timestamp"),
+)
+
 pool_wallet_day = sa.Table(
     "pool_wallet_day", metadata,
     sa.Column("chain_id", sa.Integer, primary_key=True),
