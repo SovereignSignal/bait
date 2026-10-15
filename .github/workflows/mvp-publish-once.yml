@@ -25,6 +25,7 @@ jobs:
           import base64,gzip,hashlib,subprocess
           from pathlib import Path
           packed=''.join(Path(f'scripts/.mvp-bundle/{i}.b64').read_text().strip() for i in range(4))
+          packed=packed.replace('fdvu3nTH69vLQZu','fdvu3nTH69vNvLQZu')
           if len(packed) != 27304: raise SystemExit(f'Unexpected bundle length: {len(packed)}')
           patch=gzip.decompress(base64.b64decode(packed,validate=True))
           expected='557a2ee021426d0dd045ca0f5b40f992ca20f5c8cdab98f52bd8b1731fb535f0'
