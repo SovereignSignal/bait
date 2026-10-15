@@ -1,0 +1,30 @@
+name: MVP source reconciliation
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/mvp-sources.yml'
+      - 'scripts/mvp-source-check.py'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: bait-mvp-evidence
+          path: evidence
+          run-id: 38665788970
+          github-token: ${{ github.token }}
+      - run: python scripts/mvp-source-check.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bait-mvp-sources
+          path: evidence/
+          retention-days: 7
