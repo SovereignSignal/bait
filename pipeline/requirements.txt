@@ -3,8 +3,8 @@
 sqlalchemy==2.1.4
 psycopg[binary]==3.3.6
 httpx==0.28.1
-anthropic==1.12.1
-pydantic==2.14.0
+anthropic==1.13.0
+pydantic==2.14.1
 tenacity==9.2.1
 python-dotenv==1.2.4
 pytest==9.1.1
