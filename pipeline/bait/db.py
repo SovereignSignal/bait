@@ -62,6 +62,8 @@ hooks = sa.Table(
     sa.Column("audit_url", sa.Text),
     sa.Column("hooklisted", sa.Boolean),       # in the Uniswap hooklist as of the last ingest; NULL = not yet evaluated
     sa.Column("deployer", sa.Text),
+    sa.Column("deployer_source", sa.Text),     # 0019: hooklist (registry-supplied) | explorer (contract creator from Blockscout)
+    sa.Column("deployer_checked_at", TS),      # last explorer creator lookup; misses are retried after 14 days
     sa.Column("code_hash", sa.Text, index=True),
     sa.Column("contract_name", sa.Text),       # verified-source name (Sourcify/Blockscout/Routescan), for unlisted hooks
     sa.Column("name_checked_at", TS),          # last contract-name lookup; misses are retried after 14 days
@@ -174,6 +176,8 @@ project_daily = sa.Table(
     # (a chain of the project is not ready or its history does not cover the window). The share is of swaps, not volume.
     sa.Column("wallets_7d", sa.Integer),
     sa.Column("top_wallet_share_7d", sa.Float),
+    # 0019: the project's known deployer wallets' share of the window's swaps; NULL = no deployer known, or unknown coverage
+    sa.Column("deployer_swap_share_7d", sa.Float),
     sa.Index("project_daily_day_score_idx", "day", "score_trending"),
 )
 
@@ -475,6 +479,10 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("project_daily", "top_wallet_share_7d", "double precision"),
     ("project_daily_p9_backup", "wallets_7d", "integer"),
     ("project_daily_p9_backup", "top_wallet_share_7d", "double precision"),
+    ("hooks", "deployer_source", "text"),
+    ("hooks", "deployer_checked_at", "timestamptz"),
+    ("project_daily", "deployer_swap_share_7d", "double precision"),
+    ("project_daily_p9_backup", "deployer_swap_share_7d", "double precision"),
     ("v4_pools", "sampled", "boolean NOT NULL DEFAULT false"),
     ("hooks", "pools_total", "bigint"),
     ("hooks", "code_shape", "text"),

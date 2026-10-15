@@ -626,3 +626,14 @@ not volume, because per-wallet volume is a sample of ~300 trades a day while swa
 Shown at any size on the project page ("Wallets 7d", "Top wallet"), with an amber "One wallet, N% of swaps" badge at
 50% or more; it is information, not a wash finding, which still needs the package 8 thresholds. Asked for by the grant
 review workflow: a small hook with no wash badge said nothing about who was trading it.
+
+## Deployer attribution (2026-10-15)
+
+`hooks.deployer` was registry-only. The group step now fills it for grouped hooks the registry did not cover, from
+the explorer's contract creator (`DEPLOYER_LOOKUPS`, 200 a night, busiest projects first; a definitive miss is retried
+after 14 days, a bot challenge or 5xx is not stamped), with `deployer_source` saying which. A registry value is never
+overwritten. `project_daily.deployer_swap_share_7d` (migration 0019) is the share of the project's window swaps made by
+its known deployer wallets on their own chains, CREATE2 factories excluded; NULL when no deployer is known or coverage
+is unknown, 0.0 when a deployer is known and did not trade. The project page names the deployer per hook with an
+explorer link and shows "Deployer's swaps"; an amber badge appears at 50% or more. First cut: the deployer wallet
+itself, not wallets it funded.

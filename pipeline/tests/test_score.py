@@ -699,3 +699,21 @@ def test_wallets_7d_is_zero_for_a_covered_silent_project(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, pid)
     assert d.wallets_7d == 0 and d.top_wallet_share_7d is None
+
+
+def test_deployer_share_of_swaps_from_known_deployer_wallets(conn, ctx):
+    """The grant-review question: how much of a hook's activity is its own team. Factories never count as a deployer."""
+    lop = _onchain_project(conn, "Lop", "0xlp", wallets=2, vol_per_day=1_000)
+    conn.execute(sa.update(db.pool_wallet_day).where(db.pool_wallet_day.c.pool_id == "0xlp", db.pool_wallet_day.c.address == "0xw0").values(swaps=8))
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xLop").values(deployer="0xw0", deployer_source="explorer"))
+    quiet = _onchain_project(conn, "Team", "0xtp", wallets=3, vol_per_day=1_000)             # deployer known, never traded
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xTeam").values(deployer="0xteamwallet"))
+    factory = _onchain_project(conn, "Fac", "0xfp", wallets=3, vol_per_day=1_000)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xFac").values(deployer="0x4e59b44847b379578588920ca78fbf26c0b4956c"))
+    unknown = _onchain_project(conn, "Anon", "0xap", wallets=3, vol_per_day=1_000)
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    assert daily(conn, lop).deployer_swap_share_7d == round(8 / 9, 4)
+    assert daily(conn, quiet).deployer_swap_share_7d == 0.0
+    assert daily(conn, factory).deployer_swap_share_7d is None       # a CREATE2 factory is nobody's wallet
+    assert daily(conn, unknown).deployer_swap_share_7d is None

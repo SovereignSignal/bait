@@ -28,7 +28,7 @@ import sqlalchemy as sa
 
 from ..db import (HOOK_POOL_PREFIX, as_utc, historical_swap_evidence, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
-from ..rules import (SPAM_EXEMPT_VOL, WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
+from ..rules import (SHARED_DEPLOYERS, SPAM_EXEMPT_VOL, WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
                      is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
@@ -58,7 +58,7 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
             raise ValueError("targeted score only updates existing project/day rows")
     end = window_end(day)
     w24, w7, wp = (end, end), (end - 6 * _D, end), (end - 13 * _D, end - 7 * _D)
-    hook_rows = conn.execute(sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id, hooks.c.pools_total)
+    hook_rows = conn.execute(sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id, hooks.c.pools_total, hooks.c.deployer)
                              .where(hooks.c.project_id.is_not(None))).all()
     hook_to_project = {(r.chain_id, r.address): r.project_id for r in hook_rows}
     pool_project, custom = {}, set()   # custom: pools of custom-accounting hooks (liquidity lives in the hook)
@@ -193,6 +193,7 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
             "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
             "wallets_7d": concentration.get(pid, (None, None))[0],
             "top_wallet_share_7d": concentration.get(pid, (None, None))[1],
+            "deployer_swap_share_7d": concentration.get(pid, (None, None, None))[2],
             # folded usage (a capped hook's aggregate pool) is displayed, never ranked: no wash rule can judge it
             "score_trending": 0.0 if (wash or young or (pid in historical and status != "active")) else score_trending(a["vol7"] - a["fold_vol7"], a["vol7p"] - a["fold_vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
@@ -454,12 +455,14 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
     return {pid: (sum(n for n, _ in ps), len(ps) == 1 and ps[0][1]) for pid, ps in parts.items()}
 
 
-def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -> dict[int, tuple[int, float | None]]:
+def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -> dict[int, tuple[int, float | None, float | None]]:
     """Distinct wallets over the 7-day window and the busiest wallet's share of the project's swaps, from the indexer's
     exact per-wallet counts (pool_wallet_day, wallet = tx.from). Known only for projects whose every chain is ready
     with indexed history reaching the start of the window: a partial count would read as a small, concentrated project.
     The share is of swaps, not volume, because wallet volume is a sample (pool_top_wallets) while swap counts are
-    complete on a ready chain. No threshold: this is the figure the wash rules only act on past $250K a day."""
+    complete on a ready chain. No threshold: this is the figure the wash rules only act on past $250K a day.
+    Third value: the share of those swaps made by the project's known deployer wallets on their own chains (hooks.deployer,
+    CREATE2 factories excluded); None when no deployer is known, 0.0 when one is known and did not trade."""
     ready_set = set(ready)
     if not ready_set:
         return {}
@@ -482,10 +485,27 @@ def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -
                   .group_by(hooks.c.project_id, pool_wallet_day.c.address).subquery())
     q = (sa.select(per_wallet.c.pid, sa.func.count().label("wallets"), sa.func.sum(per_wallet.c.swaps).label("swaps"),
                    sa.func.max(per_wallet.c.swaps).label("top")).group_by(per_wallet.c.pid))
-    out = {pid: (0, None) for pid in eligible}      # covered and silent: zero wallets is a measured zero
-    for r in conn.execute(q):
-        if r.pid in eligible and r.swaps:
-            out[r.pid] = (int(r.wallets), round(float(r.top) / float(r.swaps), 4))
+    deployers_of: dict[int, set[tuple[int, str]]] = {}
+    for r in hook_rows:
+        if r.deployer and r.deployer not in SHARED_DEPLOYERS:
+            deployers_of.setdefault(r.project_id, set()).add((r.chain_id, r.deployer))
+    totals = {r.pid: (int(r.wallets), int(r.swaps), float(r.top)) for r in conn.execute(q) if r.pid in eligible}
+    dq = (sa.select(hooks.c.project_id.label("pid"), sa.func.sum(pool_wallet_day.c.swaps).label("swaps"))
+          .select_from(pool_wallet_day
+                       .join(pools, (pools.c.pool_id == pool_wallet_day.c.pool_id) & (pools.c.chain_id == pool_wallet_day.c.chain_id))
+                       .join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
+          .where(pool_wallet_day.c.day >= w[0], pool_wallet_day.c.day <= w[1], pool_wallet_day.c.chain_id.in_(ready),
+                 hooks.c.project_id.in_(list(deployers_of)) if deployers_of else sa.false(),
+                 sa.tuple_(hooks.c.project_id, pool_wallet_day.c.chain_id, pool_wallet_day.c.address).in_(
+                     [(pid, c, a) for pid, ds in deployers_of.items() for (c, a) in ds]) if deployers_of else sa.false())
+          .group_by(hooks.c.project_id))
+    deployer_swaps = {r.pid: int(r.swaps or 0) for r in conn.execute(dq)} if deployers_of else {}
+    out = {}
+    for pid in eligible:                               # covered and silent: zero wallets is a measured zero
+        wallets, swaps, top = totals.get(pid, (0, 0, 0.0))
+        share = round(top / swaps, 4) if swaps else None
+        dshare = (round(min(deployer_swaps.get(pid, 0), swaps) / swaps, 4) if swaps else 0.0) if pid in deployers_of else None
+        out[pid] = (wallets, share, dshare)
     return out
 
 

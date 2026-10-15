@@ -1,7 +1,7 @@
 // One project, one set of figures across pages: names, counts, TVL and audit badges (demo smoke, 2026-10-14).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditLinks, auditMention, topWalletText, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
+import { auditLinks, auditMention, topWalletText, deployerShareText, deployersOf, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
 import type { DigestItem } from "./types";
 
 const item = (slug: string, name: string, kind: DigestItem["kind"] = "trending"): DigestItem => ({ slug, name, kind, line: "", vol7d: 1 });
@@ -74,4 +74,23 @@ test("top wallet share reads as a share of swaps at any size, and unknown as a d
   assert.equal(topWalletText(0.8889), "89% of swaps");
   assert.equal(topWalletText(1), "100% of swaps");
   assert.equal(topWalletText(0.004), "<1% of swaps");
+});
+
+test("deployer share: unknown is a dash, a known deployer that never traded is none, otherwise a share of swaps", () => {
+  assert.equal(deployerShareText(null), "–");
+  assert.equal(deployerShareText(0), "none");
+  assert.equal(deployerShareText(0.8889), "89% of swaps");
+});
+
+test("deployers of a project: one line per distinct wallet and chain, registry-supplied first", () => {
+  const out = deployersOf([
+    { chainId: 10, deployer: "0xAAAA", deployerSource: "explorer" },
+    { chainId: 10, deployer: "0xaaaa", deployerSource: "explorer" },
+    { chainId: 8453, deployer: "0xbbbb", deployerSource: "hooklist" },
+    { chainId: 1, deployer: null, deployerSource: null },
+  ]);
+  assert.deepEqual(out, [
+    { chainId: 8453, address: "0xbbbb", source: "hooklist" },
+    { chainId: 10, address: "0xaaaa", source: "explorer" },
+  ]);
 });

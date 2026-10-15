@@ -7,7 +7,7 @@ from ..clients import hooklist
 from ..db import hooks, upsert
 from . import RunContext, log
 
-UPDATE_COLS = ["name", "description", "flags", "properties", "verified_source", "audit_url", "deployer", "hooklisted"]
+UPDATE_COLS = ["name", "description", "flags", "properties", "verified_source", "audit_url", "deployer", "deployer_source", "hooklisted"]
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
@@ -32,6 +32,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             "description": e.hook.description or None, "flags": e.flags, "properties": e.properties,
             "verified_source": e.hook.verifiedSource, "audit_url": e.hook.auditUrl or None,
             "deployer": (e.hook.deployer or "").lower() or None, "first_seen_at": ctx.now, "hooklisted": True,
+            "deployer_source": "hooklist" if (e.hook.deployer or "").strip() else None,
         })
     for i in range(0, len(rows), 500):
         upsert(conn, hooks, rows[i:i + 500], keys=["address", "chain_id"], update=UPDATE_COLS)

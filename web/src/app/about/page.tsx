@@ -33,7 +33,8 @@ export default function AboutPage() {
             trades; a &quot;≤&quot; marks an upper bound. The live trade feed on a project page reads GeckoTerminal&apos;s recent trades for the project&apos;s
             busiest pool, hides trades under $10, and refreshes every minute while you watch. Wallet labels and the &quot;Smart money&quot; pill come
             from Nansen labels collected through early October 2026. &quot;Wallets 7d&quot; and the top wallet&apos;s share of swaps come from the indexer
-            and are shown at any size, with no threshold; they are unknown unless every chain the project is on has caught up through the week.
+            and are shown at any size, with no threshold; they are unknown unless every chain the project is on has caught up through the week. A project page names the wallet that deployed
+            each hook (from the registry, or the explorer&apos;s contract creator) and the share of the week&apos;s swaps those wallets made.
           </p>
           <h3>Grouping</h3>
           <p>
