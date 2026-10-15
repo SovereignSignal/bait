@@ -98,10 +98,10 @@ test("0x search matches hook address prefixes once the index has loaded; names m
   assert.deepEqual(searchRows(rows, "ang").map((r) => r.slug), ["a"]);
 });
 
-test("hookKeys: lowercase, deduplicated, capped at 8", () => {
+test("hookKeys: lowercase, deduplicated, complete", () => {
   const many = Array.from({ length: 12 }, (_, i) => `0xAB${i.toString(16).padStart(38, "0")}`);
   assert.deepEqual(hookKeys(["0xAA", "0xaa", "0xBB"]), ["0xaa", "0xbb"]);
-  assert.equal(hookKeys(many).length, 8);
+  assert.equal(hookKeys(many).length, 12);
 });
 
 test("the hook index loads once, and a failed load is retried on the next call", async () => {

@@ -15,7 +15,7 @@ export type Category =
   | "gaming-nft"
   | "other";
 
-/** Routing eligibility (rules in lib/routable.ts): the app will route / will not route / not enough data to say. */
+/** Routing eligibility (rules in lib/routable.ts): automatic-rule pass / review required / not enough data. Never proves current executable routing. */
 export type Eligibility = "eligible" | "ineligible" | "unknown";
 
 export type Tab = "trending" | "new" | "verified" | "all";
@@ -23,12 +23,12 @@ export type Tab = "trending" | "new" | "verified" | "all";
 export const TABS: Array<[Tab, string]> = [
   ["trending", "Trending"],
   ["new", "New"],
-  ["verified", "In Uniswap app"],
+  ["verified", "Automatic routing"],
   ["all", "All"],
 ];
 
 /** Visible label in the 320 px list column, where the full names plus the star need ~318 px of ~294; the full name stays the accessible name. */
-export const TAB_SHORT: Partial<Record<Tab, string>> = { verified: "In app" };
+export const TAB_SHORT: Partial<Record<Tab, string>> = { verified: "Routing" };
 
 export interface HookFlags {
   beforeInitialize: boolean;
@@ -204,6 +204,8 @@ export interface ProjectSummary {
   isSpam: boolean;
   /** wash-like volume: listed in All and on its page with a badge, never in Trending, New, movers or Leaders */
   isWash: boolean;
+  /** Retained registered project with no qualifying recent activity; never ranked. */
+  isDormant?: boolean;
   /** comma list of reasons: 24h, 7d, concentrated, vol_tvl, no_liquidity, symmetric, uniform, unverified */
   washReason: string | null;
   scoreTrending: number;
@@ -237,6 +239,8 @@ export interface RowView {
   firstSeenAt: string;
   isNew: boolean;
   isWash: boolean;
+  /** Retained registered project with no qualifying recent activity; never ranked. */
+  isDormant?: boolean;
   scoreTrending: number;
   /** null = unknown (see Metrics.vol7d) */
   vol7d: number | null;

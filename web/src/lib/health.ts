@@ -1,6 +1,6 @@
-// Pure decision function for /api/health. Inputs come from the latest run receipt and every indexer_state row.
+// Service liveness and reported-window indexer coverage are separate verdicts.
 export interface HealthReceipt {
-  day: string; // YYYY-MM-DD
+  day: string;
   exitCode: number;
   softErrors: number;
   codeSha: string | null;
@@ -11,60 +11,83 @@ export interface HealthChain {
   headBlock: number | null;
   swapBlock: number | null;
   updatedAt: Date | null;
+  swapBlockTime?: Date | null;
+  pendingPools?: number | null;
+  pendingBeforeThrough?: number | null;
+  oldestPending?: Date | null;
 }
 export interface HealthInput {
   receipt: HealthReceipt | null;
   chains: HealthChain[];
+  /** Actual latest scored window, not the date of an otherwise successful run. */
+  reportedThrough?: string | null;
 }
-
-const DEADLINE_HOUR_UTC = 8; // the nightly run starts at 06:00 UTC and must be done by now
+const DEADLINE_HOUR_UTC = 8;
 const INDEXER_MAX_AGE_MS = 2 * 3600_000;
 const SWAP_LAG_WARN_BLOCKS = 50_000;
-// Soft errors no longer change the pipeline exit code (a completed run exits 0), so health is where they surface.
 const SOFT_ERRORS_FAIL = 10;
-
-export interface Freshness {
-  through: string | null; // YYYY-MM-DD: the last closed UTC day the nightly figures cover
-  note: "run_late" | "run_failed" | "catching_up" | null; // why figures may be behind, when health fails
-  partialChains?: number[]; // chains whose indexer history is still backfilling: their pool counts and volumes are partial
-}
-
 const DAY_MS = 86_400_000;
-const FIRST_REAL_DAY = "2020-01-01"; // a repair receipt written before any nightly carries 1970-01-01
-
-/** What a visitor is told about data age. The run dated D scores the closed day D-1, so the figures run through D-1.
- * When health fails, the reason class: a pipeline problem outranks indexer lag, since it is what dates the figures. */
+const FIRST_REAL_DAY = "2020-01-01";
+export interface Freshness {
+  through: string | null;
+  note: "run_late" | "run_failed" | "catching_up" | "coverage_unknown" | null;
+  partialChains?: number[];
+}
+function reportedThrough(input: HealthInput): string | null {
+  if (input.reportedThrough !== undefined) return input.reportedThrough;
+  const day = input.receipt?.day;
+  if (!day || day < FIRST_REAL_DAY || !Number.isFinite(Date.parse(`${day}T00:00:00Z`))) return null;
+  return new Date(Date.parse(`${day}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
+}
+export interface Coverage {
+  status: "ready" | "partial" | "unknown";
+  through: string | null;
+  chains: Array<{ chainId: number; status: "ready" | "partial" | "unknown"; reasons: string[] }>;
+}
+/** Coverage of the reported closed day on the observed chains only. This does not certify USD pricing,
+ * organic demand, contract safety, every pool ever created, or correctness of a provider's fallback data. */
+export function evaluateCoverage(input: HealthInput, now: Date): Coverage {
+  const through = reportedThrough(input);
+  const boundary = through ? Date.parse(`${through}T00:00:00Z`) + DAY_MS : NaN;
+  const chains: Coverage["chains"] = input.chains.map(c => {
+    const reasons: string[] = [];
+    let partial = false;
+    if (!c.backfilled) { reasons.push("initial backfill incomplete"); partial = true; }
+    if (c.pendingBeforeThrough == null) reasons.push("pending-history coverage unavailable");
+    else if (c.pendingBeforeThrough > 0) { reasons.push(`${c.pendingBeforeThrough} unresolved pool identifiers owe swaps before the reported day's end`); partial = true; }
+    if (!c.swapBlockTime || !Number.isFinite(c.swapBlockTime.getTime())) reasons.push("swap cursor time unavailable");
+    else if (Number.isFinite(boundary) && c.swapBlockTime.getTime() < boundary) { reasons.push("swap cursor has not covered the reported day's end"); partial = true; }
+    if (!c.updatedAt || !Number.isFinite(c.updatedAt.getTime())) reasons.push("indexer freshness unavailable");
+    else if (now.getTime() - c.updatedAt.getTime() > INDEXER_MAX_AGE_MS) { reasons.push("indexer report is stale"); partial = true; }
+    if (!Number.isFinite(boundary)) reasons.push("scored window unavailable");
+    return { chainId: c.chainId, status: partial ? "partial" : reasons.length ? "unknown" : "ready", reasons };
+  });
+  const status = chains.some(c => c.status === "partial") ? "partial"
+    : !chains.length || !Number.isFinite(boundary) || chains.some(c => c.status === "unknown") ? "unknown" : "ready";
+  return { status, through, chains };
+}
 export function freshness(input: HealthInput, now: Date): Freshness {
   const v = evaluateHealth(input, now);
-  const day = input.receipt?.day;
-  const through = day && day >= FIRST_REAL_DAY ? new Date(Date.parse(`${day}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10) : null;
-  const has = (...prefixes: string[]) => v.reasons.some((r) => prefixes.some((p) => r.startsWith(p)));
-  const note = v.ok
-    ? null
-    : has("no pipeline run receipt", "last pipeline receipt")
-      ? "run_late"
-      : has("pipeline run ")
-        ? "run_failed"
-        : has("chain ", "indexer")
-          ? "catching_up"
-          : null;
-  const partialChains = input.chains.filter((c) => !c.backfilled).map((c) => c.chainId);
-  return { through, note, partialChains };
+  const coverage = evaluateCoverage(input, now);
+  const has = (...prefixes: string[]) => v.reasons.some(r => prefixes.some(p => r.startsWith(p)));
+  const note = has("no pipeline run receipt", "last pipeline receipt") ? "run_late"
+    : has("pipeline run ") ? "run_failed"
+    : coverage.status === "partial" || has("chain ", "indexer") ? "catching_up"
+    : coverage.status === "unknown" ? "coverage_unknown" : null;
+  return { through: coverage.through, note, partialChains: coverage.chains.filter(c => c.status !== "ready").map(c => c.chainId) };
 }
-
 export const FRESH_NOTE: Record<NonNullable<Freshness["note"]>, string> = {
   run_late: "Nightly update delayed",
   run_failed: "Nightly update incomplete",
-  catching_up: "Indexer catching up",
+  catching_up: "Indexed history incomplete",
+  coverage_unknown: "Data coverage unavailable",
 };
-
 export function evaluateHealth(input: HealthInput, now: Date): { ok: boolean; reasons: string[]; warnings: string[] } {
   const reasons: string[] = [];
   const warnings: string[] = [];
   const today = now.toISOString().slice(0, 10);
-  const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+  const yesterday = new Date(now.getTime() - DAY_MS).toISOString().slice(0, 10);
   const expected = now.getUTCHours() < DEADLINE_HOUR_UTC ? yesterday : today;
-
   const r = input.receipt;
   if (!r) reasons.push("no pipeline run receipt");
   else {
@@ -73,14 +96,15 @@ export function evaluateHealth(input: HealthInput, now: Date): { ok: boolean; re
     if (r.softErrors >= SOFT_ERRORS_FAIL) reasons.push(`pipeline run for ${r.day} had ${r.softErrors} soft errors`);
     else if (r.softErrors > 0) warnings.push(`pipeline run for ${r.day} had ${r.softErrors} soft errors`);
   }
-
   if (input.chains.length === 0) reasons.push("indexer has never reported");
   for (const c of input.chains) {
-    if (!c.updatedAt) reasons.push(`chain ${c.chainId} has never reported`);
+    if (!c.updatedAt || !Number.isFinite(c.updatedAt.getTime())) reasons.push(`chain ${c.chainId} has never reported`);
     else if (now.getTime() - c.updatedAt.getTime() > INDEXER_MAX_AGE_MS)
       reasons.push(`chain ${c.chainId} last reported ${c.updatedAt.toISOString()} (over 2h ago)`);
     if (c.backfilled && c.headBlock != null && c.swapBlock != null && c.headBlock - c.swapBlock > SWAP_LAG_WARN_BLOCKS)
       warnings.push(`chain ${c.chainId} swap sync is ${c.headBlock - c.swapBlock} blocks behind head`);
   }
+  const coverage = evaluateCoverage(input, now);
+  if (coverage.status !== "ready") warnings.push(`reported-window indexer coverage is ${coverage.status}; service health does not certify complete data`);
   return { ok: reasons.length === 0, reasons, warnings };
 }
