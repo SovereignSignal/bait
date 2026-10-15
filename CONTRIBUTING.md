@@ -47,6 +47,22 @@ CI must be green: pipeline tests (SQLite and Postgres), web unit tests, typechec
 merges only. Describe what a visitor would notice, what a self-hoster must do (env, migration), and what you did not
 verify.
 
+## CI minutes
+
+The repo is private, so every job minute is paid (rounded up per job). The workflows are scoped to keep the bill
+small; work with them rather than around them:
+
+- `ci-pipeline.yml` runs for `pipeline/`, `db/` and `fixtures/` changes; `ci-web.yml` for `web/` and `fixtures/`;
+  `ci-e2e.yml` for `web/`. A docs-only change runs nothing.
+- The browser suites run on pushes to `main` and on pull requests that are **ready for review**. Open a PR as a
+  draft while iterating; mark it ready (or push once it is ready) to get the e2e run. Dependabot PRs never run e2e.
+- A newer push to a PR cancels its running jobs, so push a checkpoint, not every commit. Several pushes in a minute
+  still cost the first job minute of each.
+- Every merge to `main` runs the scoped workflows again. When stacked PRs are ready together, fold them into one
+  before merging rather than merging three in a row.
+- No one-off workflows on PR branches. A check you need once runs locally, or lives behind `workflow_dispatch` on
+  `main` so nobody triggers it by opening a PR.
+
 ## Reporting data problems
 
 A wrong figure, a mis-grouped hook or a missing project is a bug. Open an issue with the project slug, the chain, the
