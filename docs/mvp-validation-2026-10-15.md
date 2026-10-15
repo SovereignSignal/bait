@@ -24,6 +24,16 @@ It does not authorize deployment, a production rescore/backfill, trading, paid e
   serving the new web build; old rows remain unclassified until a separately authorized score run. Fresh backup tables
   now also preserve false defaults for the new booleans. Legacy explicit-column writers and restore were checked on
   Postgres. Web readiness returns 503 before the migration and 200 afterward, including on an empty migrated database.
+- Migration `0017_historical_evidence.sql` adds an immutable observation ledger and an offline, digest-pinned import
+  command. Its default preview is read-only, including on an unmigrated database. Applying an import takes the pipeline
+  lock and changes only the ledger; it never scores, advances a cursor, fills recent coverage or calls an external service.
+  Exact replay is a no-op; conflicting identities, provenance or exclusions reject the entire batch. Rollback removes
+  only the original bundle's rows with an explicit count guard. Schema rollback also resets only migration 0017's marker.
+- The ledger qualifies historical eligibility independently: at least ten positive transactions and $100 of known
+  contributions in one existing chain/pool/hook mapping. Standard/custom observations in one pool transaction count once,
+  using their maximum priced contribution. Ledger totals are never added to daily or snapshot evidence, or to recent metrics.
+  Unknown contributions and the full historical USD total remain unknown. A separately invoked, scoped scoring API can
+  update only explicitly selected existing project/day rows; the importer never invokes it.
 - The onchain step now refreshes a bounded queue of held-back estimated days from explicit closed UTC/USD source
   candles. It preserves the custom-accounting guard, exact swap counts, TVL and historical cumulative values. Missing,
   invalid, rate-limited or absent-day responses leave estimates intact. The default cap is ten pool attempts per run,
@@ -51,7 +61,7 @@ The scored window was October 7–13 (run day October 14). Browser/source replay
 | Hookr V6 (`2538`, Robinhood 4663) | [Official repository](https://github.com/Hookr-fun/hookr-contracts) confirms legacy root `0xb3ca29cf721380cee8b8e4755f3865ebc68fe8cc`. MOW/WETH `0x5291cfd042d8a771a510534ee31090bc4f4dc72724871e8f321aecfd12332a9a`: saved October 7–13 candles $75,385,273.90 match stored project volume. | Concentrated sampled wallet (~$7.1M, 296 trades, 145 buys/151 sells) remains suspicious. Stored `is_wash=false`; provider agreement is not organic-demand validation. A second pool's displayed October 13 zero differs from a $32.36 candle. |
 | Clanker Base static v2 (`3023`) | [Official deployment list](https://github.com/clanker-devco/v4-contracts#base-mainnet) confirms hook `0xb429d62f8f3bffb98cdb9569533ea23bf0ba28cc`, chain 8453. Base backfill remains incomplete. | Displayed zeros cannot certify inactivity or complete totals. Source verification does not cure coverage. |
 | Arrakis private (`1585`, others separate) | Hook `0xf9527fb5a34ac6fbc579e4fbc3bf292ed57d4880` belongs to `1585` on Arbitrum and separate `2109` on Ethereum; address alone is insufficient identity. [Official docs](https://docs.arrakis.finance/arrakis-pro) describe modular vaults; the published `ArrakisFinance/arrakis-modular` repository URL returned anonymous 404. | Unavailable source link is not proof of absent code. Do not equate private permissions with RFQ or treat missing custom-accounting values as zero. |
-| Bunni (`1505`, `bunnihook`) | Canonical `/p/bunnihook` returned 404 at 03:19:01 UTC. Database has fourteen hooks, 632 initialized pools, `is_spam=true`, and **no snapshots or daily usage rows**. [Official deployment table](https://docs.bunni.xyz/docs/v2/technical/deployments/) matches mainnet hook `0x000052423c1db6b7ff8641b85a7eefc7b2791888`. A bounded real-pool proof contains 19 positive events in 19 transactions before exploit block 23273098; eight exploit/later events are excluded. One historical-price cross-check supplies a conservative $262.4545875 contribution, exceeding the $100 threshold without pricing the remaining 18 events. | Historical materiality is independently established but absent from accepted pipeline inputs. The initial swap scan begins fourteen days back, so 2025 history was never imported. Base and other recent coverage remain unproven. No importer or production mutation was added; Bunni discoverability is still blocked pending a reviewed historical input path. |
+| Bunni (`1505`, `bunnihook`) | Canonical `/p/bunnihook` returned 404 at 03:19:01 UTC. Database has fourteen hooks, 632 initialized pools, `is_spam=true`, and **no snapshots or daily usage rows**. [Official deployment table](https://docs.bunni.xyz/docs/v2/technical/deployments/) matches mainnet hook `0x000052423c1db6b7ff8641b85a7eefc7b2791888`. A bounded real-pool proof contains 19 positive events in 19 transactions before exploit block 23273098; eight exploit/later events are excluded. One historical-price cross-check supplies a conservative $262.4545875 contribution, exceeding the $100 threshold without pricing the remaining 18 events. | The reviewed manifest and offline importer are implemented. Local import-to-score tests retain historical eligibility with unknown activity and null recent metrics; the controlled incomplete-coverage scenario cannot become dormant. Production still lacks this imported evidence. Its initial swap scan begins fourteen days back, so 2025 history was never imported; Base and other recent coverage remain unproven. Deployment, import and targeted rescore remain separate approval gates. |
 
 Bunni's custom event is distinct from the PoolManager Swap event. Two complete receipts show both: the standard event
 has zero amounts, while the custom event and transfers carry the amounts. The existing indexer would count the standard
@@ -71,13 +81,13 @@ contains identifiers, hashes, source URLs and exclusions. Old activity does not 
   candle, synchronize the pool's UTC-day stats, and rescore the existing October 14 run under the pipeline lock.
   Preserve 761 swaps, raw USD, TVL and cumulative columns. Verify the single-day delta once; do not assume a full-project
   total before all its inputs are rechecked. The new normal-run refresh is also code only until separately deployed.
-- Bunni: add a separately reviewed, idempotent event-evidence path before importing the bounded 19-event proof.
-  Deduplicate chain/transaction/log identities and correlate custom/standard events as one swap; keep the eighteen
-  unpriced contributions and total USD null, while retaining the one independently priced lower bound. Keep proof
-  separate from recent metric and coverage tables. `store.apply_swaps` is additive, has no event-level replay dedupe,
-  and must not be used to replay this bundle or rewind the live cursor. Target only the approved existing score day,
-  with backup and run lock; expect retained eligibility with unknown activity until complete recent coverage exists.
-  This import path is not implemented in this PR, so approval of a production rescore alone cannot fix Bunni.
+- Bunni: the implemented importer accepts the [frozen manifest](../pipeline/fixtures/bunni-historical-import-v1.json),
+  SHA-256 `42e7edad6476cceed690ae430cef14fbca96a7be9a6c7a95a4e7648ba991bf6a`. It contains twenty observations:
+  nineteen positive custom events plus one zero-amount standard counterpart, grouped into nineteen transactions.
+  Import and separately target the existing project 1505 / October 14 score row only after approval, fresh identity/day
+  checks and backup. Expect retained eligibility with unknown activity, not dormancy. `store.apply_swaps` is additive
+  and must not replay this bundle or rewind the live cursor. The exact preview/apply, score and rollback boundaries
+  are in [proposed production operations](evidence/proposed-production-operations.md); none were executed in production.
 
 ## Verification and evidence
 
@@ -92,11 +102,15 @@ Candidate tests are separate:
 
 - Pipeline regressions: evidence older than fourteen days, dust, incomplete/stale/short coverage, missing history,
   unpriced swaps, no cumulative/source double counting, revival and historical wash. Disposable Postgres also checks
-  migration and repair backup/restore compatibility.
+  migration and repair backup/restore compatibility. Importer tests cover the verified fixture, physical identity and
+  block conflicts, same-transaction deduplication, provenance/exclusion conflicts, immutable replay, currency/quote
+  validation, transaction and count-guarded data rollback, read-only preview and exclusive apply locking. The real
+  migration runner applies, rolls back and reapplies 0017 in an isolated Postgres schema before reimport/replay.
 - Web unit/query tests: pipeline decisions, null versus zero, direct pages/search/watchlists, raw/copy disagreement,
   and real migrations/queries against an isolated local schema.
 - `web/e2e/fixtures/representative.json`: six dated source replays plus explicitly synthetic lifecycle/redirect
-  cases. No invented Bunni retention or Aegis production merge. Desktop/mobile checks cover filtering, navigation,
+  cases. The unknown-history lifecycle fixture models a hypothetical post-import result; the named Bunni source replay
+  remains its observed 404. No invented production retention or Aegis merge. Desktop/mobile checks cover filtering, navigation,
   errors, overflow, evidence badges and unknown values. Each suite rebuilds the exact candidate commit to clear
   ISR pages from the other fixture dataset. The test server clears `DATABASE_URL` and never reuses a running server.
   See the fixture README for provenance and reproducible commands.
@@ -105,6 +119,7 @@ Final test outcomes and the exact tested SHA belong in the PR checkpoint and loc
 success should be inferred from the earlier `e38328f` checks: its CI/MVP workflows were `action_required`, not passes
 or failures. No workflow approvals, merge or deployment were performed.
 
-Before release: review the code and migration; resolve Bunni historical ingestion/current coverage, apply and verify
+Before release: review the code and migrations; separately approve Bunni historical import and targeted rescore while
+preserving unknown current coverage, apply and verify
 the separately approved Aegis data repair, and review grouping/total reconciliation and suspicious Hookr evidence. A deployment or production data repair
 requires a separate decision. The Notion workroom was not updated; this report is provided for parent reconciliation.

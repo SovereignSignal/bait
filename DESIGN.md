@@ -135,10 +135,23 @@ warning is retained with `wash_historical = true` until a measured revival (posi
 swap counts, no unknown-volume pools and ready project chains) lets current wash rules judge it. A partial/unpriced
 revival cannot erase that warning. Neither a historical badge nor a dormant label constitutes a safety endorsement.
 
-This classifier does not import missing historical evidence or add support for a hook's custom Swap event. Projects
-whose old activity is independently documented but absent from accepted stored sources still require a reviewed source
-integration/backfill; no project name or protocol-specific exception is used to conceal that gap. Migration 0016 adds
-the fields to project_daily and any existing repair backup; old rows remain unclassified until a score run. Fresh and
+An offline, reviewed-file import can add missing historical proof to `historical_swap_evidence` (migration 0017),
+without writing raw daily usage, snapshots, indexer state or coverage. Each immutable physical log retains its source,
+raw ABI payload, block identity and optional historical-price contribution. The caller must pin the reviewed file's
+SHA-256; this is an integrity check, not an automatic authenticity or safety certificate. Version 1 decodes standard
+v4 Swap logs and the supported custom input/output Swap signature; other ABIs require a reviewed adapter. It does
+not grant any named-project or hook-address exemption.
+
+This ledger supplies a separate qualification branch: at least ten distinct positive transactions and $100 of known
+USD lower-bound contributions in the same real pool, strictly before the current seven days. Standard/custom logs
+and repeated same-pool swaps in one transaction count once, with the maximum supported contribution, deliberately
+undercounting when needed. Ledger amounts/counts never combine with raw/snapshot qualification totals or recent metrics.
+Unknown contributions and the full historical total remain unknown. Exact imports are no-ops; changed evidence,
+conflicting block/log identities and accepted/excluded contradictions fail atomically. Imported proof never establishes
+coverage or clears wash findings. A separate score run is required; optional explicit `project_ids` restricts scoring
+writes to existing project/day rows for bounded repairs. See the pipeline README and proposed production operations.
+
+Migration 0016 adds the fields to project_daily and any existing repair backup; old rows remain unclassified until a score run. Fresh and
 migrated backup tables use false defaults for the new booleans so legacy explicit-column writers remain restorable.
 The web readiness endpoint checks these columns before serving this release.
 

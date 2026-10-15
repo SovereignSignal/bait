@@ -210,6 +210,38 @@ pools on ready chains (`wallets_exact`), else an upper bound. Wash is `is_wash` 
 `python -m bait run --steps score --day <d>` reads stored rows only and is repeatable. `score_trending = log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)`
 when `vol_7d >= $10k`, else 0. `is_new`, `is_spam` as in DESIGN.md.
 
+### Reviewed historical evidence (migration 0017)
+
+`python -m bait historical-evidence import FILE --sha256 REVIEWED_FILE_SHA` previews an offline manifest against
+existing chain/pool/hook/token identity. Preview is SELECT-only and bypasses schema bootstrap, receipts and locks;
+an absent ledger returns exit 4 without creating it. `--apply` takes the pipeline run lock and atomically imports
+evidence only. It never scores, enriches, changes recent metrics or updates indexer coverage. Apply migration 0017
+separately first. Exit 2 rejects invalid/conflicting evidence, exit 3 means a writer holds the run lock.
+
+Version 1 accepts at most 1000 observations/2 MB, older than fourteen days, using standard v4 Swap or the supported
+custom input/output Swap ABI. Raw data, canonical integer/topic encoding and emitter are checked. Valued observations
+must match the stored pool's token order; embedded historical quotes must match their hash/normalized fields, precede
+the event by at most five minutes and have confidence at least 0.95. The smaller decoded token-side value is retained
+as a NUMERIC USD contribution, rounded down to eighteen decimals. Unknown contributions stay null; no full total is
+asserted. The supplied file digest binds reviewed bytes, not authenticity of a source or organic activity.
+
+Physical IDs `(chain, transaction, log index)` and `(chain, block hash, log index)` are unique. Exact replay does
+nothing and keeps original import ownership. Changed payloads, block identities, or exclusion conflicts reject the
+entire batch. Scoring groups positive evidence per pool transaction, taking its maximum known contribution, and
+requires ten such transactions plus $100 in one real pool. This independent branch never adds evidence to recent
+metrics, coverage, or other historical source totals. Incomplete recent coverage still means unknown, not dormant.
+
+`python -m bait historical-evidence rollback --sha256 IMPORT_SHA` previews removal of that import's owned rows.
+`--apply --expected-rows N` requires the exact reviewed count. It never restores/recomputes scores. A separate targeted
+`score.run(conn, ctx, project_ids={...})` can update only existing approved project/day rows under the caller's run lock
+and backup transaction. Schema rollback is `db/rollback/0017_historical_evidence.sql`: roll back the dependent code
+first; it drops only the ledger and resets its migration marker atomically so the normal runner can reapply it.
+
+The [bounded Bunni manifest](fixtures/bunni-historical-import-v1.json) imports 20 physical observations: nineteen
+positive custom observations and one zero-amount standard counterpart. They prove nineteen distinct positive pool
+transactions and one $262.4545875 historical contribution; eighteen contributions and the full total remain unknown.
+The production proposal and rollback boundaries are in [the operations note](../docs/evidence/proposed-production-operations.md).
+
 ### Dev radar (step `radar`)
 What is being built before it has volume; the web app shows it at `/building`. Table `radar_items` (DDL
 `../db/migrations/0005_radar.sql`), one row per URL, `kind` in registry_submission / repo / hackathon / incubator /

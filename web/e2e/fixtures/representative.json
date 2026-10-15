@@ -2084,7 +2084,7 @@
       "category": "other",
       "secondaryCategories": [],
       "isFactory": false,
-      "whatLine": "Synthetic regression fixture. This is not an observed project.",
+      "whatLine": "Hypothetical post-import scorer output: qualifying historical usage accepted; recent usage unknown. Synthetic test project.",
       "whyBlurb": "",
       "whyBlurbAt": null,
       "website": null,
@@ -2101,7 +2101,7 @@
       "metrics": {
         "tvlUsd": 0,
         "vol7d": null,
-        "vol7dPrev": 0,
+        "vol7dPrev": null,
         "swaps7d": null,
         "poolsN": 1,
         "hooksN": 1
@@ -2124,15 +2124,15 @@
       },
       "usage": {
         "vol24h": null,
-        "vol24hRolling": 0,
+        "vol24hRolling": null,
         "tx24h": null,
-        "wallets24h": 0,
+        "wallets24h": null,
         "walletsExact": true,
-        "buys24h": 0,
-        "sells24h": 0,
-        "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "buys24h": null,
+        "sells24h": null,
+        "buyers24h": null,
+        "sellers24h": null,
+        "smartWallets": null
       },
       "isNew": false,
       "isSpam": false,
@@ -2171,7 +2171,7 @@
           "vol7d": null,
           "tx7d": null,
           "vol24h": null,
-          "wallets24h": 0,
+          "wallets24h": null,
           "walletsExact": true,
           "eligibility": "eligible"
         }

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import postgres from "postgres";
+import { applyTab, listFor } from "./feed";
 
 const testUrl = process.env.BAIT_TEST_DATABASE_URL;
 
@@ -88,6 +89,32 @@ test("Postgres readiness requires migration 0016 and project pages preserve unkn
       assert.equal(project.metrics.vol7d, null);
       assert.equal(project.pools[0]?.vol7d, null);
       assert.equal(project.pools[0]?.vol24h, null);
+    }
+    // Hypothetical scorer output after accepted historical evidence: the importer/scorer
+    // is tested in the pipeline. Here, no recent snapshots must remain unknown and discoverable.
+    const { project: historicalUnknown, rows } = await getProjectPage("missing");
+    assert.ok(historicalUnknown);
+    assert.equal(historicalUnknown.hasHistoricalUsage, true);
+    assert.equal(historicalUnknown.activityStatus, "unknown");
+    assert.equal(historicalUnknown.isSpam, false);
+    assert.equal(historicalUnknown.isDormant, false);
+    assert.equal(historicalUnknown.isNew, false);
+    assert.equal(historicalUnknown.scoreTrending, 0);
+    assert.equal(historicalUnknown.metrics.vol7d, null);
+    assert.equal(historicalUnknown.metrics.vol7dPrev, null);
+    assert.equal(historicalUnknown.metrics.swaps7d, null);
+    assert.equal(historicalUnknown.usage.vol24h, null);
+    assert.equal(historicalUnknown.usage.tx24h, null);
+    assert.equal(historicalUnknown.pools[0]?.tx7d, null);
+    const hooks = await getHookIndex();
+    assert.deepEqual(hooks.missing, [historicalUnknown.hooks[0].address]);
+    assert.ok(applyTab(rows, { tab: "all" }).some(r => r.slug === "missing"));
+    for (const search of [historicalUnknown.name, historicalUnknown.hooks[0].address]) {
+      assert.ok(listFor(rows, { tab: "trending" }, { search, hooks }).some(r => r.slug === "missing"));
+    }
+    assert.ok(listFor(rows, { tab: "new" }, { search: "", watchlist: ["missing"] }).some(r => r.slug === "missing"));
+    for (const tab of ["new", "trending"] as const) {
+      assert.equal(applyTab(rows, { tab }).some(r => r.slug === "missing"), false);
     }
     const partial = (await getProjectPage("partial")).project!;
     assert.equal(partial.pools[0]?.vol7d, 0); // observed partial volume, no inference about swap completeness
