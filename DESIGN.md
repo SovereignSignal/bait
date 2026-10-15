@@ -615,3 +615,14 @@ per loop the cursor gained ~80-200 blocks per loop against a gap that grows ~30 
 - **Watchlist tab** fits the 320 px list column on one row: the In Uniswap app tab shows as "In app" there (full name
   kept as its accessible name and tooltip), with 6 px tab padding and a 2 px gap; the bar wraps rather than clips if a
   label grows. An empty watchlist reads "Star a project to keep it here."
+
+## Wallet concentration (2026-10-15)
+
+`project_daily.wallets_7d` and `top_wallet_share_7d` (migration 0018): distinct wallets across a project's pools over
+the seven closed days, and the busiest wallet's share of the project's swaps in that window, from `pool_wallet_day`
+(wallet = tx.from). Known only when every chain the project is on is ready and its indexed history reaches the start
+of the window, otherwise NULL: a partial count would read as a small, concentrated project. The share is of swaps,
+not volume, because per-wallet volume is a sample of ~300 trades a day while swap counts are complete on a ready chain.
+Shown at any size on the project page ("Wallets 7d", "Top wallet"), with an amber "One wallet, N% of swaps" badge at
+50% or more; it is information, not a wash finding, which still needs the package 8 thresholds. Asked for by the grant
+review workflow: a small hook with no wash badge said nothing about who was trading it.

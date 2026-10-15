@@ -661,3 +661,41 @@ def test_wash_shares_use_unfolded_volume_so_folded_usage_cannot_dilute_a_wash_po
     score.run(conn, ctx)
     d = daily(conn, pad)
     assert d.is_wash and "7d" in d.wash_reason.split(",") and d.score_trending == 0.0
+
+
+def test_wallets_7d_and_top_wallet_share_from_exact_swap_counts(conn, ctx):
+    """The small-hook signal: distinct wallets over the week and the busiest wallet's share of swaps, with no threshold."""
+    even = _onchain_project(conn, "Even", "0xep", wallets=3, vol_per_day=1_000)             # 3 wallets, 1 swap each a day
+    lopsided = _onchain_project(conn, "Lop", "0xlp", wallets=2, vol_per_day=1_000)
+    conn.execute(sa.update(db.pool_wallet_day).where(db.pool_wallet_day.c.pool_id == "0xlp", db.pool_wallet_day.c.address == "0xw0")
+                 .values(swaps=8))                                                           # one wallet does 8 of 9 swaps a day
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    e, l = daily(conn, even), daily(conn, lopsided)
+    assert (e.wallets_7d, e.top_wallet_share_7d) == (3, 0.3333)
+    assert (l.wallets_7d, l.top_wallet_share_7d) == (2, round(8 / 9, 4))
+    assert not l.is_wash                     # $7K a week is far under every wash threshold; the figure still shows
+
+
+def test_wallets_7d_unknown_unless_every_chain_is_ready_and_covers_the_window(conn, ctx):
+    pid = _onchain_project(conn, "Mixed", "0xmp", wallets=3, vol_per_day=1_000)
+    score.run(conn, ctx)                     # chain 10 not ready
+    d = daily(conn, pid)
+    assert d.wallets_7d is None and d.top_wallet_share_7d is None
+    _optimism_ready(conn)
+    insert_hook(conn, "0xMixedBase", 8453, project_id=pid, name="Mixed")   # a second chain with no indexer state
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert d.wallets_7d is None and d.top_wallet_share_7d is None
+    conn.execute(sa.delete(db.hooks).where(db.hooks.c.chain_id == 8453))
+    conn.execute(sa.delete(db.pool_daily_onchain).where(db.pool_daily_onchain.c.day == END - timedelta(days=6)))  # history starts inside the window
+    score.run(conn, ctx)
+    assert daily(conn, pid).wallets_7d is None
+
+
+def test_wallets_7d_is_zero_for_a_covered_silent_project(conn, ctx):
+    pid = _onchain_project(conn, "Quiet", "0xqp", wallets=0, vol_per_day=0)
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert d.wallets_7d == 0 and d.top_wallet_share_7d is None

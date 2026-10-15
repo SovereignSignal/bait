@@ -222,6 +222,8 @@ function build(raw: Raw, i: number): ProjectDetail {
       buyers24h: raw.wallets > 0 ? Math.round(raw.wallets * (buyShare + 0.05)) : null,
       sellers24h: raw.wallets > 0 ? Math.round(raw.wallets * (1.05 - buyShare)) : null,
       smartWallets: topWallets.filter((w) => w.smartMoney).length,
+      wallets7d: null,
+      topWalletShare7d: null,
     },
     isNew,
     isSpam: false,

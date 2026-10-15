@@ -164,6 +164,13 @@ export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNe
 }
 
 /** "1,142" for a distinct count, "≤ 1,142" for an upper bound (buyers + sellers, or pools added together). */
+/** The busiest wallet's share of the week's swaps, shown at any size; unknown reads as the usual dash. */
+export function topWalletText(share: number | null): string {
+  if (share == null) return int(null);
+  const pct = share * 100;
+  return `${pct >= 99.5 ? "100" : pct < 1 ? "<1" : Math.round(pct)}% of swaps`;
+}
+
 export function walletsText(n: number | null, exact: boolean | null): string {
   if (n == null) return int(n);
   return exact === false ? `≤ ${int(n)}` : int(n);

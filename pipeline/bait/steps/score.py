@@ -150,6 +150,7 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
     reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom,
                                   pool_vol_days)
     wallets = _wallets(conn, day, end, ready, pool_project)
+    concentration = _wallets_7d(conn, w7, ready, hook_rows)
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
     unknown_volume_projects = {pool_project[key][0] for key in unknown_vol}
@@ -190,6 +191,8 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
             "vol_7d_prev": a["vol7p"] if known and a["vol7p_known"] else None,
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
             "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
+            "wallets_7d": concentration.get(pid, (None, None))[0],
+            "top_wallet_share_7d": concentration.get(pid, (None, None))[1],
             # folded usage (a capped hook's aggregate pool) is displayed, never ranked: no wash rule can judge it
             "score_trending": 0.0 if (wash or young or (pid in historical and status != "active")) else score_trending(a["vol7"] - a["fold_vol7"], a["vol7p"] - a["fold_vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
@@ -449,6 +452,41 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
         if n:
             parts.setdefault(pool_project[key][0], []).append((n, distinct))
     return {pid: (sum(n for n, _ in ps), len(ps) == 1 and ps[0][1]) for pid, ps in parts.items()}
+
+
+def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -> dict[int, tuple[int, float | None]]:
+    """Distinct wallets over the 7-day window and the busiest wallet's share of the project's swaps, from the indexer's
+    exact per-wallet counts (pool_wallet_day, wallet = tx.from). Known only for projects whose every chain is ready
+    with indexed history reaching the start of the window: a partial count would read as a small, concentrated project.
+    The share is of swaps, not volume, because wallet volume is a sample (pool_top_wallets) while swap counts are
+    complete on a ready chain. No threshold: this is the figure the wash rules only act on past $250K a day."""
+    ready_set = set(ready)
+    if not ready_set:
+        return {}
+    coverage = dict(conn.execute(sa.select(pool_daily_onchain.c.chain_id, sa.func.min(pool_daily_onchain.c.day))
+                                 .where(pool_daily_onchain.c.day <= w[1]).group_by(pool_daily_onchain.c.chain_id)).all())
+    chains_of: dict[int, set[int]] = {}
+    for r in hook_rows:
+        chains_of.setdefault(r.project_id, set()).add(r.chain_id)
+    eligible = {pid for pid, cs in chains_of.items()
+                if cs <= ready_set and all(c in coverage and _as_date(coverage[c]) <= w[0] for c in cs)}
+    if not eligible:
+        return {}
+    per_wallet = (sa.select(hooks.c.project_id.label("pid"), pool_wallet_day.c.address,
+                            sa.func.sum(pool_wallet_day.c.swaps).label("swaps"))
+                  .select_from(pool_wallet_day
+                               .join(pools, (pools.c.pool_id == pool_wallet_day.c.pool_id) & (pools.c.chain_id == pool_wallet_day.c.chain_id))
+                               .join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
+                  .where(pool_wallet_day.c.day >= w[0], pool_wallet_day.c.day <= w[1],
+                         pool_wallet_day.c.chain_id.in_(ready), hooks.c.project_id.is_not(None))
+                  .group_by(hooks.c.project_id, pool_wallet_day.c.address).subquery())
+    q = (sa.select(per_wallet.c.pid, sa.func.count().label("wallets"), sa.func.sum(per_wallet.c.swaps).label("swaps"),
+                   sa.func.max(per_wallet.c.swaps).label("top")).group_by(per_wallet.c.pid))
+    out = {pid: (0, None) for pid in eligible}      # covered and silent: zero wallets is a measured zero
+    for r in conn.execute(q):
+        if r.pid in eligible and r.swaps:
+            out[r.pid] = (int(r.wallets), round(float(r.top) / float(r.swaps), 4))
+    return out
 
 
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,

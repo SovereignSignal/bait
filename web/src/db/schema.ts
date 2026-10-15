@@ -105,6 +105,8 @@ export const projectDaily = pgTable(
     swaps24h: bigint("swaps_24h", { mode: "number" }), // NULL = not every day known (swaps7d likewise)
     wallets24h: integer("wallets_24h"),
     walletsExact: boolean("wallets_exact"), // true = distinct across the project's pools; false = upper bound
+    wallets7d: integer("wallets_7d"), // 0018: distinct wallets over the 7-day window from the indexer; NULL = unknown
+    topWalletShare7d: doublePrecision("top_wallet_share_7d"), // busiest wallet's share of the window's swaps (0..1)
     isWash: boolean("is_wash").notNull().default(false),
     washHistorical: boolean("wash_historical").notNull().default(false),
     washReason: text("wash_reason"), // comma list: 24h, 7d, vol_tvl, no_liquidity, symmetric
