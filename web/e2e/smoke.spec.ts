@@ -245,3 +245,25 @@ test("research evidence precedes the chart and external actions never imply exec
   if (!phone()) await expect(page.getByText(/Bait does not execute trades/)).toBeVisible();
   await noHorizontalScroll(page);
 });
+
+
+test("read API: list, one project, hook lookup, and the errors a script can act on", async ({ request }) => {
+  const list = await request.get("/api/v1/projects?limit=3&sort=vol7d");
+  expect(list.status()).toBe(200);
+  expect(list.headers()["x-bait-api-version"]).toBe("1");
+  expect(list.headers()["access-control-allow-origin"]).toBe("*");
+  const body = await list.json();
+  expect(body.count).toBe(3);
+  expect(body.projects[0]).toHaveProperty("metrics.vol_7d_usd");
+  const one = await request.get(`/api/v1/projects/${body.projects[0].slug}`);
+  expect(one.status()).toBe(200);
+  const detail = (await one.json()).project;
+  expect(Array.isArray(detail.hooks)).toBe(true);
+  if (detail.hooks.length) {
+    const hit = await request.get(`/api/v1/hooks/${detail.hooks[0].address}`);
+    expect(hit.status()).toBe(200);
+    expect((await hit.json()).matches.some((m: { project: { slug: string } }) => m.project.slug === detail.slug)).toBe(true);
+  }
+  expect((await request.get("/api/v1/projects/no-such-project-xyz")).status()).toBe(404);
+  expect((await request.get("/api/v1/hooks/0xnothex")).status()).toBe(400);
+});
