@@ -1,136 +1,101 @@
 # Bait
 
-One feed for Uniswap v4 hooks: discover new hooks, see what people are using, understand why it
-matters, try it. Cards grouped by project, not by hook address.
+A discovery feed for Uniswap v4 hooks: what is new, what is trending, who is using it, and what it does. Hooks are
+grouped into projects rather than listed by address, every figure is a closed UTC day from Bait's own on-chain indexer
+or a public API, and every project page says which day its figures run through.
 
-Personal project (Sov), hosted on Railway. Spec: [`DESIGN.md`](DESIGN.md). UI mock and design
-tokens: [`mock.html`](mock.html). Not part of UF ops.
+Live: https://bait-production-2706.up.railway.app
 
-## Layout
+Bait is a personal project. It is not affiliated with Uniswap Labs or the Uniswap Foundation, it audits nothing, and
+it executes no trades. A listing, badge or rank is not an endorsement.
+
+## What it shows
+
+- **Trending, New, Automatic routing, All.** Trending ranks 7-day volume growth over size; New is projects first seen
+  within a week with real usage; the routing tab is projects with a pool that meets Bait's conservative reading of the
+  Uniswap app's automatic-routing rule; All is everything with usage, wash-like rows last.
+- **A project page**: hooks and chains, the busiest pools, daily volume, top wallets, buys and sells, a one-line
+  "what it does" and a short "why people care" written from public sources, links, audit link, and a live trade feed.
+- **Building**: hooks before they have volume, from registry submissions, repos, audits, hackathons and launches.
+- **Leaders** and a **weekly digest** with RSS.
+- **Wash-like volume** is flagged, never hidden: pools carrying at least half a project's volume through a handful of
+  wallets, far above their liquidity, or trading symmetrically with themselves keep the project in All with a red
+  badge and out of every ranking.
+
+The rules behind each of those are stated once in [`docs/architecture.md`](docs/architecture.md) and argued, with
+their history, in [`DESIGN.md`](DESIGN.md).
+
+## How it works
 
 ```
-bait/
-  DESIGN.md            the spec; read it first
-  mock.html            UI mock, source of the design tokens
-  db/                  SQL migrations (db/migrations/000N_*.sql), applied with psql
-  pipeline/            Python nightly job, Railway cron service: python -m bait run
-  web/                 Next.js App Router site, Railway web service (Drizzle -> Postgres; ISR 1h on project and week pages, stale-while-revalidate cache elsewhere)
-  railway/README.md    how the three Railway services are created and configured
-  scripts/             apply-migrations.sh, run-pipeline-local.sh
-  .env.example         every env var, one comment each, no values
+Uniswap hooklist (registry) ─┐
+HyperSync (16 chains) ───────┤   pipeline/   nightly 06:00 UTC: ingest, snapshot, activity, onchain,
+GeckoTerminal, public RPC ───┤               group, enrich, score, signals, radar, digest
+Blockscout, Sourcify ────────┤   indexer/    always on: every hooked v4 pool + 14 days of swaps
+Exa, Parallel, Claude ───────┘        │
+                                      ▼
+                                  Postgres  ◄──  web/   Next.js, server-rendered, in-process caches
 ```
 
-Each of `db/`, `pipeline/`, `web/` has its own README with the details.
+- `pipeline/` (Python 3.12): the nightly job and the always-on indexer. A spend guard (`bait/costs.py`) checks a daily
+  and a 30-day budget before every paid call; without keys the pipeline still runs on free sources, slower.
+- `web/` (Next.js 16, Drizzle): reads Postgres, nothing else. Without a database it renders empty; with
+  `BAIT_FIXTURES=1` it renders sample data.
+- `db/migrations/`: the schema. The pipeline also creates and extends tables on start, but a release that adds columns
+  the web reads is applied as a migration first (`db/README.md`).
 
-## Local dev, in order
+## Run it in three commands
 
-Requirements: Node 20, Python 3.12, `psql` (postgresql-client). A Postgres is optional for a
-first run: the pipeline falls back to SQLite, and the web app to fixture data (with `BAIT_FIXTURES=1`), when `DATABASE_URL`
-is unset.
+No keys, no database, no network calls:
 
-1. Env
+```sh
+cd pipeline && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m pytest -q
+cd ../web && npm ci && npm test
+BAIT_FIXTURES=1 npm run dev        # http://localhost:3000 on sample data
+```
 
-   ```sh
-   cp .env.example .env     # fill in what you have; keys you leave empty are skipped
-   ```
+For a real run against a Postgres of your own:
 
-2. Database (skip for SQLite / fixtures)
+```sh
+cp .env.example .env               # every variable has a comment; leave keys empty to skip that source
+scripts/apply-migrations.sh        # idempotent, records each file in schema_migrations
+scripts/run-pipeline-local.sh --steps ingest,snapshot --day 2026-10-06    # fixture registry, keyless sources
+cd web && npm run dev              # DATABASE_URL from .env
+```
 
-   Point `DATABASE_URL` at any Postgres: a local one, or the Railway Postgres through its
-   `DATABASE_PUBLIC_URL` (Public Access must be on). Then
+Per-service details: [`pipeline/README.md`](pipeline/README.md), [`web/README.md`](web/README.md),
+[`db/README.md`](db/README.md). Contributing and the test rules: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-   ```sh
-   scripts/apply-migrations.sh
-   ```
+## Data sources and their limits
 
-   applies `db/migrations/*.sql` in order and records each file in `schema_migrations`, so
-   re-running is a no-op.
-
-3. Pipeline
-
-   ```sh
-   python3 -m venv pipeline/.venv
-   pipeline/.venv/bin/pip install -r pipeline/requirements.txt
-
-   # fixture hooklist, SQLite, no keys needed: ingest + snapshot only
-   scripts/run-pipeline-local.sh --steps ingest,snapshot --day 2026-10-06 \
-     --database-url sqlite:///./dev.sqlite
-
-   # same against the Postgres from step 2 (DATABASE_URL from .env), all steps
-   scripts/run-pipeline-local.sh --day 2026-10-06
-
-   (cd pipeline && .venv/bin/python -m pytest -q)
-   ```
-
-   Postgres-only tests (savepoints, the run lock) skip unless `TEST_DATABASE_URL` is set:
-   `eval "$(pipeline/scripts/pg-test-cluster.sh start)"` starts a throwaway cluster and prints the export.
-
-   `fixtures/routable_cases.json` is the shared routing-eligibility fixture; `pipeline/tests/test_routable_shared.py`
-   and `web/src/lib/routable.test.ts` (`npm test`) both assert it so the two implementations cannot drift.
-
-   `run-pipeline-local.sh` loads `.env`, cds into `pipeline/` and runs
-   `python -m bait run --hooklist-file fixtures/hooklist.sample.json` plus whatever flags you
-   pass (`--steps`, `--chains`, `--day`, `--database-url`, `--force-digest`). Runs are
-   idempotent per day. Without `GRAPH_API_KEY` the snapshot step logs
-   `client=graph skipped` and writes nothing, which is expected.
-
-4. Web
-
-   ```sh
-   cd web && npm install && npm run dev      # http://localhost:3000
-   ```
-
-   No `DATABASE_URL` = empty pages. Add `BAIT_FIXTURES=1` for sample data with a "Sample figures" note. Set `DATABASE_URL` to read the database the
-   pipeline just filled.
+| Source | Used for | Limit that shapes the design |
+|---|---|---|
+| Uniswap hooklist | registry names, flags, audit links | names are candidates; merges need bytecode or deployer evidence |
+| Envio HyperSync | every hooked pool, 14 days of swaps, 16 chains | free tier is about 20 queries a minute; Base pool lookups are the slow part |
+| GeckoTerminal | pool TVL, rolling 24h figures, closed-day candles, recent trades, top wallets | about 5 calls a minute on the free tier; keyless runs take ~35 minutes |
+| Public RPC, Blockscout, Sourcify, Routescan | hook resolution, bytecode, contract names | per-chain quirks listed in `pipeline/README.md` |
+| DefiLlama | prices | current prices, so raw indexer USD is an estimate |
+| Exa, Parallel, Claude | links, team and audit details, the two text lines | paid; all three optional and budget-capped |
 
 ## Deploy
 
-Three Railway services: the Postgres plugin, `pipeline` (cron, root `/pipeline`, `0 6 * * *`),
-`web` (root `/web`, healthcheck `/`). Exact CLI commands, dashboard clicks, variable references
-and the doc citations are in [`railway/README.md`](railway/README.md). Secrets live only in
-Railway variables and your local `.env`, never in the repo.
+Three services and a Postgres: a cron job, an always-on process, a web process. The reference deployment is Railway
+and [`railway/README.md`](railway/README.md) has the exact commands and settings, including the gotchas. Any host
+with the same shape works: set `DATABASE_URL` on all three, run `python -m bait run` daily at 06:00 UTC, keep
+`python -m bait.indexer` running, serve `web/` with its Dockerfile, and point the web healthcheck at `/api/ready`.
+Keys live in host variables and a local `.env`, never in the repo.
 
-## First night checklist
+Monitoring: `/api/health` reports the last run's receipt and each chain's indexer state; a scheduled GitHub Action
+(`.github/workflows/health.yml`) checks it daily and emails the repository owner on failure.
 
-1. Migrations applied against the Railway Postgres (`scripts/apply-migrations.sh` with
-   `DATABASE_PUBLIC_URL`); `\dt` shows `projects, hooks, pools, pool_snapshots, project_daily,
-   signals, receipts, digests, schema_migrations`.
-2. `pipeline` and `web` deployed; `web` healthcheck green; the site renders an empty feed.
-3. Run the pipeline by hand once, ingest + snapshot only, before any cron tick. Either
-   `Run now` on the pipeline service's latest deployment in the dashboard, or locally against
-   the same Postgres:
+## Status
 
-   ```sh
-   scripts/run-pipeline-local.sh --steps ingest,snapshot
-   ```
+Beta. Figures can lag or be wrong when a source stalls; wash and spam rules are deliberately conservative; a hook's
+deployer and the share of volume from its own wallets are not shown yet. The release plan and known gaps are in
+[`docs/mvp-release-plan.md`](docs/mvp-release-plan.md). To get a hook listed, open a pull request on the
+[Uniswap hooklist](https://github.com/Uniswap/hooklist); Bait picks it up the next night.
 
-   That uses the 300-hook fixture. For the live hooklist.json from GitHub run the CLI directly:
-   `cd pipeline && .venv/bin/python -m bait run --steps ingest,snapshot`.
-4. Check counts and the subgraph health warnings:
+## License
 
-   ```sql
-   select count(*) from hooks;                                   -- 300 from the fixture, ~4,900 live
-   select chain_id, count(*) from pools group by 1 order by 1;   -- 8 chains; Robinhood + Ink skipped by design
-   select day, count(*) from pool_snapshots group by 1;          -- one row per hooked pool for today
-   ```
-
-   Look in the run log for `hasIndexingErrors` warnings per chain and for
-   `client=<name> skipped: no key in env` lines you did not expect.
-5. If counts look right, run the remaining steps once (`--steps group,enrich,score,signals`)
-   and reload the site. Then leave `cronSchedule` set; the next 06:00 UTC tick is the first
-   unattended run. Railway skips a tick if the previous run is still `Active`.
-
-## Open items carried from research
-
-- Base / Unichain / BNB / Arbitrum / Avalanche / Polygon / Optimism subgraph IDs are the
-  community deployments DefiLlama uses; health is unverified until the first run with a key.
-- Robinhood (4663) and Ink (57073) have no public v4 subgraph; the RPC Initialize/Swap log-scan
-  fallback is v2.
-- The v4 pool deep link `app.uniswap.org/explore/pools/<chain>/<poolId>` with a bytes32 poolId
-  is unconfirmed in a browser.
-- Routing eligibility (eligible / ineligible / unknown, from the address bits and the pool fee) is stricter than the
-  published Labs rule (adds the two liquidity-delta bits); `NON_ROUTABLE_FLAGS` in `pipeline/bait/rules.py` is where
-  to relax it. The web tab formerly called Verified is now "In Uniswap app".
-
-Disclaimers on every project page: not audited by us; flags come from the hook address; the routing
-badge is a rule, not a guarantee.
+[MIT](LICENSE). Registry data in `pipeline/fixtures/hooklist.sample.json` is Uniswap's; see
+`pipeline/fixtures/README.md`.
