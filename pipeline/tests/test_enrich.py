@@ -334,3 +334,31 @@ def test_what_context_is_what_enrich_sends_claude(conn, ctx):
     assert seen[0]["hooklist_descriptions"] == ["limit orders"] and seen[0]["flags_union"] == ["beforeSwap"]
     vals = enrich.what_values(p, {"what_line": "x " * 150, "category": "orders"}, {"parallel": {"website": "https://c.xyz"}})
     assert vals["what_line"].endswith("…") and len(vals["what_line"]) <= 200 and vals["website"] == "https://c.xyz"
+
+
+def test_enriched_but_empty_projects_are_retried_weekly_behind_new_ones(conn, ctx, monkeypatch):
+    """A busy project whose enrichment produced no what_line gets another call once a week, after never-enriched
+    projects in the same cap; a fresh empty result and a project with a line are left alone."""
+    monkeypatch.setenv("ENRICH_MAX", "3")
+    rows = {}
+    for name, vol in (("Blank", 9_000_000.0), ("Fresh", 8_000_000.0), ("Described", 7_000_000.0), ("Never", 10.0)):
+        pid = insert_project(conn, name, first_seen=NOW - timedelta(days=30))
+        addr = "0x" + name.lower().ljust(40, "0")[:40]
+        insert_hook(conn, addr, 8453, project_id=pid, name=name)
+        insert_pool(conn, "0xpool" + name, 8453, addr, NOW - timedelta(days=30))
+        conn.execute(sa.insert(db.pool_stats).values(pool_id="0xpool" + name, chain_id=8453, day=DAY, vol_24h=vol, traders_24h=50))
+        rows[name] = pid
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == rows["Blank"])
+                 .values(what_line="", enriched_at=NOW - timedelta(days=8)))            # old and empty: retry
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == rows["Fresh"])
+                 .values(what_line=None, enriched_at=NOW - timedelta(days=2)))          # empty but recent: wait
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == rows["Described"])
+                 .values(what_line="Described does a thing.", enriched_at=NOW - timedelta(days=60)))   # has a line: never
+    assert [p.name for p in enrich.select_candidates(conn, now=NOW)] == ["Never", "Blank"]
+    claude = FakeClaude()
+    ctx.clients.update(claude=claude, parallel=None, blockscout=None)
+    out = enrich.run(conn, ctx)
+    assert claude.calls == ["Never", "Blank"] and out["enriched"] == 2
+    blank = conn.execute(sa.select(db.projects).where(db.projects.c.id == rows["Blank"])).one()
+    assert blank.what_line == "Blank does a thing." and db.as_utc(blank.enriched_at) > NOW - timedelta(days=1)
+    assert enrich.select_candidates(conn, now=NOW) == []     # nothing left to retry tonight

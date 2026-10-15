@@ -77,6 +77,11 @@ const CORE_AUDIT = /^https?:\/\/(www\.)?github\.com\/uniswap\/v4-(core|periphery
  * the one Parallel found, but only when Parallel identified a team and the project has a name to research. An unnamed
  * hook is just an address, so an audit "found" for it belongs to someone else. Count = links.length; badge = links[0].
  */
+/** The generated text names an audit the registry and team details do not link: the badge must say so, not "No audit". */
+export function auditMention(...texts: Array<string | null | undefined>): boolean {
+  return /\baudit(?:ed|s|or|ors|ing)?\b/i.test(texts.filter(Boolean).join(" "));
+}
+
 export function auditLinks(
   hookUrls: Iterable<unknown>,
   parallel: { audit_url?: unknown; team?: unknown } | null | undefined,
