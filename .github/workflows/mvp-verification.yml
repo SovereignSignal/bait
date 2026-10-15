@@ -1,0 +1,147 @@
+name: MVP verification
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/mvp-verification.yml'
+      - 'scripts/mvp-*.py'
+      - 'web/**'
+      - 'pipeline/**'
+permissions:
+  contents: read
+concurrency:
+  group: mvp-verification-${{ github.head_ref }}
+  cancel-in-progress: true
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Capture source and public response evidence
+        shell: bash
+        run: |
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source-sha.txt
+          git archive --format=tar.gz HEAD -o evidence/source.tar.gz
+          python - <<'PY'
+          import json, time, urllib.request, urllib.error
+          from pathlib import Path
+          from datetime import datetime, timezone
+          root = Path('evidence')
+          base = 'https://bait-production-2706.up.railway.app'
+          manifest = {'observed_at': datetime.now(timezone.utc).isoformat(), 'requests': []}
+          def get(url, name):
+              start = time.monotonic()
+              status = None
+              try:
+                  req = urllib.request.Request(url, headers={'User-Agent': 'Bait-MVP-verification/1.0'})
+                  try:
+                      response = urllib.request.urlopen(req, timeout=35)
+                  except urllib.error.HTTPError as error:
+                      response = error
+                  with response:
+                      status = response.status
+                      body = response.read(6000000)
+                      headers = dict(response.headers.items())
+                  (root / name).write_bytes(body)
+                  manifest['requests'].append({'url': url, 'file': name, 'status': status, 'seconds': round(time.monotonic()-start,3), 'bytes': len(body), 'headers': headers})
+                  return body
+              except Exception as error:
+                  manifest['requests'].append({'url': url, 'file': name, 'status': status, 'error': type(error).__name__, 'seconds': round(time.monotonic()-start,3)})
+                  return b''
+          for route in ['api/ready','api/health','api/rows','api/hooks','api/launches','','leaders','building','about','week','feed.xml']:
+              get(base + '/' + route, (route.replace('/','_') or 'home') + ('.json' if route.startswith('api/') else '.html'))
+          try:
+              packed = json.loads((root/'api_rows.json').read_text())
+              rows = [dict(zip(packed['keys'], row)) for row in packed['rows']]
+              selected = sorted((r for r in rows if not r.get('isWash')), key=lambda r: -(r.get('vol7d') or 0))[:20]
+              (root/'top20.json').write_text(json.dumps(selected, indent=2))
+              (root/'all_rows.json').write_text(json.dumps(rows))
+              for row in selected:
+                  get(base+'/p/'+row['slug'], 'project-'+row['slug']+'.html')
+                  time.sleep(0.3)
+              print('TOP20', json.dumps(selected))
+              print('COUNTS', json.dumps({'rows':len(rows),'missing_description':sum(not r.get('whatLine') for r in rows),'wash':sum(bool(r.get('isWash')) for r in rows)}))
+          except Exception as error:
+              manifest['rows_error'] = type(error).__name__ + ': ' + str(error)[:200]
+          get('https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json','hooklist.json')
+          (root/'manifest.json').write_text(json.dumps(manifest,indent=2))
+          print('MANIFEST', json.dumps(manifest))
+          PY
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install browser test dependencies
+        working-directory: web
+        run: npm ci && npx playwright install --with-deps chromium
+      - name: Read-only desktop and mobile browser checks
+        working-directory: web
+        run: |
+          node <<'JS'
+          const fs = require('node:fs');
+          const { chromium } = require('@playwright/test');
+          (async () => {
+            const root = '../evidence';
+            const base = 'https://bait-production-2706.up.railway.app';
+            const browser = await chromium.launch();
+            const selected = fs.existsSync(root+'/top20.json') ? JSON.parse(fs.readFileSync(root+'/top20.json','utf8')) : [];
+            const results = [];
+            for (const width of [1440, 375]) {
+              const context = await browser.newContext({viewport:{width,height:1000}, reducedMotion:'reduce'});
+              const page = await context.newPage();
+              const errors=[];
+              page.on('pageerror', e => errors.push(e.message));
+              const routes = ['/', '/leaders', '/building', '/about', ...(selected.length ? ['/p/'+selected[0].slug] : [])];
+              for (const route of routes) {
+                try {
+                  const started=Date.now();
+                  const response=await page.goto(base+route,{waitUntil:'domcontentloaded',timeout:45000});
+                  await page.waitForTimeout(2500);
+                  const text=await page.locator('body').innerText();
+                  const name=(route.replaceAll('/','_')||'home')+'-'+width;
+                  fs.writeFileSync(root+'/'+name+'.txt',text);
+                  await page.screenshot({path:root+'/'+name+'.png',fullPage:true});
+                  const layout=await page.evaluate(() => ({
+                    viewport:innerWidth, documentWidth:document.documentElement.scrollWidth,
+                    offenders:[...document.querySelectorAll('main *')].filter(e=>{
+                      const r=e.getBoundingClientRect(); const s=getComputedStyle(e);
+                      return r.width>0 && s.visibility!=='hidden' && s.display!=='none' && (r.right>innerWidth+2 || r.left< -2);
+                    }).slice(0,12).map(e=>({tag:e.tagName,class:e.className,text:e.textContent.slice(0,90)})),
+                    headings:[...document.querySelectorAll('h1,h2')].map(e=>e.textContent),
+                    links:[...document.querySelectorAll('main a[href]')].map(e=>({text:e.textContent.trim(),url:e.href})).filter(x=>x.url && !x.url.startsWith(location.origin))
+                  }));
+                  results.push({route,width,status:response?.status(),elapsedMs:Date.now()-started,errors:[...errors],layout});
+                } catch(e) { results.push({route,width,error:e.message}); }
+              }
+              await context.close();
+            }
+            const context=await browser.newContext({viewport:{width:1440,height:1000}});
+            const page=await context.newPage();
+            for (const row of selected) {
+              try {
+                await page.goto(base+'/p/'+row.slug,{waitUntil:'domcontentloaded',timeout:45000});
+                await page.waitForTimeout(400);
+                const text=await page.locator('body').innerText();
+                fs.writeFileSync(root+'/project-'+row.slug+'.txt',text);
+                const links=await page.locator('a[href]').evaluateAll(aa=>aa.map(a=>({text:a.textContent.trim(),url:a.href})));
+                fs.writeFileSync(root+'/project-'+row.slug+'-links.json',JSON.stringify(links,null,2));
+              } catch(e) { results.push({slug:row.slug,error:e.message}); }
+            }
+            fs.writeFileSync(root+'/browser.json',JSON.stringify(results,null,2));
+            console.log('BROWSER',JSON.stringify(results));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exitCode=1;});
+          JS
+      - name: Retain private verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bait-mvp-evidence
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: error
