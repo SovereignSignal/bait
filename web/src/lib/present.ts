@@ -61,7 +61,7 @@ export function seriesLabels(n: number, end: string | null | undefined): string[
   );
 }
 
-const HOOK_SEARCH_CAP = 8;
+// Address search is lazy-loaded separately; every grouped deployment must remain discoverable.
 
 /** The first http(s) URL among published audit links; anything else (javascript:, data:, bare text) is not a link. */
 export function firstWebUrl(urls: Iterable<unknown>): string | null {
@@ -104,9 +104,9 @@ export function poolTvlNote(headerTvl: number, rows: Array<{ tvlUsd: number | nu
     : `TVL ${usd(headerTvl)} is the sum over all pools; none of it is in the pools listed here.`;
 }
 
-/** Hook addresses for 0x search: lowercase, deduplicated, capped. */
+/** Hook addresses for 0x search: lowercase and deduplicated, including large factory families. */
 export function hookKeys(addresses: string[]): string[] {
-  return [...new Set(addresses.map((a) => a.toLowerCase()))].slice(0, HOOK_SEARCH_CAP);
+  return [...new Set(addresses.map((a) => a.toLowerCase()))];
 }
 
 const dollars = (n: number | null): number | null => (n == null ? null : Math.round(n));
@@ -124,6 +124,7 @@ export function toRow(p: ProjectSummary): RowView {
     firstSeenAt: p.firstSeenAt,
     isNew: p.isNew,
     isWash: p.isWash,
+    isDormant: !!p.isDormant,
     scoreTrending: Math.round(p.scoreTrending * 1000) / 1000,
     vol7d: dollars(p.metrics.vol7d),
     vol7dPrev: dollars(p.metrics.vol7dPrev),

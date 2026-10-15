@@ -6,6 +6,7 @@
 // Every read goes through safe(): a missing table or a bad query renders empty, never 500.
 // The activity tables (pool_stats, pool_top_wallets, wallet_labels) are newer than the rest
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
+import { researchProject } from "@/lib/research";
 import { receiptRelevant } from "@/lib/relevance";
 import { resolveSymbols } from "@/lib/symbols";
 import { createSwrCache, type Ttl } from "@/lib/swr-cache";
@@ -53,7 +54,7 @@ function derive(p: ProjectDetail): ProjectDetail {
   const primary = p.hooks[0];
   const labels = primary ? flagLabels(primary.address, primary.flags, primary.properties) : [];
   const flagLine = p.isFactory && p.metrics.hooksN > 1 ? [`${p.metrics.hooksN.toLocaleString("en-US")} hooks`, "one per pool"] : labels;
-  return {
+  return researchProject({
     ...p,
     flagLabels: flagLine,
     hooklisted: p.hooks.some((h) => h.hooklisted === true),
@@ -66,7 +67,7 @@ function derive(p: ProjectDetail): ProjectDetail {
       routable: projectRoutable(p.hooks, p.pools),
       smartMoneyLps: nansenCovers(p.chains) ? (p.signals.smartMoneyLps ?? 0) : null,
     },
-  };
+  });
 }
 
 function rowOf(p: ProjectDetail): RowView {
@@ -199,7 +200,7 @@ export async function getAllSlugs(): Promise<string[]> {
 
 /** Usage leaderboards across hook projects. */
 export async function getLeaders(n = 10): Promise<LeadersView> {
-  const all = (await loadAll()).filter((p) => !p.isSpam && !p.isWash); // wash-like volume never ranks
+  const all = (await loadAll()).filter((p) => !p.isSpam && !p.isWash && !p.isDormant); // wash-like volume never ranks
   const active = all.filter((p) => (p.metrics.vol7d ?? 0) > 0);
   const board = (value: (p: ProjectDetail) => number | null): LeaderEntry[] =>
     all

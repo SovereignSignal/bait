@@ -80,6 +80,7 @@ function Delta({ r }: { r: RowView }) {
         Wash
       </span>
     );
+  if (r.isDormant) return <span className="b b-n">Dormant</span>;
   if (r.isNew) return <span className="b b-p">New</span>;
   const d = deltaText(r);
   if (!d) return <span className="mut3">{NONE}</span>;
