@@ -121,6 +121,8 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
   // hydrates; the boundary must still render what the server did, so search and watchlist wait for the mount.
   const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
   const watching = hydrated && t.watchOnly;
+  // The provider can restore storage before this streamed boundary hydrates. Its first count must match SSR.
+  const watchCount = hydrated ? t.watchlist.length : 0;
   const searching = hydrated && t.q.trim().length > 0;
   const hooks = useHookIndex(t.q);
   // Before /api/rows lands, the seeded view is the only one we can draw; any other waits a moment for the full set.
@@ -180,11 +182,11 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
           type="button"
           className={`${s.tab} ${s.watchTab}`}
           aria-pressed={watching}
-          aria-label={`Watchlist, ${t.watchlist.length} saved`}
+          aria-label={`Watchlist, ${watchCount} saved`}
           onClick={() => t.setWatchOnly(!watching)}
         >
           <StarIcon size={14} filled={watching} />
-          <span className="num">{t.watchlist.length}</span>
+          <span className="num">{watchCount}</span>
         </button>
       </nav>
       {!watching && !searching && query.tab === "trending" && (

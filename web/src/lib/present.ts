@@ -93,9 +93,11 @@ export function auditLinks(
   return [...out];
 }
 
-/** The note under the pools table when the header TVL (every pool, score's sum) is more than the rows shown add up to:
- * pools past the 50 loaded, on untracked chains, or a capped hook's aggregate. null when the rows account for it. */
+/** Explain why the shown pools cannot account for the project total. Missing pool TVL is unknown, never a zero
+ * balance or proof that the difference belongs to omitted pools. */
 export function poolTvlNote(headerTvl: number, rows: Array<{ tvlUsd: number | null }>): string | null {
+  const unknown = rows.filter(r => r.tvlUsd == null).length;
+  if (unknown) return `Reported project TVL is ${usd(headerTvl)}; ${unknown} listed pool${unknown === 1 ? " has" : "s have"} unknown TVL, so the listed pool total is unknown.`;
   const shown = rows.reduce((s, r) => s + (r.tvlUsd ?? 0), 0);
   const rest = headerTvl - shown;
   if (rest <= Math.max(1, headerTvl * 0.005)) return null;   // rounding between the two reads

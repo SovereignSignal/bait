@@ -2,18 +2,13 @@ import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { Terminal } from "@/components/Terminal";
 import { getFreshness } from "@/db/health";
-import { getAllSlugs, getProject, getProjectPage, slugForAlias, usingFixtures } from "@/db/queries";
+import { getProject, getProjectPage, slugForAlias, usingFixtures } from "@/db/queries";
 import { SAMPLE_NOW } from "@/fixtures/sample";
 import { feedSeed, movers } from "@/lib/feed";
 
-export const revalidate = 600; // demo window: a first visit is at most ten minutes behind the list
-export const dynamicParams = true;
-
-export async function generateStaticParams() {
-  if (!process.env.DATABASE_URL) return [];
-  const slugs = await getAllSlugs();
-  return slugs.map((slug) => ({ slug }));
-}
+// Next 16.4 app-page ISR appends the redirect Location twice on a cold cache miss.
+// Render this route per request; the shared data loaders keep their existing SWR caches.
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }): Promise<Metadata> {
   const { slug } = await params;
@@ -37,6 +32,6 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
     notFound();
   }
   const sample = usingFixtures();
-  // Static: no URL query here, so the list seeds the default tab and the client re-filters from the URL.
+  // No URL query here: the list seeds the default tab and the client re-filters from the URL.
   return <Terminal seed={feedSeed(rows, { tab: "trending" }, version)} moverRows={movers(rows, 60)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} fresh={fresh} />;
 }

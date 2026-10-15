@@ -23,6 +23,10 @@ It does not authorize deployment, a production rescore/backfill, trading, paid e
   serving the new web build; old rows remain unclassified until a separately authorized score run.
 - Removed the one-use commit-writing workflow and all encoded transport files. Production baseline/source workflows
   are manual-only and explicitly labelled as baseline captures. No pending workflow was approved.
+- Candidate browser checks also cover saved-watchlist hydration and expanded evidence explanations on narrow phones.
+  Long source URLs wrap without hiding their content, and missing pool TVL is not described as zero liquidity.
+- Project pages render per request from the existing cached data, avoiding a reproduced Next 16.4 first-hit ISR bug
+  that duplicated alias redirect headers. This costs a page render per visit; it does not remove the data cache.
 
 ## Representative production evidence
 
