@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 import time
 import urllib.error
@@ -420,20 +421,55 @@ def code_shapes(http: Http, addrs_by_net: dict[str, set[str]], deadline: float |
 def fetch_daily(http: Http, net: str, pool_id: str, limit: int = 15) -> list[tuple[int, float]] | None:
     """One pool's daily candles, oldest first, as (UTC day start in unix seconds, USD volume). The newest candle is the
     running day when the pool traded today. GeckoTerminal sends candles only for days with trades, and no trade counts.
-    None when the call failed (HTTP error, 404, network)."""
+    None when the call failed or any candle is malformed. Reject the whole response rather than dropping a bad day:
+    downstream candle filling treats absent days as zero. Only an explicit numeric zero is a measured zero."""
     res = http.gt(f"/networks/{net}/pools/{pool_id}/ohlcv/day?aggregate=1&limit={limit}&currency=usd")
     if res is None:
         return None
-    lst = ((res.get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
-    return sorted((int(r[0]), float(r[5] or 0)) for r in lst)
+    rows = _parse_daily(res)
+    if rows is None:
+        # The pool keeps its rolling estimate tonight; say so, or a top pool quietly loses its closed-day figures.
+        _log.warning("keyless: rejected malformed OHLCV response for %s/%s", net, pool_id)
+    return rows
+
+
+def _parse_daily(res: object) -> list[tuple[int, float]] | None:
+    if not isinstance(res, dict):
+        return None
+    data = res.get("data")
+    attrs = data.get("attributes") if isinstance(data, dict) else None
+    lst = attrs.get("ohlcv_list") if isinstance(attrs, dict) else None
+    if not isinstance(lst, list):
+        return None
+    rows = []
+    for row in lst:
+        if (not isinstance(row, list) or len(row) < 6 or row[0] is None or row[5] is None
+                or isinstance(row[0], bool) or isinstance(row[5], bool)):
+            return None
+        try:
+            timestamp, volume = float(row[0]), float(row[5])
+            if (not math.isfinite(timestamp) or not timestamp.is_integer() or int(timestamp) % 86400 != 0
+                    or not math.isfinite(volume) or volume < 0):
+                return None
+            datetime.fromtimestamp(timestamp, tz=timezone.utc)  # also reject timestamps outside the supported date range
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
+        rows.append((int(timestamp), volume))
+    return sorted(rows)
 
 
 def fetch_ohlcv(http: Http, hooked: list[dict], cap: int) -> None:
     ranked = sorted(hooked, key=lambda p: -float(p["attrs"]["volume_usd"]["h24"] or 0))
     if len(ranked) > cap:
         log(f"OHLCV capped at {cap} of {len(ranked)} hooked pools; the rest carry 24h volume only")
+    lost = 0
     for p in ranked[:cap]:
-        p["daily"] = fetch_daily(http, p["net"], p["attrs"]["address"]) or []
+        daily = fetch_daily(http, p["net"], p["attrs"]["address"])
+        if daily is None:
+            lost += 1
+        p["daily"] = daily or []
+    if lost:
+        log(f"OHLCV unavailable for {lost} of the top {min(cap, len(ranked))} pools; they carry the rolling estimate tonight")
 
 
 def fetch_trades(http: Http, net: str, pool_id: str) -> list[dict] | None:

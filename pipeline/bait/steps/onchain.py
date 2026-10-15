@@ -24,9 +24,13 @@ Reads v4_pools, pool_daily_onchain, indexer_state (written by `python -m bait.in
    from the first unknown day on, the series carries NULL volume, or the keyless series is kept when that day is on or
    before the reference day, and pool_stats keeps keyless volume exactly when the series' reference day is unknown.
    Pools whose keyless series is kept still get exact tx_count_day from the indexer.
+4. A bounded candle refresh repairs estimated closed days on those held-back pools when exact positive swaps are known.
+   Only explicit GeckoTerminal UTC/USD candles replace estimates; custom-accounting protection is never bypassed with
+   PoolManager USD. ONCHAIN_CANDLE_REFRESH_CAP (default 10 pools per run; 0 disables) uses the shared paced keyless client.
 """
 from __future__ import annotations
 
+import math
 import os
 from datetime import date, datetime, time as dtime, timedelta, timezone
 
@@ -54,7 +58,9 @@ def _env_int(name: str, default: int) -> int:
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"v4_pools": 0, "hooks_added": 0, "hooks_deferred": 0, "code_hashes": 0, "pools": 0,
            "pools_usage": 0, "series_replaced": 0, "stats": 0, "chains_usage": 0, "chains_stale": 0, "vol_unknown": 0, "errors": 0,
-           "pools_written": 0, "db_gb": None, "disk_warn": 0, "hook_totals": 0, "hook_pools": 0}
+           "pools_written": 0, "db_gb": None, "disk_warn": 0, "hook_totals": 0, "hook_pools": 0,
+           "candle_refresh_candidates": 0, "candle_refresh_attempts": 0, "candle_refresh_rows": 0,
+           "candle_refresh_misses": 0, "candle_refresh_deferred": 0}
     _disk_check(conn, out)
     where = [v4_pools.c.chain_id.in_(ctx.chains)] if ctx.chains else []
     out["v4_pools"] = conn.execute(sa.select(sa.func.count()).select_from(v4_pools).where(*where)).scalar() or 0
@@ -65,7 +71,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     _upsert_pools(conn, ctx, known, out)
     _pool_totals(conn, ctx, out)
     _hook_pools(conn, ctx, known, out)
-    _usage(conn, ctx, out)
+    ready = _usage(conn, ctx, out)
+    _refresh_held_candles(conn, ctx, ready, out)
     log.info("onchain v4_pools=%d hooks_added=%d deferred=%d pools=%d pools_written=%d hook_totals=%d usage_pools=%d series=%d "
              "stats=%d", out["v4_pools"], out["hooks_added"], out["hooks_deferred"], out["pools"], out["pools_written"],
              out["hook_totals"], out["pools_usage"], out["series_replaced"], out["stats"])
@@ -277,7 +284,7 @@ def ready_chains(conn, ctx: RunContext, out: dict | None = None) -> list[int]:
     return ready
 
 
-def _usage(conn, ctx: RunContext, out: dict) -> None:
+def _usage(conn, ctx: RunContext, out: dict) -> list[int]:
     ready = ready_chains(conn, ctx, out)
     window_start = ctx.day - timedelta(days=WINDOW_DAYS)
     ref = ref_day(ctx)
@@ -295,6 +302,77 @@ def _usage(conn, ctx: RunContext, out: dict) -> None:
             .order_by(pool_daily_onchain.c.pool_id))]
         for i in range(0, len(pool_ids), CHUNK):
             _usage_chunk(conn, ctx, cid, pool_ids[i:i + CHUNK], start, full, ref, coverage, out)
+    return ready
+
+
+def _refresh_held_candles(conn, ctx: RunContext, ready: list[int], out: dict) -> None:
+    """Repair only explicit estimated days with positive exact swaps on a ready chain and held-back on-chain USD.
+
+    Oldest affected day first, then most known swaps, then chain/pool: a deterministic bounded queue independent of
+    names or USD agreement. The cap counts pool fetch attempts (the shared HTTP client's existing retries still apply).
+    Missing candles, HTTP failures and invalid values leave the estimate and its flag intact. No missing date implies
+    zero. Daily USD is replaced, never added; legacy cumulative columns are preserved like repair.fill_pool.
+    """
+    from .. import keyless as K
+    from .snapshot import keyless_http
+
+    cap = max(0, _env_int("ONCHAIN_CANDLE_REFRESH_CAP", 10))
+    if not ready or cap == 0 or os.environ.get("KEYLESS", "1") == "0":
+        return
+    ref, start = ref_day(ctx), ctx.day - timedelta(days=WINDOW_DAYS)
+    net_by_chain = {v[0]: net for net, v in K.CHAINS.items()}
+    s, raw, st = pool_snapshots.c, pool_daily_onchain.c, pool_stats.c
+    q = (sa.select(s.pool_id, s.chain_id, s.day, raw.swaps)
+         .select_from(pool_snapshots.join(pool_daily_onchain,
+                      (s.pool_id == raw.pool_id) & (s.chain_id == raw.chain_id) & (s.day == raw.day))
+                      .join(pool_stats, (s.pool_id == st.pool_id) & (s.chain_id == st.chain_id) & (st.day == ctx.day)))
+         .where(s.chain_id.in_(ready), s.day >= start, s.day <= ref, s.estimated.is_(True),
+                s.volume_usd_cum.is_not(None), s.volume_usd_day.is_not(None), raw.swaps > 0,
+                st.vol_source.in_(["hook", "unpriced", "keyless_candle", "closed_day"])))
+    wanted: dict[tuple[str, int], dict] = {}
+    for r in conn.execute(q):
+        if r.chain_id not in net_by_chain or r.pool_id.startswith(HOOK_POOL_PREFIX):
+            continue
+        wanted.setdefault((r.pool_id, r.chain_id), {})[r.day] = r.swaps
+    ordered = sorted(wanted, key=lambda k: (min(wanted[k]), -sum(wanted[k].values()), k[1], k[0]))
+    out["candle_refresh_candidates"] = len(ordered)
+    out["candle_refresh_deferred"] = max(0, len(ordered) - cap)
+    if not ordered:
+        return
+    http = keyless_http(ctx)
+    for pid, cid in ordered[:cap]:
+        out["candle_refresh_attempts"] += 1
+        try:
+            payload = http.gt(f"/networks/{net_by_chain[cid]}/pools/{pid}/ohlcv/day?aggregate=1&limit={WINDOW_DAYS + 1}&currency=usd")
+            candles = (((payload or {}).get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
+            # The general keyless parser treats missing volume as zero; repair must require an explicit valid amount.
+            values = {}
+            for row in candles:
+                if not isinstance(row, list) or len(row) < 6 or row[5] is None or isinstance(row[5], bool):
+                    continue
+                try:
+                    ts, v = int(row[0]), float(row[5])
+                    if float(row[0]) == ts and ts % 86400 == 0 and math.isfinite(v) and v >= 0:
+                        values[datetime.fromtimestamp(ts, tz=timezone.utc).date()] = v
+                except (TypeError, ValueError, OverflowError):
+                    continue
+        except Exception as exc:
+            log.warning("onchain candle refresh chain=%s pool=%s failed: %s", cid, pid, exc)
+            values = {}
+        updated = 0
+        for day in sorted(wanted[(pid, cid)]):
+            if day not in values:
+                continue
+            conn.execute(sa.update(pool_snapshots).where(s.pool_id == pid, s.chain_id == cid, s.day == day)
+                         .values(volume_usd_day=values[day], estimated=False))
+            if day == ref:
+                conn.execute(sa.update(pool_stats).where(st.pool_id == pid, st.chain_id == cid, st.day == ctx.day)
+                             .values(vol_24h=values[day], vol_source="keyless_candle"))
+            updated += 1
+        out["candle_refresh_rows"] += updated
+        out["candle_refresh_misses"] += int(updated == 0)
+        log.info("onchain candle refresh chain=%s pool=%s source=geckoterminal_utc_usd updated_days=%d missing_days=%d",
+                 cid, pid, updated, len(wanted[(pid, cid)]) - updated)
 
 
 def _unknown_from(hook: str | None, days: dict, start: date) -> date | None:
@@ -361,13 +439,28 @@ def _usage_chunk(conn, ctx: RunContext, cid: int, chunk: list[str], start: date,
     if ref < coverage:
         return  # no complete on-chain day yet
     window_end = datetime.combine(ref + timedelta(days=1), dtime.min, tzinfo=timezone.utc)   # the closed day `ref` ends here
+    # A same-day rerun must preserve the provenance of a candle refreshed after the previous usage copy.
+    candle_stats = set(conn.execute(sa.select(pool_stats.c.pool_id).where(
+        pool_stats.c.chain_id == cid, pool_stats.c.pool_id.in_(chunk), pool_stats.c.day == ctx.day,
+        pool_stats.c.vol_source == "keyless_candle", pool_stats.c.window_end == window_end)).scalars())
+    closed_volume = dict(conn.execute(sa.select(pool_snapshots.c.pool_id, pool_snapshots.c.volume_usd_day).where(
+        pool_snapshots.c.chain_id == cid, pool_snapshots.c.pool_id.in_(chunk), pool_snapshots.c.day == ref,
+        pool_snapshots.c.estimated.is_(False), pool_snapshots.c.volume_usd_cum.is_not(None),
+        pool_snapshots.c.volume_usd_day.is_not(None))).all())
     stat_rows, held = [], []
     for pid in chunk:
         _, w, v, _ = daily.get(pid, {}).get(ref, (0, 0, 0.0, 0))
         hook = hook_of.get(pid)
-        if pid in held_back:
+        if pid in held_back and pid in closed_volume:
+            # A full same-day pipeline rerun resets pool_stats to rolling keyless data. Restore the accepted closed-day
+            # snapshot here even when no fetch is needed, so wash rules never judge rolling USD under a UTC-day boundary.
+            stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": closed_volume[pid],
+                              "traders_24h": w, "wallets_24h": w, "window_end": window_end,
+                              "vol_source": "keyless_candle" if pid in candle_stats else "closed_day"})
+        elif pid in held_back:
             held.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": None, "traders_24h": w,
-                         "wallets_24h": w, "window_end": window_end, "vol_source": "hook" if hook and custom_accounting(hook) else "unpriced"})
+                         "wallets_24h": w, "window_end": window_end,
+                         "vol_source": "keyless_candle" if pid in candle_stats else "hook" if hook and custom_accounting(hook) else "unpriced"})
         else:
             stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": v, "traders_24h": w,
                               "wallets_24h": w, "window_end": window_end,
