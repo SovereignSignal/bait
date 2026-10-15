@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// Candidate UI tests never ask the local trades proxy to fetch live provider data.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/trades/**", (route) => route.fulfill({ json: { trades: [] } }));
+});
+
 /** Console errors and uncaught page errors for the whole test (the favicon is served now, so none are expected). */
 function watch(page: Page): string[] {
   const errs: string[] = [];
@@ -33,7 +38,7 @@ test("feed: tab labels, category chips, one h1", async ({ page }) => {
   const errs = watch(page);
   await page.goto("/");
   const tabs = page.getByRole("navigation", { name: "Feed views" });
-  for (const label of ["Trending", "New", "In Uniswap app", "All"]) await expect(tabs.getByRole("link", { name: label, exact: true })).toBeVisible();
+  for (const label of ["Trending", "New", "Automatic routing", "All"]) await expect(tabs.getByRole("link", { name: label, exact: true })).toBeVisible();
   const heights = await page.getByRole("group", { name: "Category" }).getByRole("link").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
   expect(heights.length).toBeGreaterThan(2);
   for (const h of heights) expect(h).toBeGreaterThanOrEqual(24);
@@ -125,7 +130,7 @@ test("In Uniswap app tab lists only the eligible fixture", async ({ page }) => {
   expect(errs).toEqual([]);
 });
 
-for (const p of [{ slug: "stablepairhook", routing: "Not in app", swap: false }, { slug: "v4permissionedswaps", routing: "In Uniswap app", swap: true }]) {
+for (const p of [{ slug: "stablepairhook", routing: "Routing review needed", swap: false }, { slug: "v4permissionedswaps", routing: "Automatic routing criteria", swap: true }]) {
   test(`/p/${p.slug}: badges and CTA`, async ({ page }) => {
     const errs = watch(page);
     await page.goto(`/p/${p.slug}`);
@@ -134,8 +139,8 @@ for (const p of [{ slug: "stablepairhook", routing: "Not in app", swap: false },
     await expect(badges.getByText("Not in hooklist")).toHaveCount(0);
     await expect(badges.getByText(p.routing, { exact: true })).toBeVisible();
     // the card CTA (desktop) and the sticky bar CTA (phone) are one value; the hidden one is not in the role tree
-    await expect(page.getByRole("link", { name: "Swap on Uniswap" })).toHaveCount(p.swap ? 1 : 0);
-    if (!p.swap) await expect(page.getByRole("link", { name: "View pool on Uniswap" })).toHaveCount(1);
+    await expect(page.getByRole("link", { name: "Swap on Uniswap" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "View pool on Uniswap" })).toHaveCount(1);
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     if (phone()) await noHorizontalScroll(page);
     expect(errs).toEqual([]);
@@ -162,7 +167,9 @@ test("/p/angstrom: the audit badge links out, the summary says when it was writt
   const errs = watch(page);
   await page.goto("/p/angstrom");
   await expect(page.getByTestId("badges").getByRole("link", { name: /Audit linked/ })).toHaveAttribute("href", "https://github.com/Uniswap/hooklist");
-  await expect(page.getByText("Written Oct 8; the figures above are current.")).toBeVisible();
+  await expect(page.getByText("Historical generated context · Oct 8")).toBeVisible();
+  await page.getByText("Historical generated context · Oct 8").click();
+  await expect(page.getByText(/Generated research may be stale or incorrect/)).toBeVisible();
   await page.getByText("What these badges mean").click();
   await expect(page.getByText("Audit link: https://github.com/Uniswap/hooklist. It says nothing about scope or findings.").last()).toBeVisible();
   expect(errs).toEqual([]);
@@ -225,4 +232,16 @@ test("phone touch targets", async ({ page }) => {
   expect((await tab.boundingBox())!.height).toBeGreaterThanOrEqual(44);
   const dock = await page.getByRole("navigation", { name: "Sections" }).locator("> *").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
   for (const h of dock) expect(h).toBeGreaterThanOrEqual(44);
+});
+
+
+test("research evidence precedes the chart and external actions never imply execution", async ({page}) => {
+  await page.goto('/p/stablepairhook');
+  const context = page.getByRole('heading',{name:'Project context and evidence'});
+  const chart = page.getByRole('heading',{name:'Daily volume'});
+  expect((await context.boundingBox())!.y).toBeLessThan((await chart.boundingBox())!.y);
+  await expect(page.getByRole('link',{name:'Swap on Uniswap'})).toHaveCount(0);
+  await expect(page.getByRole('link',{name:'View pool on Uniswap'})).toHaveCount(1);
+  if (!phone()) await expect(page.getByText(/Bait does not execute trades/)).toBeVisible();
+  await noHorizontalScroll(page);
 });

@@ -7,7 +7,8 @@ import type { RowView } from "./types";
 /** What the list, movers and search read. rank is left out: applyTab recomputes it over the full set. */
 export const ROW_KEYS = [
   "slug", "name", "whatLine", "color", "category", "secondaryCategories", "chains", "firstSeenAt", "isNew", "isWash",
-  "scoreTrending", "vol7d", "vol7dPrev", "vol24h", "tvlUsd", "routable",
+  "scoreTrending", "vol7d", "vol7dPrev", "vol24h", "tvlUsd", "routable", "isDormant", "activityStatus", "washHistorical",
+  "hasHistoricalUsage",
 ] as const satisfies ReadonlyArray<keyof RowView>;
 
 export interface PackedRows {

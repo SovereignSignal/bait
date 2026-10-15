@@ -1,0 +1,122 @@
+[
+  {
+    "value": null,
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "No X/Twitter handle could be confidently tied to the project.",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "javascript:alert(1)",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "data:text/html,test",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://example.org/docs",
+    "web": true,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://github.com/Uniswap/v4-core",
+    "web": true,
+    "github": true,
+    "x": null
+  },
+  {
+    "value": "https://github.com.evil.example/owner",
+    "web": true,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://github.com/a/b/issues",
+    "web": true,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://user:password@example.org",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://example.org/a path",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "@SovereignSignal",
+    "web": false,
+    "github": false,
+    "x": "SovereignSignal"
+  },
+  {
+    "value": "https://x.com/Uniswap",
+    "web": true,
+    "github": false,
+    "x": "Uniswap"
+  },
+  {
+    "value": "https://twitter.com/Uniswap/",
+    "web": true,
+    "github": false,
+    "x": "Uniswap"
+  },
+  {
+    "value": "https://x.com/Uniswap/status/123",
+    "web": true,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://x.com/intent",
+    "web": true,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "none",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "notidentified",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://x.com/Uniswap?ref=x",
+    "web": true,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://server.local",
+    "web": false,
+    "github": false,
+    "x": null
+  },
+  {
+    "value": "https://example.org:99999",
+    "web": false,
+    "github": false,
+    "x": null
+  }
+]

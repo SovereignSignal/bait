@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import sqlalchemy as sa
 
 from ..config import CHAIN_BY_ID
+from ..links import web_url, github_url, x_handle
 from ..db import as_utc, hooks, pool_stats, pools, projects, savepoint, utcnow
 from . import RunContext, log
 
@@ -79,9 +80,9 @@ def what_values(p, res: dict, enrichment: dict) -> dict:
     return {
         "what_line": cut_line(res["what_line"]), "category": res["category"],
         "enrichment": enrichment, "enriched_at": utcnow(),
-        "website": p.website or par_res.get("website") or None,
-        "github": p.github or par_res.get("github") or None,
-        "x_handle": p.x_handle or (par_res.get("x_handle") or "").lstrip("@") or None,
+        "website": web_url(p.website) or web_url(par_res.get("website")),
+        "github": github_url(p.github) or github_url(par_res.get("github")),
+        "x_handle": x_handle(p.x_handle) or x_handle(par_res.get("x_handle")),
     }
 
 

@@ -2,6 +2,7 @@
 import { CHAINS, chainSlug, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
+import { activityNote, routingNote } from "@/lib/research";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
 import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
@@ -49,18 +50,19 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       ? { k: "Swaps 24h", v: `≈ ${int(u.buys24h + u.sells24h)}`, title: "Rolling 24h buys + sells from the pool feed; the closed-day count is not in yet." }
       : { k: `Swaps ${win.short}`, v: int(u.tx24h), title: win.note },
   ];
+  const routing = routingNote(p.signals.routable);
+  const activity = activityNote(p);
   const badges: Array<{ cls: string; label: string; why: string; href?: string }> = [
-    ...(p.isWash ? [{ cls: "b-r", label: "Wash-like volume", why: washLine(p.washReason) }] : []),
+    ...(p.isWash ? [{ cls: "b-r", label: p.washHistorical ? "Historical wash-like volume" : "Wash-like volume", why: washLine(p.washReason, p.washHistorical) }] : []),
     p.hooklisted
       ? { cls: "b-v", label: "✓ Hooklist", why: "Listed in the Uniswap hooklist, the public registry of v4 hooks." }
       : { cls: "b-n", label: "Not in hooklist", why: "Found on-chain from its pools; not in the hooklist registry." },
-    ...(p.signals.routable === "eligible" ? [{ cls: "b-g", label: "In Uniswap app", why: "At least one pool should route in the Uniswap app. A rule, not a guarantee." }] : []),
-    ...(p.signals.routable === "ineligible" ? [{ cls: "b-n", label: "Not in app", why: "The Uniswap app will not route swaps through this hook." }] : []),
-    ...(p.signals.routable === "unknown" ? [{ cls: "b-n", label: "Routing unknown", why: "Not enough data to say whether the app routes through this hook." }] : []),
+    { cls: "b-n", label: routing.label, why: routing.detail },
+    ...(activity ? [{ cls: "b-n", label: activity.label, why: activity.detail }] : []),
     // only with a link to follow: a count without a URL is not an audit anyone can read
     p.signals.auditUrl
       ? { cls: "b-g", label: "Audit linked", why: `Audit link: ${p.signals.auditUrl}. It says nothing about scope or findings.`, href: p.signals.auditUrl }
-      : { cls: "b-n", label: "No audit", why: "No audit link found." },
+      : { cls: "b-n", label: "No audit link", why: "No audit link found." },
     ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
     ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
     ...(!p.isNew && p.rank ? [{ cls: "b-a", label: `#${p.rank} trending`, why: "Rank by 7-day volume growth, among projects older than a week with at least $10K this week and $1K the week before." }] : []),
@@ -73,7 +75,6 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
   const busy = busiestPool(p);
   const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
-    p.whyBlurb ||
     (p.metrics.vol7d == null ? `The last 7 days' volume through this hook's ${pools} is unknown.` : null) ||
     `${usd(p.metrics.vol7d)} traded through this hook in the last 7 days across ${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}${
       d != null ? `, ${d >= 0 ? "up" : "down"} ${deltaWords(d)} on the week` : ""
@@ -145,16 +146,63 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
             ))}
           </div>
         </div>
-        {fresh?.through && (
+        {through && (
           <p className={s.fresh} data-testid="freshness">
-            <span>Figures through {dayLabel(fresh.through)} (UTC), updated nightly</span>
-            {fresh.note && <span className="b b-a">{FRESH_NOTE[fresh.note]}</span>}
+            <span>Figures through {dayLabel(through)} (UTC), updated nightly</span>
+            {fresh?.note && <span className="b b-a">{FRESH_NOTE[fresh.note]}</span>}
             {partial.length > 0 && (
-              <span className="b b-a" title="On-chain history for this chain is still loading, so pool counts, volume and wallets here are a partial view." data-testid="partial-chain">
+              <span className="b b-a" title="Some on-chain history is pending or freshness cannot be confirmed. Available provider data may be used instead; figures are not verified totals." data-testid="partial-chain">
                 {chainNames(partial, ", ")} still indexing: figures partial
               </span>
             )}
           </p>
+        )}
+      </div>
+
+      <div className={`panel ${s.blk}`}>
+        <h2>Project context and evidence</h2>
+        <div className={s.why}>{why}</div>
+        <p className="mut3">Usage describes the available seven-day window{through ? ` ending ${dayLabel(through)} UTC` : ""}. Volume alone does not establish organic demand, safety, or returns.</p>
+        {p.isDormant && <p className="mut">Retained for research and search. Excluded from New, Trending, Movers and automatic-routing discovery.</p>}
+        {p.hasHistoricalUsage && p.activityStatus === "unknown" && <p className="mut">Retained on historical usage evidence. Missing recent coverage is not evidence of zero activity.</p>}
+        {p.whyBlurb && (
+          <details className={s.badgeHelp}>
+            <summary>Historical generated context{p.whyBlurbAt ? ` · ${dayLabel(p.whyBlurbAt.slice(0, 10))}` : " · date unknown"}</summary>
+            <p>{p.whyBlurb}</p>
+            <p className="mut3">Generated research may be stale or incorrect. Its numbers refer to the generation date, not the current snapshot.</p>
+          </details>
+        )}
+        {p.receipts.length > 0 && (
+          <div className={s.recs}>
+            {p.receipts.slice(0, 6).map((r) => (
+              <a key={r.url + r.title} href={r.url} target="_blank" rel="noopener">
+                <span>{r.title}</span>
+                <span className="mut3">
+                  {sourceLabel(r.url, r.source)}
+                  {r.publishedAt ? ` · ${age(r.publishedAt, now)}` : ""}
+                </span>
+              </a>
+            ))}
+          </div>
+        )}
+        {(p.website || p.github || p.xHandle) && (
+          <div className={s.links}>
+            {p.website && (
+              <a href={p.website} target="_blank" rel="noopener">
+                Website
+              </a>
+            )}
+            {p.github && (
+              <a href={p.github} target="_blank" rel="noopener">
+                GitHub
+              </a>
+            )}
+            {p.xHandle && (
+              <a href={`https://x.com/${p.xHandle}`} target="_blank" rel="noopener">
+                @{p.xHandle}
+              </a>
+            )}
+          </div>
         )}
       </div>
 
@@ -194,43 +242,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
 
       <TopWallets p={p} now={now} />
 
-      <div className={`panel ${s.blk}`}>
-        <h2>Why people care</h2>
-        <div className={s.why}>{why}</div>
-        {p.whyBlurb && p.whyBlurbAt && <div className={`${s.whyAt} mut3`}>Written {dayLabel(p.whyBlurbAt.slice(0, 10))}; the figures above are current.</div>}
-        {p.receipts.length > 0 && (
-          <div className={s.recs}>
-            {p.receipts.slice(0, 6).map((r) => (
-              <a key={r.url + r.title} href={r.url} target="_blank" rel="noopener">
-                <span>{r.title}</span>
-                <span className="mut3">
-                  {sourceLabel(r.url, r.source)}
-                  {r.publishedAt ? ` · ${age(r.publishedAt, now)}` : ""}
-                </span>
-              </a>
-            ))}
-          </div>
-        )}
-        {(p.website || p.github || p.xHandle) && (
-          <div className={s.links}>
-            {p.website && (
-              <a href={p.website} target="_blank" rel="noopener">
-                Website
-              </a>
-            )}
-            {p.github && (
-              <a href={p.github} target="_blank" rel="noopener">
-                GitHub
-              </a>
-            )}
-            {p.xHandle && (
-              <a href={`https://x.com/${p.xHandle}`} target="_blank" rel="noopener">
-                @{p.xHandle}
-              </a>
-            )}
-          </div>
-        )}
-      </div>
+
     </>
   );
 }
@@ -358,7 +370,7 @@ type Ev = { cls: string; label: string; text: string; at?: string };
 /** The mock's derived events: the fallback when live trades are empty, and context under them. */
 function events(p: ProjectDetail, busy: PoolView | null, now: number, day: string): Ev[] {
   const out: Ev[] = [];
-  if (p.isWash) out.push({ cls: "b-r", label: "Wash-like", text: washLine(p.washReason) });
+  if (p.isWash) out.push({ cls: "b-r", label: p.washHistorical ? "Historical wash-like" : "Wash-like", text: washLine(p.washReason, p.washHistorical) });
   for (const x of p.pools.slice(0, 20)) {
     if (x.createdAt && (now - Date.parse(x.createdAt)) / DAY <= 14) {
       out.push({ cls: "b-p", label: "New pool", text: `${poolPair(x)} on ${CHAINS[x.chainId]?.name ?? x.chainId}`, at: x.createdAt });

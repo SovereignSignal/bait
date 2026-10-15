@@ -98,12 +98,15 @@ export const projectDaily = pgTable(
     scoreTrending: doublePrecision("score_trending"), // 0 when vol_7d < $10k
     isNew: boolean("is_new").notNull().default(false),
     isSpam: boolean("is_spam").notNull().default(false),
+    hasHistoricalUsage: boolean("has_historical_usage").notNull().default(false),
+    activityStatus: text("activity_status").$type<"active" | "dormant" | "unknown">(),
     windowEnd: date("window_end"), // the last closed UTC day the row reports (day - 1)
     vol24h: doublePrecision("vol_24h"),
     swaps24h: bigint("swaps_24h", { mode: "number" }), // NULL = not every day known (swaps7d likewise)
     wallets24h: integer("wallets_24h"),
     walletsExact: boolean("wallets_exact"), // true = distinct across the project's pools; false = upper bound
     isWash: boolean("is_wash").notNull().default(false),
+    washHistorical: boolean("wash_historical").notNull().default(false),
     washReason: text("wash_reason"), // comma list: 24h, 7d, vol_tvl, no_liquidity, symmetric
   },
   (t) => [primaryKey({ columns: [t.projectId, t.day] }), index("project_daily_day_score_idx").on(t.day, t.scoreTrending)],
