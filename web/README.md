@@ -59,7 +59,7 @@ Schema notes: `src/db/schema.ts` mirrors `../db/migrations` (the pipeline's SQLA
 `DATABASE_URL` cleared). `BAIT_E2E_REPRESENTATIVE=1 npm run e2e` runs `e2e/representative.spec.ts` on
 `e2e/fixtures/representative.json`: dated source replays plus explicitly synthetic lifecycle and redirect cases, see
 [`e2e/fixtures/README.md`](e2e/fixtures/README.md). Build before each suite; the two datasets must not share ISR
-pages, so CI builds twice. Each suite uses its own port and never reuses a running server. Results land in
+pages, so CI builds once and restores a fresh copy of `.next` between the suites. Each suite uses its own port and never reuses a running server. Results land in
 `test-results/smoke` and `test-results/representative` (`BAIT_E2E_OUTPUT_DIR` overrides). Neither suite says anything
 about production ingestion or deployment.
 
