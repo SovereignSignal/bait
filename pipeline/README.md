@@ -171,6 +171,19 @@ Step `onchain` (after activity) copies this into the tables the web app and scor
    than half their swaps unpriced keep keyless volume; `pool_stats.vol_source` is `onchain`, `hook` or `unpriced`
    (NULL = keyless). The rule is per day: from the first such day on the series carries NULL volume (swap counts kept),
    or the keyless series is kept when that day is on or before the reported day; `pool_stats` agrees with the series.
+4. Held-back pools with an estimated closed day and exact positive swaps can refresh that day from an explicit
+   GeckoTerminal UTC/USD candle. `ONCHAIN_CANDLE_REFRESH_CAP` defaults to 10 pool fetch attempts per run (0 disables),
+   using the existing shared pacing/retries. Oldest affected day wins, then known swaps and chain/pool. A missing day,
+   invalid value or failed request preserves the estimate; no missing candle implies zero. Daily USD is replaced once,
+   never added to raw USD or legacy cumulative values. `pool_stats.vol_source` becomes `keyless_candle`; an already
+   accepted closed snapshot restored after a full same-day rerun uses `closed_day`. Exact swaps and TVL are preserved.
+   Run counters report candidates, attempts, changed rows, misses and deferred pools. This does not bypass custom
+   accounting or value historical events at current prices.
+
+The shared daily-candle parser returns failure for a missing/malformed response or any invalid candle rather than
+coercing missing USD to zero or dropping a row (a rejected response is logged at WARNING with the pool, so a top pool
+falling back to the rolling estimate for the night is visible in the run log). Explicit numeric zero and an explicit
+empty candle list remain valid.
 
 ### Trimming `v4_pools` (one-time, package 5b)
 `python -m bait.indexer prune-pools --dry-run|--yes [--keep N] [--chains ...] [--lock-wait S]` (`indexer/prune.py`). For each

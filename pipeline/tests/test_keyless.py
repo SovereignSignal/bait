@@ -1,3 +1,5 @@
+import pytest
+
 from bait.keyless import categorize, decode_pool_key
 
 
@@ -133,8 +135,43 @@ def test_fetch_daily_parses_candles_oldest_first_and_none_on_failure():
             self.paths.append(path)
             return self.res
 
-    h = Http({"data": {"attributes": {"ohlcv_list": [[1759968000, 1, 2, 0.5, 1.5, "1200.5"], [1759881600, 1, 1, 1, 1, None]]}}})
+    h = Http({"data": {"attributes": {"ohlcv_list": [[1759968000, 1, 2, 0.5, 1.5, "1200.5"], [1759881600, 1, 1, 1, 1, 0]]}}})
     assert K.fetch_daily(h, "base", "0xpool", limit=30) == [(1759881600, 0.0), (1759968000, 1200.5)]
     assert h.paths == ["/networks/base/pools/0xpool/ohlcv/day?aggregate=1&limit=30&currency=usd"]
     assert K.fetch_daily(Http({"data": {"attributes": {"ohlcv_list": []}}}), "base", "0xpool") == []
     assert K.fetch_daily(Http(None), "base", "0xpool") is None
+
+
+@pytest.mark.parametrize("column,value", [
+    (5, None), (5, ""), (5, "unknown"), (5, -1), (5, float("nan")), (5, float("inf")), (5, True),
+    (0, None), (0, ""), (0, "unknown"), (0, 1759968000.5), (0, 1759968001), (0, float("nan")),
+    (0, float("inf")), (0, True), (0, 86400 * 10 ** 20),
+])
+def test_fetch_daily_rejects_the_whole_response_if_any_candle_is_missing_or_invalid(column, value):
+    from bait import keyless as K
+
+    bad = [1759968000, 1, 2, 0.5, 1.5, "1200.5"]
+    bad[column] = value
+
+    class Http:
+        def gt(self, path):
+            # A valid older row must not survive a malformed newer row: fill_pool would turn the missing day into zero.
+            return {"data": {"attributes": {"ohlcv_list": [[1759881600, 1, 1, 1, 1, 10], bad]}}}
+
+    assert K.fetch_daily(Http(), "base", "0xpool") is None
+
+
+@pytest.mark.parametrize("response", [
+    {}, {"data": None}, {"data": []}, {"data": {"attributes": None}},
+    {"data": {"attributes": {}}}, {"data": {"attributes": {"ohlcv_list": None}}},
+    {"data": {"attributes": {"ohlcv_list": {}}}}, {"data": {"attributes": {"ohlcv_list": [None]}}},
+    {"data": {"attributes": {"ohlcv_list": [[1759968000, 1, 2, 0.5, 1.5]]}}},
+])
+def test_fetch_daily_rejects_missing_or_malformed_candle_structure(response):
+    from bait import keyless as K
+
+    class Http:
+        def gt(self, path):
+            return response
+
+    assert K.fetch_daily(Http(), "base", "0xpool") is None
