@@ -59,6 +59,9 @@ test("dated representative API rows retain their source totals without duplicate
   }
   expect(rows.find((p) => p.slug === "qa-dormant")?.isDormant).toBe(true);
   expect(rows.find((p) => p.slug === "qa-unpriced")?.isDormant).toBe(false);
+  const hypotheticalImport = rows.find((p) => p.slug === "qa-unknown");
+  expect(hypotheticalImport).toMatchObject({ activityStatus: "unknown", isDormant: false, isNew: false,
+    scoreTrending: 0, vol7d: null, vol7dPrev: null, vol24h: null });
   for (const slug of ["qa-dust", "qa-missing-history", "bunnihook"]) expect(rows.some((p) => p.slug === slug)).toBe(false);
 });
 
@@ -108,22 +111,32 @@ test("Aegis sampled deployments keep chain and pool identities distinct; synthet
   await fit(page);
 });
 
-test("historical dormant project stays in All, search, direct details and persisted watchlist", async ({ page }) => {
+for (const state of [
+  { slug: "qa-dormant", label: "Dormant", badge: "Dormant in reported window", note: "Retained for research and search." },
+  { slug: "qa-unknown", label: "Unknown", badge: "Recent activity unknown", note: "Missing recent coverage is not evidence of zero activity." },
+]) test(`${state.slug}: historical project stays in All, name/address search, direct details and persisted watchlist`, async ({ page }) => {
+  const project = fixture.projects.find((p) => p.slug === state.slug)!;
   const found = errors(page);
   await hydratedGoto(page, "/?tab=all");
-  await expect(projectRow(page, "qa-dormant")).toContainText("Dormant");
-  await search(page, "QA dormant");
-  await expect(projectRow(page, "qa-dormant")).toBeVisible();
-  await projectRow(page, "qa-dormant").click();
-  await expect(page.getByTestId("badges").getByText("Dormant in reported window", { exact: true })).toBeVisible();
-  await expect(page.getByText("Retained for research and search.", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "Add QA dormant history to watchlist", exact: true }).first().click();
+  await expect(projectRow(page, state.slug)).toContainText(state.label);
+  await search(page, project.name);
+  await expect(projectRow(page, state.slug)).toBeVisible();
+  await page.getByRole("searchbox", { name: "Search hooks, projects or addresses" }).fill(project.hooks[0].address);
+  await expect(projectRow(page, state.slug)).toBeVisible();
+  await projectRow(page, state.slug).click();
+  await expect(page.getByTestId("badges").getByText(state.badge, { exact: true })).toBeVisible();
+  await expect(page.getByText(state.note, { exact: false })).toBeVisible();
+  // A fresh direct navigation must retain the same state without relying on list navigation.
+  await hydratedGoto(page, `/p/${state.slug}`);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(project.name);
+  await expect(page.getByTestId("badges").getByText(state.badge, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: `Add ${project.name} to watchlist`, exact: true }).first().click();
   await hydratedGoto(page, "/");
   await page.getByRole("button", { name: "Watchlist, 1 saved", exact: true }).click();
-  await expect(projectRow(page, "qa-dormant")).toBeVisible();
+  await expect(projectRow(page, state.slug)).toBeVisible();
   await page.reload();
   await expect(page.getByRole("button", { name: "Watchlist, 1 saved", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(projectRow(page, "qa-dormant")).toBeVisible();
+  await expect(projectRow(page, state.slug)).toBeVisible();
   await fit(page);
   expect(found).toEqual([]);
 });

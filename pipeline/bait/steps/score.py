@@ -26,7 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from ..db import (HOOK_POOL_PREFIX, as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
+from ..db import (HOOK_POOL_PREFIX, as_utc, historical_swap_evidence, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
 from ..rules import (SPAM_EXEMPT_VOL, WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
@@ -45,8 +45,15 @@ def window_end(day: date) -> date:
     return day - _D
 
 
-def run(conn: sa.Connection, ctx: RunContext) -> dict:
+def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = None) -> dict:
     day = ctx.day
+    if project_ids is not None:
+        if not project_ids or any(isinstance(pid, bool) or not isinstance(pid, int) for pid in project_ids):
+            raise ValueError("targeted score needs explicit project IDs")
+        existing = set(conn.execute(sa.select(project_daily.c.project_id).where(project_daily.c.day == day,
+                                    project_daily.c.project_id.in_(project_ids))).scalars())
+        if existing != project_ids:
+            raise ValueError("targeted score only updates existing project/day rows")
     end = window_end(day)
     w24, w7, wp = (end, end), (end - 6 * _D, end), (end - 13 * _D, end - 7 * _D)
     hook_rows = conn.execute(sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id, hooks.c.pools_total)
@@ -153,6 +160,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 first_seen[pid] = c
     rows = []
     for pid, fs in first_seen.items():
+        if project_ids is not None and pid not in project_ids:
+            continue
         a = agg.get(pid) or _empty()
         spam = is_spam(a["stats"], max(a["legacy_volume"], a["vol7"])) and pid not in historical
         status = activity.get(pid, "unknown")
@@ -189,10 +198,12 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     for i in range(0, len(rows), 500):
         upsert(conn, project_daily, rows[i:i + 500], keys=["project_id", "day"])
     trending = sum(1 for r in rows if r["score_trending"] > 0)
+    if project_ids is not None:
+        reasons = {pid: rs for pid, rs in reasons.items() if pid in project_ids}
     counts = {f"wash_{r}": sum(r in rs for rs in reasons.values()) for r in WASH_REASONS}
     if reasons:
         log.info("score: %d wash-like projects (%s)", len(reasons), " ".join(f"{k}={v}" for k, v in counts.items()))
-    return {"projects": len(rows), "with_pools": len(agg), "new": sum(r["is_new"] for r in rows),
+    return {"projects": len(rows), "with_pools": sum(project_ids is None or pid in project_ids for pid in agg), "new": sum(r["is_new"] for r in rows),
             "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(reasons), **counts}
 
 
@@ -203,7 +214,8 @@ def _historical_usage(conn, before: date, pool_project: dict) -> tuple[set[int],
     exemption still lists a large flow, with the unverified wash fallback when exact qualifying usage is absent.
     Retained pool_daily_onchain rows are never pruned. UTC candle/onchain snapshot volume may establish the volume
     exemption, but estimated/legacy rows and tx_count_cum (which may include liquidity changes) are not proof. Per pool,
-    take the larger source total, never add overlapping sources or sum cumulative snapshots.
+    take the larger source total, never add overlapping sources or sum cumulative snapshots. The reviewed evidence
+    ledger is an independent OR branch: its transaction counts/USD lower bounds never combine with either source.
     """
     qualified, volume_by_pool = set(), {}
     q = (sa.select(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id,
@@ -233,8 +245,35 @@ def _historical_usage(conn, before: date, pool_project: dict) -> tuple[set[int],
     for key, v in volume_by_pool.items():
         pid, _ = pool_project[key]
         volumes[pid] = volumes.get(pid, 0.0) + v
+    qualified.update(_historical_ledger_usage(conn, before, pool_project))
     volume_only = {pid for pid, v in volumes.items() if v >= SPAM_EXEMPT_VOL} - qualified
     return qualified | volume_only, volume_only
+
+
+def _historical_ledger_usage(conn, before: date, pool_project: dict) -> set[int]:
+    """Independent lower-bound proof from reviewed logs, never a history or recent-volume total.
+
+    Positive logs from the same transaction and real pool count once; the largest known USD lower bound represents
+    that transaction so standard/custom log pairs cannot add twice. Only current pool/hook matches strictly before
+    the seven-day boundary may qualify. Ten distinct positive transactions AND $100 known lower-bound USD must both
+    come from this ledger in the same pool; missing USD stays unknown and no ledger-only $1M exception is applied.
+    """
+    e = historical_swap_evidence.c
+    boundary = datetime.combine(before, datetime.min.time(), tzinfo=timezone.utc)
+    transactions = (sa.select(e.chain_id, e.pool_id, e.transaction_hash,
+                              sa.func.max(e.usd_lower_bound).label("usd"))
+                    .select_from(historical_swap_evidence.join(pools,
+                        (e.chain_id == pools.c.chain_id) & (e.pool_id == pools.c.pool_id)
+                        & (e.hook_address == pools.c.hook_address)))
+                    .where(e.positive.is_(True), e.block_timestamp < boundary,
+                           ~e.pool_id.startswith(HOOK_POOL_PREFIX))
+                    .group_by(e.chain_id, e.pool_id, e.transaction_hash).subquery())
+    q = (sa.select(transactions.c.chain_id, transactions.c.pool_id)
+         .group_by(transactions.c.chain_id, transactions.c.pool_id)
+         .having(sa.func.count() >= HISTORICAL_MIN_SWAPS,
+                 sa.func.sum(transactions.c.usd) >= HISTORICAL_MIN_VOLUME))
+    return {pool_project[(r.pool_id, r.chain_id)][0] for r in conn.execute(q)
+            if (r.pool_id, r.chain_id) in pool_project}
 
 
 def _activity_status(conn, w: tuple[date, date], hook_rows: list, pool_project: dict, pool_hook: dict,

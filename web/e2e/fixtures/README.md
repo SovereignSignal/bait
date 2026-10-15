@@ -21,6 +21,12 @@ recent coverage, positive unpriced swaps, never-active dust, missing history, cu
 and revival. These inputs verify presentation of pipeline states. Pipeline tests separately
 verify evidence qualification and scoring; browser replay alone does not validate ingestion.
 
+`qa-unknown` is hypothetical output after an approved historical-evidence import and a
+subsequent scorer run: historical eligibility is true, recent usage is unknown, and the
+project stays discoverable without entering New or Trending. Its recent metrics remain
+`null`. This synthetic contract fixture does not claim that Bunni was imported or that
+production data changed; the importer and scorer are verified separately in pipeline tests.
+
 The initial capture had no public Bunni row. Its verified canonical `/p/bunnihook` also
 returned 404 in a separate read at 03:19:01 UTC. No retained Bunni fixture
 or dormant classification is fabricated. Primary-source historical Bunni swap evidence
