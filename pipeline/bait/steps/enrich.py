@@ -21,7 +21,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     par = ctx.client("parallel")
     bs = ctx.client("blockscout")
     from ..costs import BudgetExceeded
-    todo = select_candidates(conn)
+    todo = select_candidates(conn, now=ctx.now)
     out["candidates"] = len(todo)
     # Parallel tasks take ~1-2 minutes each; run them side by side (PARALLEL_CONCURRENCY, default 8) before the
     # per-project loop. The whole batch is budget-checked up front, so concurrency cannot overshoot the budget.
@@ -98,18 +98,27 @@ def cut_line(text: str, limit: int = 200) -> str:
     return head.rstrip(" ,;:.-") + "…"
 
 
-def select_candidates(conn) -> list:
+def select_candidates(conn, now: datetime | None = None) -> list:
     """Projects with live pools, busiest first, never enriched, ENRICH_MAX (20) per run. Parallel and Claude bill per
     call and ~95% of registry hooks have no pools; the rest wait until they show activity. The cost preview uses this.
     20 keeps a night near $1.25 all in (2026-10-13 ledger: Parallel $0.025 a project, Exa ~$0.55, Claude ~$0.25), inside
-    the $40 rolling 30-day budget; 40 ran ~$1.75 a night and would have hit it on day 23."""
+    the $40 rolling 30-day budget; 40 ran ~$1.75 a night and would have hit it on day 23.
+
+    A project enriched to an empty what_line (the model had nothing to say, or the call returned nothing usable) is
+    retried once its enrichment is ENRICH_RETRY_DAYS (7) old, behind never-enriched projects in the same cap: a busy
+    project should not keep a blank card for want of one more call, and a weekly retry bounds the cost (Parallel is not
+    re-run; its stored result is reused)."""
     cap = _env_int("ENRICH_MAX", 20)
+    retry_before = (now or utcnow()) - timedelta(days=_env_int("ENRICH_RETRY_DAYS", 7))
+    empty = sa.or_(projects.c.what_line.is_(None), sa.func.trim(projects.c.what_line) == "")
     busy = (sa.select(hooks.c.project_id, sa.func.coalesce(sa.func.sum(pool_stats.c.vol_24h), 0.0).label("vol"))
             .select_from(hooks.join(pools, sa.and_(pools.c.hook_address == hooks.c.address, pools.c.chain_id == hooks.c.chain_id))
                          .outerjoin(pool_stats, sa.and_(pool_stats.c.pool_id == pools.c.pool_id, pool_stats.c.chain_id == pools.c.chain_id)))
             .where(hooks.c.project_id.is_not(None)).group_by(hooks.c.project_id).subquery())
     return conn.execute(sa.select(projects).join(busy, busy.c.project_id == projects.c.id)
-                        .where(projects.c.enriched_at.is_(None)).order_by(busy.c.vol.desc(), projects.c.id).limit(cap)).all()
+                        .where(sa.or_(projects.c.enriched_at.is_(None),
+                                      sa.and_(empty, projects.c.enriched_at < retry_before)))
+                        .order_by(projects.c.enriched_at.is_not(None), busy.c.vol.desc(), projects.c.id).limit(cap)).all()
 
 
 def _verified_source(bs, hs) -> dict | None:

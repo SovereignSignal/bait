@@ -4,7 +4,7 @@ import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { activityNote, routingNote } from "@/lib/research";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine } from "@/lib/present";
+import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { variants } from "@/lib/variants";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
@@ -62,7 +62,9 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     // only with a link to follow: a count without a URL is not an audit anyone can read
     p.signals.auditUrl
       ? { cls: "b-g", label: "Audit linked", why: `Audit link: ${p.signals.auditUrl}. It says nothing about scope or findings.`, href: p.signals.auditUrl }
-      : { cls: "b-n", label: "No audit link", why: "No audit link found." },
+      : auditMention(p.whatLine, p.whyBlurb)
+        ? { cls: "b-a", label: "Audit mentioned, not linked", why: "The description mentions an audit, but neither the registry nor the team's published details link one. Treat it as unverified." }
+        : { cls: "b-n", label: "No audit link", why: "No audit link found." },
     ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
     ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
     ...(!p.isNew && p.rank ? [{ cls: "b-a", label: `#${p.rank} trending`, why: "Rank by 7-day volume growth, among projects older than a week with at least $10K this week and $1K the week before." }] : []),

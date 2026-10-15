@@ -1,7 +1,7 @@
 // One project, one set of figures across pages: names, counts, TVL and audit badges (demo smoke, 2026-10-14).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditLinks, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
+import { auditLinks, auditMention, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
 import type { DigestItem } from "./types";
 
 const item = (slug: string, name: string, kind: DigestItem["kind"] = "trending"): DigestItem => ({ slug, name, kind, line: "", vol7d: 1 });
@@ -58,4 +58,12 @@ test("the Trade panel offers the pool the title is named after, not the first po
   assert.equal(tradePool(pools, { poolId: "0xgone", chainId: 8453 })?.poolId, "0xeqvta");  // topPool not in the list: first known-chain pool
   assert.equal(tradePool(pools, null)?.poolId, "0xeqvta");
   assert.equal(tradePool([{ poolId: "0xa", chainId: 999999 }], { poolId: "0xa", chainId: 999999 }), null);
+});
+
+test("audit badge vs text: generated prose that names an audit without a link is flagged, not read as 'No audit'", () => {
+  assert.equal(auditMention("Audited by Spearbit and Trail of Bits.", null), true);
+  assert.equal(auditMention(null, "Two audits cover the vault and the hook."), true);
+  assert.equal(auditMention("A per-block auction sells the right to arbitrage.", "LPs keep value."), false);
+  assert.equal(auditMention("An auditorium of traders"), false);     // whole word only
+  assert.equal(auditMention(null, undefined), false);
 });
