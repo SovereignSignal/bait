@@ -269,3 +269,17 @@ def test_uniform_spares_a_buy_cap_launch_and_real_trading():
     assert not is_uniform([(22_500, 1, 0)] * 7, 17_100_000, 809)                                  # too few to be a pattern
     assert not is_uniform([(22_500, 1, 0)] * 10, 900_000, 40)                                     # under $1M
     assert not is_uniform([(22_500, 1, 0)] * 10, 17_100_000, None)                                # wallets unknown
+
+
+def test_fallback_category_reads_words_then_factory_pattern_then_dynamic_fee():
+    from bait.rules import fallback_category
+    assert fallback_category(["LimitOrderHook", None], [{}], [], False, 1) == "orders"
+    assert fallback_category(["Euler Lending Hook"], [{}], [], False, 1) == "lending"
+    assert fallback_category(["Angstrom"], [{}], [], False, 3) == "mev-lvr"
+    assert fallback_category(["KYC gated pool"], [{}], [], False, 1) == "compliance"
+    assert fallback_category(["Unlisted hook 0x1234…abcd"], [{}], [], True, 5) == "launchpad"
+    assert fallback_category(["Unlisted hook 0x1234…abcd"], [{}], [3000], False, 2_500) == "launchpad"
+    assert fallback_category(["Fee Thing"], [{"dynamicFee": True}], [], False, 1) == "dynamic-fee"
+    assert fallback_category(["Something"], [{}], [8388608], False, 1) == "dynamic-fee"
+    assert fallback_category(["Aegis"], [{}], [3000], False, 2) is None          # nothing says: stays unguessed
+    assert fallback_category([], [], [], False, None) is None

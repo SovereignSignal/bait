@@ -38,6 +38,7 @@ projects = sa.Table(
     sa.Column("name", sa.Text, nullable=False),
     sa.Column("norm_name", sa.Text, index=True),
     sa.Column("category", sa.Text),
+    sa.Column("category_source", sa.Text),   # 0020: enrich (generated from sources) | rules (fallback_category); NULL = older rows
     sa.Column("what_line", sa.Text),
     sa.Column("why_blurb", sa.Text),
     sa.Column("website", sa.Text),
@@ -483,6 +484,7 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("hooks", "deployer_checked_at", "timestamptz"),
     ("project_daily", "deployer_swap_share_7d", "double precision"),
     ("project_daily_p9_backup", "deployer_swap_share_7d", "double precision"),
+    ("projects", "category_source", "text"),
     ("v4_pools", "sampled", "boolean NOT NULL DEFAULT false"),
     ("hooks", "pools_total", "bigint"),
     ("hooks", "code_shape", "text"),

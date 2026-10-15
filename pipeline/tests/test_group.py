@@ -474,3 +474,24 @@ def test_a_split_without_a_majority_moves_receipts_but_not_the_slug(conn, ctx):
     assert len(holders) == 2 and _alias(conn, "testhook") is None
     assert conn.execute(sa.select(sa.func.count()).select_from(db.projects).where(db.projects.c.x_handle == "th_hooks")).scalar_one() == 0
     assert conn.execute(sa.select(db.receipts.c.project_id)).scalar_one() == holders[0]
+
+
+def test_group_guesses_a_category_for_unenriched_projects_and_leaves_enriched_ones(conn, ctx):
+    from bait.steps.group import _fallback_categories
+    lim = insert_project(conn, "LimitOrderHook", first_seen=NOW)
+    insert_hook(conn, "0xlim", 10, project_id=lim, name="LimitOrderHook")
+    dyn = insert_project(conn, "Unlisted hook 0xdd", first_seen=NOW)
+    insert_hook(conn, "0xdyn", 10, project_id=dyn, name=None)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xdyn").values(properties={"dynamicFee": True}))
+    done = insert_project(conn, "Described", first_seen=NOW)
+    insert_hook(conn, "0xdone", 10, project_id=done, name="LimitOrderHook v2")
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == done).values(category="lending", category_source="enrich", enriched_at=NOW))
+    plain = insert_project(conn, "Aegis", first_seen=NOW)
+    insert_hook(conn, "0xaeg", 10, project_id=plain, name="Aegis")
+    assert _fallback_categories(conn) == 2
+    cats = {r.id: (r.category, r.category_source) for r in conn.execute(sa.select(db.projects.c.id, db.projects.c.category, db.projects.c.category_source))}
+    assert cats[lim] == ("orders", "rules") and cats[dyn] == ("dynamic-fee", "rules")
+    assert cats[done] == ("lending", "enrich") and cats[plain] == (None, None)
+    assert _fallback_categories(conn) == 0                                   # idempotent
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xaeg").values(description="A TWAMM for stable pairs"))
+    assert _fallback_categories(conn) == 1 and conn.execute(sa.select(db.projects.c.category).where(db.projects.c.id == plain)).scalar_one() == "orders"

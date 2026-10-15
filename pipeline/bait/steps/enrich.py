@@ -78,7 +78,7 @@ def what_values(p, res: dict, enrichment: dict) -> dict:
     """The projects row update for a fresh what_line: the line (cut at a word boundary), category, enrichment, links."""
     par_res = enrichment.get("parallel") or {}
     return {
-        "what_line": cut_line(res["what_line"]), "category": res["category"],
+        "what_line": cut_line(res["what_line"]), "category": res["category"], "category_source": "enrich",
         "enrichment": enrichment, "enriched_at": utcnow(),
         "website": web_url(p.website) or web_url(par_res.get("website")),
         "github": github_url(p.github) or github_url(par_res.get("github")),
