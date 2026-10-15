@@ -46,6 +46,12 @@ jobs:
         env: { NEXT_TELEMETRY_DISABLED: "1" }
       - run: cd web && npm run e2e
         env: { CI: "true", NEXT_TELEMETRY_DISABLED: "1" }
+      # The representative suite replays dated source captures plus synthetic lifecycle cases (web/e2e/fixtures/README.md).
+      # It rebuilds first so no ISR page from the sample dataset is reused, and it starts its own server on another port.
+      - run: cd web && npm run build
+        env: { NEXT_TELEMETRY_DISABLED: "1" }
+      - run: cd web && npm run e2e
+        env: { CI: "true", NEXT_TELEMETRY_DISABLED: "1", BAIT_E2E_REPRESENTATIVE: "1" }
       - uses: actions/upload-artifact@v4
         if: failure()
         with: { name: playwright-results, path: web/test-results, if-no-files-found: ignore }
