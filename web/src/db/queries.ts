@@ -12,7 +12,6 @@ import { resolveSymbols } from "@/lib/symbols";
 import { createSwrCache, type Ttl } from "@/lib/swr-cache";
 import { isSlugShaped, isUnlisted, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { unstable_noStore as noStore } from "next/cache";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
 import { SAMPLE_ALIASES, SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
@@ -125,8 +124,6 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
  * page agree even when the snapshot is up to an hour old.
  */
 export async function getProjectPage(slug: string): Promise<{ project: ProjectDetail | null; rows: RowView[]; version: string }> {
-  // Candidate datasets may change between local server runs using the same build; never persist fixture pages in ISR.
-  if (usingFixtures()) noStore();
   const db = getDb();
   const all = await loadAll();
   const live = all.filter((p) => !p.isSpam);

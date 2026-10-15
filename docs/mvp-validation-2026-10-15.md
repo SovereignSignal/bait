@@ -63,8 +63,9 @@ Candidate tests are separate:
   and real migrations/queries against an isolated local schema.
 - `web/e2e/fixtures/representative.json`: six dated source replays plus explicitly synthetic lifecycle/redirect
   cases. No invented Bunni retention or Aegis production merge. Desktop/mobile checks cover filtering, navigation,
-  errors, overflow, evidence badges and unknown values. The test server clears `DATABASE_URL` and never reuses a
-  running server. See the fixture README for provenance and reproducible commands.
+  errors, overflow, evidence badges and unknown values. Each suite rebuilds the exact candidate commit to clear
+  ISR pages from the other fixture dataset. The test server clears `DATABASE_URL` and never reuses a running server.
+  See the fixture README for provenance and reproducible commands.
 
 Final test outcomes and the exact tested SHA belong in the PR checkpoint and local evidence manifest. No candidate
 success should be inferred from the earlier `e38328f` checks: its CI/MVP workflows were `action_required`, not passes

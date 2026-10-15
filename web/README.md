@@ -59,10 +59,13 @@ Run `npm test`, `npm run typecheck`, and `npm run build`. The opt-in database qu
 uses `BAIT_TEST_DATABASE_URL` and creates/drops its own schema; point it only at a disposable
 local Postgres instance. It applies the real migrations before checking list/detail totals.
 
-After building the exact commit to review, run both browser suites:
+Build the exact commit separately before each browser suite so ISR pages from one fixture
+dataset cannot be reused by the other:
 
 ```sh
+npm run build
 BAIT_E2E_SHA=<exact-built-commit> npm run e2e
+npm run build
 BAIT_E2E_SHA=<exact-built-commit> BAIT_E2E_REPRESENTATIVE=1 npm run e2e
 ```
 
