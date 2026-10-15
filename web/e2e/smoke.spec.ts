@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// Candidate UI tests never ask the local trades proxy to fetch live provider data.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/trades/**", (route) => route.fulfill({ json: { trades: [] } }));
+});
+
 /** Console errors and uncaught page errors for the whole test (the favicon is served now, so none are expected). */
 function watch(page: Page): string[] {
   const errs: string[] = [];

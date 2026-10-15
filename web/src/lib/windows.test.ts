@@ -41,6 +41,8 @@ test("washLine names every reason", () => {
   assert.equal(washLine("7d,no_liquidity"), "Wash-like volume: $1M+ in 7 days through 10 or fewer wallets; $1M+ in 7 days through a pool with $1K or less of liquidity.");
   assert.equal(washLine("unverified"), "Wash-like volume: $1M+ moved through a pool that looks idle, with no wallet data to check who moved it.");
   assert.equal(washLine(null), "Wash-like volume.");
+  assert.match(washLine("7d", true), /^Historical wash-like volume:.*earlier scored window/);
+  assert.match(washLine("7d", true), /do not establish wash-like activity in the current window/);
 });
 test("an unknown 7-day volume renders as unknown, never trends and sorts last", () => {
   const rows = [row({ slug: "unknown", vol7d: null, vol7dPrev: null, scoreTrending: 9 }), row({ slug: "real", vol7d: 50_000, vol7dPrev: 20_000, scoreTrending: 5 })];

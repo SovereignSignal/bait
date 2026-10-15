@@ -166,6 +166,10 @@ project_daily = sa.Table(
     sa.Column("wallets_exact", sa.Boolean),    # True = distinct across the project's pools; False = an upper bound
     sa.Column("is_wash", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column("wash_reason", sa.Text),         # comma list in rules.WASH_REASONS order
+    # 0016: listing evidence is independent of recent activity. NULL status = not classified by this scorer yet.
+    sa.Column("has_historical_usage", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("activity_status", sa.Text),     # active | dormant | unknown; dormant requires complete 7d zero swaps
+    sa.Column("wash_historical", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Index("project_daily_day_score_idx", "day", "score_trending"),
 )
 
@@ -425,6 +429,12 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("project_daily", "wallets_exact", "boolean"),
     ("project_daily", "is_wash", "boolean NOT NULL DEFAULT false"),
     ("project_daily", "wash_reason", "text"),
+    ("project_daily", "has_historical_usage", "boolean NOT NULL DEFAULT false"),
+    ("project_daily", "activity_status", "text"),
+    ("project_daily", "wash_historical", "boolean NOT NULL DEFAULT false"),
+    ("project_daily_p9_backup", "has_historical_usage", "boolean NOT NULL DEFAULT false"),
+    ("project_daily_p9_backup", "activity_status", "text"),
+    ("project_daily_p9_backup", "wash_historical", "boolean NOT NULL DEFAULT false"),
     ("v4_pools", "sampled", "boolean NOT NULL DEFAULT false"),
     ("hooks", "pools_total", "bigint"),
     ("hooks", "code_shape", "text"),

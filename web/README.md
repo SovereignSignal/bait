@@ -53,6 +53,25 @@ Schema notes: `src/db/schema.ts` mirrors `../db/migrations` (the pipeline's SQLA
 
 `npm run db:generate` emits SQL from the schema into `./drizzle` (drizzle-kit) if you want to compare against `../db/migrations`.
 
+## Candidate validation
+
+Run `npm test`, `npm run typecheck`, and `npm run build`. The opt-in database query test
+uses `BAIT_TEST_DATABASE_URL` and creates/drops its own schema; point it only at a disposable
+local Postgres instance. It applies the real migrations before checking list/detail totals.
+
+After building the exact commit to review, run both browser suites:
+
+```sh
+BAIT_E2E_SHA=<exact-built-commit> npm run e2e
+BAIT_E2E_SHA=<exact-built-commit> BAIT_E2E_REPRESENTATIVE=1 npm run e2e
+```
+
+Both start fresh local servers with the database URL cleared. The representative suite
+combines dated source replay with explicitly synthetic lifecycle regressions; see
+[`e2e/fixtures/README.md`](e2e/fixtures/README.md) for scope and provenance. It cannot certify
+production ingestion or a production deployment. `BAIT_E2E_OUTPUT_DIR` chooses the evidence
+directory. No workflow approval is needed for these local checks.
+
 ## Docker
 
 ```sh

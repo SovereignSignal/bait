@@ -12,9 +12,10 @@ import { resolveSymbols } from "@/lib/symbols";
 import { createSwrCache, type Ttl } from "@/lib/swr-cache";
 import { isSlugShaped, isUnlisted, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { unstable_noStore as noStore } from "next/cache";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
-import { SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
+import { SAMPLE_ALIASES, SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
 import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
@@ -124,6 +125,8 @@ export async function getProject(slug: string): Promise<ProjectDetail | null> {
  * page agree even when the snapshot is up to an hour old.
  */
 export async function getProjectPage(slug: string): Promise<{ project: ProjectDetail | null; rows: RowView[]; version: string }> {
+  // Candidate datasets may change between local server runs using the same build; never persist fixture pages in ISR.
+  if (usingFixtures()) noStore();
   const db = getDb();
   const all = await loadAll();
   const live = all.filter((p) => !p.isSpam);
@@ -180,7 +183,11 @@ export function isKnownPool(chainId: number, poolId: string): Promise<boolean> {
  */
 export async function slugForAlias(slug: string): Promise<string | null> {
   const db = getDb();
-  if (!db || !isSlugShaped(slug)) return null;
+  if (!isSlugShaped(slug)) return null;
+  if (!db) {
+    const to = usingFixtures() ? SAMPLE_ALIASES[slug] : null;
+    return to && to !== slug && isSlugShaped(to) ? to : null;
+  }
   const rows = await safe(
     "slugForAlias",
     async () =>
@@ -605,7 +612,10 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
         usage,
         isNew: d?.isNew ?? false,
         isSpam: d?.isSpam ?? true, // no project_daily row yet = nothing to show
+        hasHistoricalUsage: d?.hasHistoricalUsage ?? false,
+        activityStatus: d?.activityStatus ?? null,
         isWash: d?.isWash ?? false,
+        washHistorical: d?.washHistorical ?? false,
         washReason: d?.washReason ?? null,
         scoreTrending: d?.scoreTrending ?? 0,
         color: enrichment.color ?? colorFor(p.id),
@@ -644,14 +654,22 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
     db.execute<PoolRow>(sql`
       select p.pool_id, p.chain_id, p.hook_address, p.token0, p.token1, p.fee, p.tick_spacing, p.created_at,
              lt.tvl_usd,
-             -- closed UTC days: 7d = from7..end, 24h = end. No row reads as 0; NULL cumulative (unknown on-chain volume) stays NULL
-             case when s.pool_id is not null and s.volume_usd_cum is null then null else coalesce(w.vol7d, 0) end as vol7d,
-             w.tx7d,
-             -- as score: a day without a row is $0, a NULL cumulative (unknown on-chain volume) is unknown
-             case when s.pool_id is null then 0 when s.volume_usd_cum is null then null else coalesce(s.volume_usd_day, 0) end as vol24
+             -- closed UTC days: 7d = from7..end, 24h = end. No observations and unknown on-chain volume stay NULL.
+             case when pending_copy.week_incomplete and coalesce(w.vol7d, 0) = 0 then null
+                  when (p.created_at at time zone 'UTC')::date > ${end}::date then 0
+                  when w.volume_days = 0 or lc.volume_usd_cum is null then null else w.vol7d end as vol7d,
+             case when pending_copy.week_incomplete then null else w.tx7d end as tx7d,
+             case when pending_copy.day_incomplete and coalesce(s.volume_usd_day, 0) = 0 then null
+                  when (p.created_at at time zone 'UTC')::date > ${end}::date then 0
+                  when s.pool_id is null or s.volume_usd_cum is null then null else s.volume_usd_day end as vol24
       from ${t.pools} p
       join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
       left join ${t.poolSnapshots} s on s.pool_id = p.pool_id and s.chain_id = p.chain_id and s.day = ${end}
+      left join lateral (
+        select x.volume_usd_cum from ${t.poolSnapshots} x
+        where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${shiftDay(end, -13)} and ${end}
+        order by x.day desc limit 1
+      ) lc on true
       -- TVL as score sums it into the header: the latest row up to the running day, so the rows add up to the header
       left join lateral (
         select x.tvl_usd from ${t.poolSnapshots} x
@@ -659,16 +677,24 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         order by x.day desc limit 1
       ) lt on true
       left join lateral (
-        select sum(x.volume_usd_day) as vol7d,
-               -- as score: a 7-day count only when every day is known; days before the pool existed count as 0 and a
-               -- pool with no volume in the window adds 0
-               case when coalesce(sum(x.volume_usd_day), 0) = 0 then coalesce(sum(x.tx_count_day), 0)
-                    when count(x.tx_count_day)
+        select sum(x.volume_usd_day) as vol7d, count(x.volume_usd_day) as volume_days,
+               -- as score: a 7-day count only when every day is known; days before the pool existed count as 0.
+               -- Zero priced volume cannot turn missing swap counts into zero (unpriced swaps still count).
+               case when count(x.tx_count_day)
                          + greatest(0, least(7, coalesce((p.created_at at time zone 'UTC')::date - ${from7}::date, 0))) >= 7
-                    then sum(x.tx_count_day) end as tx7d
+                    then coalesce(sum(x.tx_count_day), 0) end as tx7d
         from ${t.poolSnapshots} x
         where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${from7} and ${end}
       ) w on true
+      -- New raw swaps invalidate copied zero counts and zero USD windows until the snapshot catches up.
+      -- Keep positive measured USD totals as the observed lower bound; never price these swaps here.
+      left join lateral (
+        select count(*) > 0 as week_incomplete, coalesce(bool_or(raw.day = ${end}), false) as day_incomplete
+        from ${t.poolDailyOnchain} raw
+        left join ${t.poolSnapshots} copied on copied.pool_id = raw.pool_id and copied.chain_id = raw.chain_id and copied.day = raw.day
+        where raw.pool_id = p.pool_id and raw.chain_id = p.chain_id and raw.day between ${from7} and ${end}
+          and raw.swaps > 0 and (copied.tx_count_day is null or copied.tx_count_day < raw.swaps)
+      ) pending_copy on true
       where h.project_id = ${projectId} and p.chain_id = any(${KNOWN_CHAINS}) and p.pool_id not like 'hook:%'
       -- active pools first, so the 50 rows hold them on a launchpad with hundreds of idle ones
       order by (coalesce(lt.tvl_usd, 0) > 0 or coalesce(s.volume_usd_day, 0) > 0 or coalesce(w.vol7d, 0) > 0 or coalesce(w.tx7d, 0) > 0) desc,

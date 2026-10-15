@@ -6,7 +6,7 @@ import type { RowView } from "./types";
 
 const row = (over: Partial<RowView>): RowView => ({
   slug: "x", name: "X", whatLine: "", color: "#000", category: "other", secondaryCategories: [], chains: [8453],
-  firstSeenAt: "2026-10-01T00:00:00Z", isNew: false, isWash: false, isDormant: false, scoreTrending: 0, vol7d: 0, vol7dPrev: 0, vol24h: null,
+  firstSeenAt: "2026-10-01T00:00:00Z", isNew: false, isWash: false, washHistorical: false, isDormant: false, activityStatus: null, scoreTrending: 0, vol7d: 0, vol7dPrev: 0, vol24h: null,
   tvlUsd: 0, routable: "unknown", ...over,
 });
 

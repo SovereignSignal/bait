@@ -124,7 +124,9 @@ export function toRow(p: ProjectSummary): RowView {
     firstSeenAt: p.firstSeenAt,
     isNew: p.isNew,
     isWash: p.isWash,
+    washHistorical: !!p.washHistorical,
     isDormant: !!p.isDormant,
+    activityStatus: p.activityStatus ?? null,
     scoreTrending: Math.round(p.scoreTrending * 1000) / 1000,
     vol7d: dollars(p.metrics.vol7d),
     vol7dPrev: dollars(p.metrics.vol7dPrev),
@@ -141,11 +143,13 @@ export function pace(vol24h: number | null, vol7d: number | null): number {
   return Math.min(100, Math.round(((vol24h * 7) / vol7d) * 100));
 }
 
-export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean }, rank: number | undefined, m: { v: number | null; win: Win }): string {
+export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean; washHistorical?: boolean; isDormant?: boolean; activityStatus?: RowView["activityStatus"] }, rank: number | undefined, m: { v: number | null; win: Win }): string {
   const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
   const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "1-day"} volume`];
   const d = weekDelta(r);
-  if (r.isWash) parts.push("wash-like volume");
+  if (r.isWash) parts.push(r.washHistorical ? "historical wash-like volume" : "wash-like volume");
+  else if (r.isDormant) parts.push("dormant in reported window");
+  else if (r.activityStatus === "unknown") parts.push("recent activity unknown");
   else if (r.isNew) parts.push("new");
   else if (d != null) parts.push(`${d >= 0 ? "up" : "down"} ${deltaWords(d).replace("%", " percent")}`);
   return parts.join(", ");
@@ -169,8 +173,9 @@ const WASH_TEXT: Record<string, string> = {
   unverified: "$1M+ moved through a pool that looks idle, with no wallet data to check who moved it",
 };
 
-export function washLine(reason: string | null): string {
+export function washLine(reason: string | null, historical = false): string {
   const parts = (reason ?? "").split(",").map((r) => WASH_TEXT[r.trim()]).filter(Boolean);
+  if (historical) return `Historical wash-like volume${parts.length ? `: ${parts.join("; ")}` : ""}. These findings describe an earlier scored window; they do not establish wash-like activity in the current window.`;
   return parts.length ? `Wash-like volume: ${parts.join("; ")}.` : "Wash-like volume.";
 }
 

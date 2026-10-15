@@ -1,9 +1,8 @@
-name: MVP source reconciliation
+name: Historical MVP source reconciliation (manual)
+# One-off October 15 baseline; the referenced artifact expires October 22.
+# This does not validate a candidate application build.
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/mvp-sources.yml'
-      - 'scripts/mvp-source-check.py'
+  workflow_dispatch:
 permissions:
   contents: read
   actions: read
