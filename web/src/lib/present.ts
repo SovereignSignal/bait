@@ -61,7 +61,7 @@ export function seriesLabels(n: number, end: string | null | undefined): string[
   );
 }
 
-const HOOK_SEARCH_CAP = 8;
+// Address search is lazy-loaded separately; every grouped deployment must remain discoverable.
 
 /** The first http(s) URL among published audit links; anything else (javascript:, data:, bare text) is not a link. */
 export function firstWebUrl(urls: Iterable<unknown>): string | null {
@@ -93,9 +93,11 @@ export function auditLinks(
   return [...out];
 }
 
-/** The note under the pools table when the header TVL (every pool, score's sum) is more than the rows shown add up to:
- * pools past the 50 loaded, on untracked chains, or a capped hook's aggregate. null when the rows account for it. */
+/** Explain why the shown pools cannot account for the project total. Missing pool TVL is unknown, never a zero
+ * balance or proof that the difference belongs to omitted pools. */
 export function poolTvlNote(headerTvl: number, rows: Array<{ tvlUsd: number | null }>): string | null {
+  const unknown = rows.filter(r => r.tvlUsd == null).length;
+  if (unknown) return `Reported project TVL is ${usd(headerTvl)}; ${unknown} listed pool${unknown === 1 ? " has" : "s have"} unknown TVL, so the listed pool total is unknown.`;
   const shown = rows.reduce((s, r) => s + (r.tvlUsd ?? 0), 0);
   const rest = headerTvl - shown;
   if (rest <= Math.max(1, headerTvl * 0.005)) return null;   // rounding between the two reads
@@ -104,9 +106,9 @@ export function poolTvlNote(headerTvl: number, rows: Array<{ tvlUsd: number | nu
     : `TVL ${usd(headerTvl)} is the sum over all pools; none of it is in the pools listed here.`;
 }
 
-/** Hook addresses for 0x search: lowercase, deduplicated, capped. */
+/** Hook addresses for 0x search: lowercase and deduplicated, including large factory families. */
 export function hookKeys(addresses: string[]): string[] {
-  return [...new Set(addresses.map((a) => a.toLowerCase()))].slice(0, HOOK_SEARCH_CAP);
+  return [...new Set(addresses.map((a) => a.toLowerCase()))];
 }
 
 const dollars = (n: number | null): number | null => (n == null ? null : Math.round(n));
@@ -124,6 +126,10 @@ export function toRow(p: ProjectSummary): RowView {
     firstSeenAt: p.firstSeenAt,
     isNew: p.isNew,
     isWash: p.isWash,
+    washHistorical: !!p.washHistorical,
+    hasHistoricalUsage: !!p.hasHistoricalUsage,
+    isDormant: !!p.isDormant,
+    activityStatus: p.activityStatus ?? null,
     scoreTrending: Math.round(p.scoreTrending * 1000) / 1000,
     vol7d: dollars(p.metrics.vol7d),
     vol7dPrev: dollars(p.metrics.vol7dPrev),
@@ -140,11 +146,13 @@ export function pace(vol24h: number | null, vol7d: number | null): number {
   return Math.min(100, Math.round(((vol24h * 7) / vol7d) * 100));
 }
 
-export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean }, rank: number | undefined, m: { v: number | null; win: Win }): string {
+export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean; washHistorical?: boolean; isDormant?: boolean; activityStatus?: RowView["activityStatus"] }, rank: number | undefined, m: { v: number | null; win: Win }): string {
   const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
   const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "1-day"} volume`];
   const d = weekDelta(r);
-  if (r.isWash) parts.push("wash-like volume");
+  if (r.isWash) parts.push(r.washHistorical ? "historical wash-like volume" : "wash-like volume");
+  else if (r.isDormant) parts.push("dormant in reported window");
+  else if (r.activityStatus === "unknown") parts.push("recent activity unknown");
   else if (r.isNew) parts.push("new");
   else if (d != null) parts.push(`${d >= 0 ? "up" : "down"} ${deltaWords(d).replace("%", " percent")}`);
   return parts.join(", ");
@@ -168,8 +176,9 @@ const WASH_TEXT: Record<string, string> = {
   unverified: "$1M+ moved through a pool that looks idle, with no wallet data to check who moved it",
 };
 
-export function washLine(reason: string | null): string {
+export function washLine(reason: string | null, historical = false): string {
   const parts = (reason ?? "").split(",").map((r) => WASH_TEXT[r.trim()]).filter(Boolean);
+  if (historical) return `Historical wash-like volume${parts.length ? `: ${parts.join("; ")}` : ""}. These findings describe an earlier scored window; they do not establish wash-like activity in the current window.`;
   return parts.length ? `Wash-like volume: ${parts.join("; ")}.` : "Wash-like volume.";
 }
 

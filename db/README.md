@@ -19,3 +19,9 @@ Tables: projects, hooks, pools, pool_snapshots, pool_stats, pool_top_wallets, wa
 project_daily, signals, receipts, digests; on-chain indexer (0004): v4_pools, pool_daily_onchain, pool_wallet_day,
 indexer_state; hook_pool_counts (0013); pool_lookup_queue (0015).
 See DESIGN.md "Postgres schema" for field meaning.
+
+
+Deploy order when a release adds columns the web reads (0016 and later): apply the migration to production first,
+then merge. The web service's Railway healthcheck is `/api/ready`, which returns 503 until the required columns exist,
+so a web build deployed against an unmigrated database fails its healthcheck and the previous build keeps serving; the
+pipeline and indexer also add missing columns on their next start, but do not rely on that timing.

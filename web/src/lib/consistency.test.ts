@@ -24,12 +24,15 @@ test("digest intro counts what /leaders counts; an older digest says what its nu
   );
 });
 
-test("pool TVL note: says where a header TVL the rows do not add up to comes from", () => {
+test("pool TVL note: unknown pool TVL is not zero or evidence that the total belongs to omitted pools", () => {
   assert.equal(poolTvlNote(9_800, [{ tvlUsd: 9_800 }]), null);
   assert.equal(poolTvlNote(9_800, [{ tvlUsd: 9_790 }]), null);                       // rounding between the reads
   assert.equal(poolTvlNote(0, []), null);
-  assert.equal(poolTvlNote(9_800, [{ tvlUsd: null }]), "TVL $9.8K is the sum over all pools; none of it is in the pools listed here.");
-  assert.equal(poolTvlNote(10_000, [{ tvlUsd: 4_000 }, { tvlUsd: null }]), "TVL $10K is the sum over all pools; $6K of it is in pools not listed here.");
+  assert.equal(poolTvlNote(9_800, [{ tvlUsd: null }]), "Reported project TVL is $9.8K; 1 listed pool has unknown TVL, so the listed pool total is unknown.");
+  assert.equal(poolTvlNote(10_000, [{ tvlUsd: 4_000 }, { tvlUsd: null }]), "Reported project TVL is $10K; 1 listed pool has unknown TVL, so the listed pool total is unknown.");
+  assert.equal(poolTvlNote(0, [{ tvlUsd: null }, { tvlUsd: null }]), "Reported project TVL is $0; 2 listed pools have unknown TVL, so the listed pool total is unknown.");
+  assert.equal(poolTvlNote(9_800, [{ tvlUsd: 0 }]), "TVL $9.8K is the sum over all pools; none of it is in the pools listed here.");
+  assert.equal(poolTvlNote(10_000, [{ tvlUsd: 4_000 }, { tvlUsd: 0 }]), "TVL $10K is the sum over all pools; $6K of it is in pools not listed here.");
 });
 
 test("audit badge only for a real link that belongs to the project", () => {

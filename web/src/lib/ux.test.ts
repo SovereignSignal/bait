@@ -28,6 +28,12 @@ test("rowMetric: the closed day only when asked for and known", () => {
   assert.deepEqual(rowMetric({ vol24h: null, vol7d: 70 }, true), { v: 70, win: "7d" });
   assert.deepEqual(rowMetric({ vol24h: 5, vol7d: 70 }, false), { v: 70, win: "7d" });
 });
+test("unpriced swaps ahead of a copied snapshot do not render zero USD; positive observed weekly volume remains visible", () => {
+  assert.deepEqual(poolVolume({ vol24h: null, tx7d: null }), { text: NONE });
+  assert.equal(usd(rowMetric({ vol24h: null, vol7d: null }, true).v), NONE);
+  assert.deepEqual(rowMetric({ vol24h: null, vol7d: 125 }, true), { v: 125, win: "7d" });
+  assert.deepEqual(poolVolume({ vol24h: 0, tx7d: 0 }), { text: "$0" });
+});
 test("moversFor: chain filter first, then the cap, order kept", () => {
   const rows = [{ slug: "a", chains: [1] }, { slug: "b", chains: [8453] }, { slug: "c", chains: [1, 8453] }] as never[];
   assert.deepEqual(moversFor(rows, 8453, 1).map((x: { slug: string }) => x.slug), ["b"]);
@@ -37,11 +43,14 @@ test("rowLabel reads rank, name, category, chain, window, direction", () => {
   const r = { name: "StablePairHook", category: "dynamic-fee" as const, chains: [1 as const], isNew: false, vol7d: 10_600_000, vol7dPrev: 1_000_000 };
   assert.equal(rowLabel(r, 1, { v: r.vol7d, win: "7d" }), "#1 StablePairHook, Dynamic fee on Ethereum, $10.6M 7-day volume, up 960 percent");
   assert.equal(rowLabel({ ...r, isNew: true, category: "other" }, undefined, { v: 5000, win: "1d" }), "StablePairHook, Ethereum, $5K 1-day volume, new");
+  assert.match(rowLabel({ ...r, isWash: true, washHistorical: true }, undefined, { v: 0, win: "7d" }), /historical wash-like volume$/);
+  assert.match(rowLabel({ ...r, isDormant: true }, undefined, { v: 0, win: "7d" }), /dormant in reported window$/);
+  assert.match(rowLabel({ ...r, activityStatus: "unknown" }, undefined, { v: null, win: "7d" }), /recent activity unknown$/);
 });
 test("emptyCopy names the filter that matched nothing", () => {
   assert.equal(emptyCopy({ tab: "new", category: "launchpad", chain: 8453 }), "No new Launchpad hooks on Base.");
   assert.equal(emptyCopy({ tab: "all", chain: 8453 }), "No hooks on Base.");
-  assert.equal(emptyCopy({ tab: "verified", category: "oracle" }), "No in-app Oracle hooks.");
+  assert.equal(emptyCopy({ tab: "verified", category: "oracle" }), "No automatic-routing Oracle hooks.");
 });
 test("tradesNote separates nothing-traded from feed-unavailable", () => {
   assert.equal(tradesNote("empty", 0), "No trades over $10 right now.");
@@ -98,10 +107,10 @@ test("0x search matches hook address prefixes once the index has loaded; names m
   assert.deepEqual(searchRows(rows, "ang").map((r) => r.slug), ["a"]);
 });
 
-test("hookKeys: lowercase, deduplicated, capped at 8", () => {
+test("hookKeys: lowercase, deduplicated, complete", () => {
   const many = Array.from({ length: 12 }, (_, i) => `0xAB${i.toString(16).padStart(38, "0")}`);
   assert.deepEqual(hookKeys(["0xAA", "0xaa", "0xBB"]), ["0xaa", "0xbb"]);
-  assert.equal(hookKeys(many).length, 8);
+  assert.equal(hookKeys(many).length, 12);
 });
 
 test("the hook index loads once, and a failed load is retried on the next call", async () => {

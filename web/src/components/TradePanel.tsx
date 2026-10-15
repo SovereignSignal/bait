@@ -1,7 +1,8 @@
 // Right column: pool action card (links out to Uniswap), buys vs sells, hook facts.
 import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chains";
 import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
-import { pace, tradePool, walletsText } from "@/lib/present";
+import { tradePool } from "@/lib/present";
+import { activityPace, routingNote } from "@/lib/research";
 import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
 import { WatchStar } from "./WatchStar";
@@ -37,26 +38,11 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
   const hook = (top?.hook ?? p.hooks[0]?.address ?? "").toLowerCase();
   const hookChain = top?.chainId ?? p.hooks[0]?.chainId;
   const hookHref = hook && hookChain != null ? explorerAddressUrl(hookChain, hook) : null;
-  const cta =
-    link && top
-      ? (() => {
-          const elig = top.eligibility;
-          const tvl = top.tvlUsd; // null = unknown, never $0: it still holds the Swap button back, it is not "no liquidity"
-          const ok = elig === "eligible" && tvl != null && tvl >= 1000 && s0 !== "?" && s1 !== "?";
-          const reason =
-            elig === "ineligible"
-              ? "This hook does not route in the Uniswap app; trading happens through the project's own interface."
-              : elig === "unknown"
-                ? "Routing in the Uniswap app is unknown for this pool."
-                : tvl == null
-                  ? "This pool's liquidity is unknown, so Bait does not send you to swap here."
-                  : tvl < 1000
-                  ? `No liquidity in this pool (${tvl < 1 ? "$0" : "under $1K"} TVL). Volume may not be organic.`
-                  : "One of the tokens could not be identified.";
-          return { ok, reason, label: ok ? "Swap on Uniswap" : "View pool on Uniswap" };
-        })()
-      : null;
-  const share = pace(p.usage.vol24hRolling, p.metrics.vol7d);
+  const cta = link && top ? {
+    reason: routingNote(top.eligibility).detail,
+    label: "View pool on Uniswap",
+  } : null;
+  const share = activityPace(p.usage.vol24hRolling, p.metrics.vol7d);
   const u = p.usage;
   const hasBs = u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0;
   const buyPct = hasBs ? Math.round(((u.buys24h ?? 0) / ((u.buys24h ?? 0) + (u.sells24h ?? 0))) * 100) : 0;
@@ -66,7 +52,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
       <div className={s.swap}>
         <div className={s.swapH}>
           <div className={s.swapT}>
-            <span>Trade</span>
+            <span>Pool details</span>
           </div>
         </div>
         <div className={s.well}>
@@ -82,17 +68,17 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
         </div>
         {cta && link && (
           <>
-            <a className={`${s.cta} ${s.inCard} ${cta.ok ? "" : s.alt}`} href={link} target="_blank" rel="noopener">
+            <a className={`${s.cta} ${s.inCard} ${s.alt}`} href={link} target="_blank" rel="noopener">
               {cta.label}
             </a>
-            {!cta.ok && <div className={s.note}>{cta.reason}</div>}
+            <div className={s.note}>{cta.reason} Bait does not execute trades.</div>
           </>
         )}
       </div>
 
       {hasBs && (
         <div className={`panel ${s.card}`}>
-          <h2>Last 24h</h2>
+          <h2>Rolling 24h at last refresh</h2>
           <div className={s.bsTop}>
             <span className="up num">{int(u.buys24h)} buys</span>
             <span className="down num">{int(u.sells24h)} sells</span>
@@ -103,7 +89,6 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           </div>
           <div className={s.bsSub}>
             <span className="num">{u.buyers24h != null ? `${int(u.buyers24h)} buyers` : ""}</span>
-            <span className="num">{u.wallets24h != null ? `${walletsText(u.wallets24h, u.walletsExact)} wallets` : ""}</span>
             <span className="num">{u.sellers24h != null ? `${int(u.sellers24h)} sellers` : ""}</span>
           </div>
         </div>
@@ -129,18 +114,18 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
           <b>{p.flagLabels.join(", ") || "none listed"}</b>
           <span>Hooks in project</span>
           <b className="num">{int(p.metrics.hooksN)}</b>
-          <span>Last 24h vs daily avg</span>
-          <b className="num">{p.usage.vol24hRolling == null ? NONE : `${share}%`}</b>
+          <span>Rolling 24h vs 7d daily average</span>
+          <b className="num">{share == null ? NONE : `${share}%`}</b>
         </div>
         <div className={s.bar}>
-          <i className={share >= 100 ? s.full : undefined} style={{ width: `${share}%` }} />
+          <i className={share != null && share >= 100 ? s.full : undefined} style={{ width: `${Math.min(100, share ?? 0)}%` }} />
         </div>
       </div>
 
       {cta && link && (
         <div className={s.sticky}>
           <WatchStar slug={p.slug} name={p.name} className={s.stickyStar} />
-          <a className={`${s.cta} ${cta.ok ? "" : s.alt}`} href={link} target="_blank" rel="noopener">
+          <a className={`${s.cta} ${s.alt}`} href={link} target="_blank" rel="noopener">
             {cta.label}
           </a>
         </div>
