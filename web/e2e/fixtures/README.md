@@ -29,11 +29,16 @@ must be evaluated separately against the pipeline's accepted usage and coverage 
 Base had `backfilled=false`. The fixture shows that partial-coverage badge and marks
 coverage unknown because the captured old health response lacks newer required fields.
 
-Run against one freshly built local candidate:
+Run each fixture mode from a fresh build of the same candidate commit. Next's generated
+ISR pages persist between server processes, so clear the generated build before changing
+fixture mode; a different port alone does not isolate that cache.
 
 ```sh
+rm -rf .next
 npm run build
 BAIT_E2E_SHA=<exact-built-commit> npm run e2e
+rm -rf .next
+npm run build
 BAIT_E2E_SHA=<exact-built-commit> BAIT_E2E_REPRESENTATIVE=1 npm run e2e
 ```
 
