@@ -57,7 +57,7 @@ export default function AboutPage() {
               so growth counts more than size; tie-break on TVL. Top 20.
             </li>
             <li>
-              <b>In Uniswap app</b>: at least one pool our rule below says the app will route to. Audit status is a separate badge.
+              <b>Automatic routing</b>: at least one pool meets our automatic-routing rule below. Audit status is a separate badge.
             </li>
             <li>
               <b>Hidden from All</b>: no pools, or every pool under $100 TVL with fewer than 10 swaps lifetime, unless the project moved $1M or more.
@@ -69,7 +69,7 @@ export default function AboutPage() {
           <h2>Wash-like volume</h2>
           <p>
             A project gets the red &quot;Wash-like volume&quot; badge when pools carrying at least half its volume match one of these rules. It stays in All
-            with its page, and never reaches Trending, New, In Uniswap app, movers, Leaders or the weekly digest.
+            with its page, and never reaches Trending, New, Automatic routing, movers, Leaders or the weekly digest.
           </p>
           <ul>
             <li><b>Few wallets</b>: $250K or more in a day through 25 wallets or fewer, or $1M in a week through 10 or fewer, when the pool also shows 7-day volume over 50 times a known TVL, no liquidity, or symmetric trading; or $1M carried by 10 swaps or fewer.</li>
@@ -92,7 +92,7 @@ export default function AboutPage() {
             starts with <code>0x91</code>, or it uses <code>beforeSwapReturnsDelta</code>, <code>afterSwapReturnsDelta</code> or a dynamic fee. Bait computes this from the
             permission bits in the hook address (the chain enforces them) and also treats <code>afterAddLiquidityReturnsDelta</code> and <code>afterRemoveLiquidityReturnsDelta</code> as blocking, which is stricter than the
             published rule. Hooks that Uniswap Labs reviewed and allowlisted by hand will still show as not routable here, because no public list of manual approvals exists.
-            The In Uniswap app tab lists projects with at least one pool our rule says the app will route to: no returnsDelta permission bits, not a 0x91 address, static fee. Hooks without a known pool show Routing unknown. Not in hooklist means we found the hook from its pools, not from Uniswap&apos;s registry; its name and permissions come from the chain. The badge is a rule, not a guarantee. The pink &quot;Swap on Uniswap&quot; button only appears when the rule says a pool should route.
+            The Automatic routing tab lists projects with at least one pool that meets our automatic-routing rule: no returnsDelta permission bits, not a 0x91 address, static fee. Hooks without a known pool show Routing unknown. Not in hooklist means we found the hook from its pools, not from Uniswap&apos;s registry; its name and permissions come from the chain. The badge is a rule, not a guarantee: Bait has not checked current Uniswap routing or quote availability, and it does not execute trades.
           </p>
         </section>
 

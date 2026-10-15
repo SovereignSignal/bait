@@ -7,14 +7,17 @@ never read, but it carries the pool's TVL "now", so a pool created this morning 
 - Volume: a day without a row adds $0 (the pool was not listed, or did not trade). A pool whose cumulative volume at
   window_end is NULL (the onchain step could not measure it) is left out of every volume window, not read as $0; when
   that is every pool of a project, its vol_24h / vol_7d / vol_7d_prev are NULL.
-- Swaps: a pool's count is known when every day of the window is (days before the pool was created count as 0; a pool
-  with no volume in the window adds 0). Otherwise swaps_7d / swaps_24h are NULL, never a 7-day number built from one day.
+- Swaps: a pool's count is known when every day of the window is (days before the pool was created count as 0).
+  Otherwise swaps_7d / swaps_24h are NULL, even at $0 volume: unpriced swaps and missing coverage are not zero activity.
 - A capped hook's aggregate pool (pool id 'hook:<address>', swaps of pools the indexer does not store) adds to the project's
   volume and swaps and to whether its volume is known, never to pools_n or score_trending: its per-pool concentration is
   lost in the aggregate, so no wash rule can judge it.
 - pools_n: per hook, its pools with a snapshot in the window, or hooks.pools_total (every pool initialized through it, from
   the indexer) when larger.
-Wash (rules.WASH_REASONS) is its own flag: listed in All with a badge, never ranked; is_spam is only rules.is_spam.
+Wash (rules.WASH_REASONS) is its own flag: listed in All with a badge, never ranked. Historical usage only exempts listing
+from rules.is_spam; it does not exempt wash controls or add to any recent metric.
+Historical eligibility reads retained UTC-day evidence separately; it never enters recent metrics. A dormant label needs
+qualifying past usage and complete, ready, project-wide seven-day coverage with zero swaps. Missing coverage is unknown.
 Reads stored rows only, so `python -m bait run --steps score --day <d>` writes the same rows however often it runs.
 """
 from __future__ import annotations
@@ -25,13 +28,18 @@ import sqlalchemy as sa
 
 from ..db import (HOOK_POOL_PREFIX, as_utc, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
                   project_daily, projects, upsert)
-from ..rules import (WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
+from ..rules import (SPAM_EXEMPT_VOL, WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
                      is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
 from . import RunContext, log
 from .onchain import owed_before, ready_chains
 
 _D = timedelta(days=1)
+# New historical eligibility floor, not a TVL rule: enough exact Swap events and priced usage to exclude dust.
+HISTORICAL_MIN_SWAPS = 10
+HISTORICAL_MIN_VOLUME = 100
+# A wash finding is remembered through quiet or unknown nights for this long after the last night it was measured.
+WASH_MEMORY_DAYS = 14
 
 
 def window_end(day: date) -> date:
@@ -39,8 +47,15 @@ def window_end(day: date) -> date:
     return day - _D
 
 
-def run(conn: sa.Connection, ctx: RunContext) -> dict:
+def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = None) -> dict:
     day = ctx.day
+    if project_ids is not None:
+        if not project_ids or any(isinstance(pid, bool) or not isinstance(pid, int) for pid in project_ids):
+            raise ValueError("targeted score needs explicit project IDs")
+        existing = set(conn.execute(sa.select(project_daily.c.project_id).where(project_daily.c.day == day,
+                                    project_daily.c.project_id.in_(project_ids))).scalars())
+        if existing != project_ids:
+            raise ValueError("targeted score only updates existing project/day rows")
     end = window_end(day)
     w24, w7, wp = (end, end), (end - 6 * _D, end), (end - 13 * _D, end - 7 * _D)
     hook_rows = conn.execute(sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id, hooks.c.pools_total)
@@ -74,7 +89,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         a = agg.setdefault(pid, _empty())
         now = rows[max(rows)]          # latest row up to the running day: existence and TVL (a pool born this morning counts)
         closed = [d for d in rows if d <= end]
-        cur = rows[max(closed)] if closed else now   # latest closed row: the volume-unknown marker and lifetime volume
+        cur = rows[max(closed)] if closed else now   # latest closed row: the volume-unknown marker and legacy cumulative
         folded = key[0].startswith(HOOK_POOL_PREFIX)
         a["usage_rows"] += 1
         if not folded:                                 # a hook's aggregate pool adds usage, never a pool
@@ -84,9 +99,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         a["max_tvl"] = max(a["max_tvl"], now.tvl_usd or 0.0)
         a["stats"].append((now.tvl_usd or 0.0, max(now.tx_count_cum or 0, cur.tx_count_cum or 0)))
         if cur.volume_usd_cum is not None:
-            a["life"] += cur.volume_usd_cum   # legacy cumulative: a lower bound of lifetime volume, enough for the spam exemption
+            # Legacy cumulative is bounded/reset by sources, not lifetime evidence. Preserve the current spam rule only.
+            a["legacy_volume"] += cur.volume_usd_cum
         pool_tvl[key] = now.tvl_usd
-        quiet: dict[str, bool] = {}
         if cur.volume_usd_cum is None:
             unknown_vol.add(key)
         else:
@@ -94,20 +109,29 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             for name, w in (("vol24", w24), ("vol7", w7), ("vol7p", wp)):
                 v = _vol(rows, w)
                 a[name] += v
+                if ((created is not None and created > w[1])
+                        or any(w[0] <= d <= w[1] and r.volume_usd_day is not None for d, r in rows.items())):
+                    a[name + "_known"] = True
                 if folded:
                     a["fold_" + name] += v
                 if name == "vol7":
                     pool_vol7[key] = v
-                quiet[name] = v == 0
         pool_vol_days[key] = [d for d, r in rows.items() if w7[0] <= d <= w7[1] and (r.volume_usd_day or 0) > 0]
         sb = _swap_bound(rows, w7)
         if sb is not None:
             pool_swaps7[key] = sb
-        for name, w, vol_name in (("tx24", w24, "vol24"), ("tx7", w7, "vol7")):
+        for name, w in (("tx24", w24), ("tx7", w7)):
             n, known = _swaps(rows, w, created)
             a[name] += n
-            if not known and not quiet.get(vol_name, False):
+            if not known:
                 a[name + "_known"] = False
+
+    # A pool missing from the recent snapshot set is missing evidence, even if another pool supplies the project's totals.
+    for key, (pid, created) in pool_project.items():
+        if key not in by_pool and (created is None or created <= end):
+            a = agg.setdefault(pid, _empty())
+            a["tx24_known"] = a["tx7_known"] = False
+            a["missing_rows"] = True
 
     # pools_n: per hook, its pools with a snapshot, or every pool initialized through it (hooks.pools_total) when larger, so a
     # launchpad past the indexer's per-hook cap is not reported as its few traded pools
@@ -118,11 +142,17 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
             extra[r.project_id] = extra.get(r.project_id, 0) + more
 
     ready = _ready(conn, ctx, end)
+    historical, volume_only = _historical_usage(conn, w7[0], pool_project)
+    activity = _activity_status(conn, w7, hook_rows, pool_project, pool_hook, by_pool, ready, historical)
+    # If raw Swap events arrived after the latest snapshot copy, its smaller count is stale, not a measured zero.
+    _check_swap_copy(conn, w7, pool_project, by_pool, agg)
+    prior_wash = _prior_wash(conn, day)
     reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom,
                                   pool_vol_days)
     wallets = _wallets(conn, day, end, ready, pool_project)
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
+    unknown_volume_projects = {pool_project[key][0] for key in unknown_vol}
     # A project's age is its earliest pool when known; on a first run every project was "first seen" today.
     for (pid, created) in pool_project.values():
         if created is not None and pid in first_seen:
@@ -131,36 +161,185 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 first_seen[pid] = c
     rows = []
     for pid, fs in first_seen.items():
+        if project_ids is not None and pid not in project_ids:
+            continue
         a = agg.get(pid) or _empty()
-        spam = is_spam(a["stats"], max(a["life"], a["vol7"]))
-        if not spam and is_spam(a["stats"]) and pid not in reasons and pid not in wallet_known:
+        spam = is_spam(a["stats"], max(a["legacy_volume"], a["vol7"])) and pid not in historical
+        status = activity.get(pid, "unknown")
+        # Measured revival: known positive priced 7-day volume with no unknown-volume pool. It does not require a ready
+        # chain or exact swap counts: the wash rules that can run on this chain's snapshots and top wallets ran tonight,
+        # and a finding they did not reproduce must not outlive them (Base, Robinhood and BNB are never "ready").
+        revival_measured = (status == "active" and a["vol7"] > 0 and a["vol7_known"]
+                            and pid not in unknown_volume_projects)
+        wash_historical = not revival_measured and pid in prior_wash and pid not in reasons
+        if wash_historical:
+            reasons[pid] = list(dict.fromkeys([*reasons.get(pid, []), *prior_wash[pid]]))
+        volume_exempt = is_spam(a["stats"]) and max(a["legacy_volume"], a["vol7"]) >= SPAM_EXEMPT_VOL
+        if not spam and (volume_exempt or pid in volume_only) and pid not in reasons and pid not in wallet_known:
             # escaped the spam rule only by moving >= $1M, and nothing can check who moved it: listed, never ranked
             reasons[pid] = ["unverified"]
+            wash_historical = status != "active" and pid in volume_only and not volume_exempt
         wash = pid in reasons
         # every pool's volume unknown (p5 held it back): the project's volume is unknown, never $0
-        known = a["vol_known"] or not a["usage_rows"]
+        known = a["vol_known"] or (not a["usage_rows"] and not a["missing_rows"])
         young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
         rows.append({
             "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"] + extra.get(pid, 0),
-            "vol_24h": a["vol24"] if known else None, "vol_7d": a["vol7"] if known else None,
-            "vol_7d_prev": a["vol7p"] if known else None,
+            "vol_24h": a["vol24"] if known and a["vol24_known"] else None,
+            "vol_7d": a["vol7"] if known and a["vol7_known"] else None,
+            "vol_7d_prev": a["vol7p"] if known and a["vol7p_known"] else None,
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
             "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
             # folded usage (a capped hook's aggregate pool) is displayed, never ranked: no wash rule can judge it
-            "score_trending": 0.0 if (wash or young) else score_trending(a["vol7"] - a["fold_vol7"], a["vol7p"] - a["fold_vol7p"]),
+            "score_trending": 0.0 if (wash or young or (pid in historical and status != "active")) else score_trending(a["vol7"] - a["fold_vol7"], a["vol7p"] - a["fold_vol7p"]),
             # the known days are a lower bound of the 7-day count, so ">= 10 of them" still proves "swaps_7d >= 10"
-            "is_new": not wash and is_new(fs, day, a["max_tvl"], a["tx7"]),
+            "is_new": not wash and not (pid in historical and status != "active") and is_new(fs, day, a["max_tvl"], a["tx7"]),
             "is_spam": spam,           # true spam only: no pools, or tiny, idle and < $1M
             "is_wash": wash, "wash_reason": ",".join(reasons.get(pid, [])) or None,
+            "has_historical_usage": pid in historical, "activity_status": status,
+            "wash_historical": wash_historical,
         })
     for i in range(0, len(rows), 500):
         upsert(conn, project_daily, rows[i:i + 500], keys=["project_id", "day"])
     trending = sum(1 for r in rows if r["score_trending"] > 0)
+    if project_ids is not None:
+        reasons = {pid: rs for pid, rs in reasons.items() if pid in project_ids}
     counts = {f"wash_{r}": sum(r in rs for rs in reasons.values()) for r in WASH_REASONS}
     if reasons:
         log.info("score: %d wash-like projects (%s)", len(reasons), " ".join(f"{k}={v}" for k, v in counts.items()))
-    return {"projects": len(rows), "with_pools": len(agg), "new": sum(r["is_new"] for r in rows),
+    return {"projects": len(rows), "with_pools": sum(project_ids is None or pid in project_ids for pid in agg), "new": sum(r["is_new"] for r in rows),
             "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(reasons), **counts}
+
+
+def _historical_usage(conn, before: date, pool_project: dict) -> tuple[set[int], set[int]]:
+    """Conservative listing proof strictly before the current seven days, independent of recent metrics.
+
+    Ten exact Swap logs and $100 priced volume in one pool qualify. Alternatively the existing $1M project-volume
+    exemption still lists a large flow, with the unverified wash fallback when exact qualifying usage is absent.
+    Retained pool_daily_onchain rows are never pruned. UTC candle/onchain snapshot volume may establish the volume
+    exemption, but estimated/legacy rows and tx_count_cum (which may include liquidity changes) are not proof. Per pool,
+    take the larger source total, never add overlapping sources or sum cumulative snapshots.
+    """
+    qualified, volume_by_pool = set(), {}
+    q = (sa.select(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id,
+                   sa.func.sum(pool_daily_onchain.c.swaps).label("swaps"),
+                   sa.func.sum(pool_daily_onchain.c.volume_usd).label("volume"))
+         .where(pool_daily_onchain.c.day < before)
+         .group_by(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id))
+    for r in conn.execute(q):
+        key = (r.pool_id, r.chain_id)
+        if key not in pool_project:
+            continue
+        pid, _ = pool_project[key]
+        volume_by_pool[key] = max(0.0, r.volume or 0.0)
+        # Folded rows combine many capped pools. They cannot establish a threshold that applies to one real pool.
+        if (not r.pool_id.startswith(HOOK_POOL_PREFIX) and r.swaps >= HISTORICAL_MIN_SWAPS
+                and volume_by_pool[key] >= HISTORICAL_MIN_VOLUME):
+            qualified.add(pid)
+    q = (sa.select(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id,
+                   sa.func.sum(pool_snapshots.c.volume_usd_day).label("volume"))
+         .where(pool_snapshots.c.day < before, pool_snapshots.c.estimated.is_(False))
+         .group_by(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id))
+    for r in conn.execute(q):
+        key = (r.pool_id, r.chain_id)
+        if key in pool_project:
+            volume_by_pool[key] = max(volume_by_pool.get(key, 0.0), r.volume or 0.0)
+    volumes: dict[int, float] = {}
+    for key, v in volume_by_pool.items():
+        pid, _ = pool_project[key]
+        volumes[pid] = volumes.get(pid, 0.0) + v
+    volume_only = {pid for pid, v in volumes.items() if v >= SPAM_EXEMPT_VOL} - qualified
+    return qualified | volume_only, volume_only
+
+
+def _activity_status(conn, w: tuple[date, date], hook_rows: list, pool_project: dict, pool_hook: dict,
+                     by_pool: dict, ready: list[int], historical: set[int]) -> dict[int, str]:
+    """Positive observed usage proves activity; only complete, ready coverage can prove inactivity.
+
+    Check every mapped pool and hook, including other chains and capped aggregate pools. Snapshot gaps, an unknown pool
+    census, a partial chain history or an owed lookup prevent a dormant label. A positive raw Swap count wins even when
+    pricing/custom accounting makes all dollar values NULL or a snapshot has not yet been copied.
+    """
+    status = {r.project_id: "unknown" for r in hook_rows}
+    positive = set()
+    for key, rows in by_pool.items():
+        if key in pool_project and any(w[0] <= d <= w[1] and ((r.tx_count_day or 0) > 0 or (r.volume_usd_day or 0) > 0)
+                                      for d, r in rows.items()):
+            positive.add(pool_project[key][0])
+    q = (sa.select(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id)
+         .where(pool_daily_onchain.c.day >= w[0], pool_daily_onchain.c.day <= w[1], pool_daily_onchain.c.swaps > 0))
+    for r in conn.execute(q):
+        if (r.pool_id, r.chain_id) in pool_project:
+            positive.add(pool_project[(r.pool_id, r.chain_id)][0])
+    coverage = dict(conn.execute(sa.select(pool_daily_onchain.c.chain_id, sa.func.min(pool_daily_onchain.c.day))
+                                 .where(pool_daily_onchain.c.day <= w[1]).group_by(pool_daily_onchain.c.chain_id)).all())
+    ready = set(ready)
+    complete = set(historical)
+    keys_by_hook: dict[tuple, list[tuple]] = {}
+    for key, (pid, created) in pool_project.items():
+        keys_by_hook.setdefault(pool_hook[key], []).append(key)
+        n, known = _swaps(by_pool.get(key, {}), w, created)
+        if not known or n != 0:
+            complete.discard(pid)
+    for r in hook_rows:
+        keys = keys_by_hook.get((r.chain_id, r.address), [])
+        normal = sum(not k[0].startswith(HOOK_POOL_PREFIX) for k in keys)
+        folded = any(k[0].startswith(HOOK_POOL_PREFIX) for k in keys)
+        if (r.chain_id not in ready or coverage.get(r.chain_id, w[1]) > w[0] or not keys
+                or r.pools_total is None or (r.pools_total > normal and not folded)):
+            complete.discard(r.project_id)
+    status.update({pid: "dormant" for pid in complete})
+    status.update({pid: "active" for pid in positive})
+    return status
+
+
+def _prior_wash(conn, day: date) -> dict[int, list[str]]:
+    """Latest scored suspicion survives inactivity/unknown coverage for WASH_MEMORY_DAYS after it was last measured.
+
+    A carried row (wash_historical) is never the origin of its own memory: the clock runs from the last night a wash
+    rule fired on fresh evidence, so a flag cannot become permanent on a chain whose coverage never completes.
+    """
+    latest = (sa.select(project_daily.c.project_id, sa.func.max(project_daily.c.day).label("day"))
+              .where(project_daily.c.day < day).group_by(project_daily.c.project_id).subquery())
+    q = (sa.select(project_daily.c.project_id, project_daily.c.wash_reason)
+         .join(latest, (project_daily.c.project_id == latest.c.project_id) & (project_daily.c.day == latest.c.day))
+         .where(project_daily.c.is_wash.is_(True)))
+    carried = {r.project_id: [v for v in (r.wash_reason or "unverified").split(",") if v in WASH_REASONS] for r in conn.execute(q)}
+    if not carried:
+        return {}
+    measured = dict(conn.execute(
+        sa.select(project_daily.c.project_id, sa.func.max(project_daily.c.day))
+        .where(project_daily.c.day < day, project_daily.c.is_wash.is_(True), project_daily.c.project_id.in_(carried),
+               sa.or_(project_daily.c.wash_historical.is_(False), project_daily.c.wash_historical.is_(None)))
+        .group_by(project_daily.c.project_id)).all())
+    cutoff = day - WASH_MEMORY_DAYS * _D
+    return {pid: rs for pid, rs in carried.items() if pid in measured and _as_date(measured[pid]) >= cutoff}
+
+
+def _as_date(value) -> date:
+    return date.fromisoformat(value) if isinstance(value, str) else value
+
+
+def _check_swap_copy(conn, w: tuple[date, date], pool_project: dict, by_pool: dict, agg: dict) -> None:
+    """Positive exact events contradict smaller snapshot counts, including on an unready chain. A zero USD total
+    whose snapshot copy is behind is also unknown: preserve measured positive totals, never price the raw events here.
+    """
+    q = sa.select(pool_daily_onchain).where(pool_daily_onchain.c.day >= w[0], pool_daily_onchain.c.day <= w[1],
+                                           pool_daily_onchain.c.swaps > 0)
+    for r in conn.execute(q):
+        key = (r.pool_id, r.chain_id)
+        if key not in pool_project:
+            continue
+        snap = by_pool.get(key, {}).get(r.day)
+        if snap is None or snap.tx_count_day is None or snap.tx_count_day < r.swaps:
+            a = agg.setdefault(pool_project[key][0], _empty())
+            a["tx7_known"] = False
+            if a["vol7"] == 0:
+                a["vol7_known"] = False
+            if r.day == w[1]:
+                a["tx24_known"] = False
+                if a["vol24"] == 0:
+                    a["vol24_known"] = False
 
 
 def _ready(conn, ctx: RunContext, end: date) -> list[int]:
@@ -186,8 +365,9 @@ def _custom(hook: str | None) -> bool:
 
 def _empty() -> dict:
     return {"tvl": 0.0, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
-            "tx24_known": True, "tx7_known": True, "stats": [], "life": 0.0,
-            "vol_known": False, "usage_rows": 0, "fold_vol24": 0.0, "fold_vol7": 0.0, "fold_vol7p": 0.0}
+            "vol24_known": False, "vol7_known": False, "vol7p_known": False,
+            "tx24_known": True, "tx7_known": True, "stats": [], "legacy_volume": 0.0,
+            "vol_known": False, "usage_rows": 0, "missing_rows": False, "fold_vol24": 0.0, "fold_vol7": 0.0, "fold_vol7p": 0.0}
 
 
 def _vol(rows: dict, w: tuple[date, date]) -> float:

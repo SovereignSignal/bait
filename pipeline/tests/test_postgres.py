@@ -321,3 +321,46 @@ def test_repair_backfill_backup_and_restore_on_postgres(pg_engine):
         assert main(["repair", "rescore", "--database-url", os.environ["TEST_DATABASE_URL"]]) == 3
     finally:
         held.close()
+
+
+def test_web_coverage_sql_counts_owed_history_and_keeps_live_edge_separate(pg_engine):
+    """Execute the exact production web SQL on disposable Postgres, including unknown timestamps and UTC edges."""
+    from pathlib import Path
+    import re
+    from datetime import datetime, timezone
+    source = (Path(__file__).resolve().parents[2] / 'web/src/db/health.ts').read_text()
+    query = re.search(r'sql`(with reporting .*?)`', source, re.S).group(1)
+    boundary = datetime(2026, 10, 14, tzinfo=timezone.utc)
+    with pg_engine.begin() as c:
+        pid = c.execute(sa.insert(db.projects).values(slug='coverage', name='Coverage', norm_name='coverage', first_seen_at=NOW)).inserted_primary_key[0]
+        c.execute(sa.insert(db.project_daily).values(project_id=pid, day=boundary.date(), window_end=boundary.date()-timedelta(days=1)))
+        c.execute(sa.insert(db.indexer_state).values(chain_id=8453, backfilled=True, head_block=100, swap_block=100, swap_block_time=boundary, updated_at=boundary))
+        c.execute(sa.insert(db.indexer_state).values(chain_id=1, backfilled=True, head_block=100, swap_block=100, swap_block_time=boundary, updated_at=boundary))
+        for i, at in enumerate((boundary-timedelta(seconds=1), boundary, boundary+timedelta(seconds=1), None)):
+            c.execute(sa.insert(db.pool_lookup_queue).values(chain_id=8453, pool_id=f'0x{i:064x}', from_block=1, seen_block=2, from_time=at))
+        result = {r.chain_id:r for r in c.execute(sa.text(query))}
+        assert result[8453].queued == 4
+        assert result[8453].owed == 2  # strictly before the UTC end, or timestamp unknown
+        assert result[8453].reported_through == '2026-10-13'
+        assert result[1].queued == 0 and result[1].owed == 0
+
+
+def test_fresh_repair_backup_accepts_legacy_writer_and_restores_new_schema(pg_engine):
+    """A rolling-release repair writer names only its old columns; new backup fields must default safely."""
+    from bait import repair
+
+    new_columns = {"has_historical_usage", "activity_status", "wash_historical"}
+    legacy_columns = [c.name for c in db.project_daily.c if c.name not in new_columns]
+    with pg_engine.begin() as conn:
+        pid = conn.execute(sa.insert(db.projects).values(slug="legacy-backup", name="Legacy backup",
+                                                          norm_name="legacy-backup", first_seen_at=NOW)).inserted_primary_key[0]
+        conn.execute(sa.insert(db.project_daily).values(project_id=pid, day=DAY, vol_7d=123, is_spam=False,
+                                                         has_historical_usage=True, activity_status="active"))
+        conn.execute(sa.insert(db.project_daily_p9_backup).from_select(
+            legacy_columns, sa.select(*[db.project_daily.c[name] for name in legacy_columns])))
+        saved = conn.execute(sa.select(db.project_daily_p9_backup)).one()
+        assert (saved.has_historical_usage, saved.activity_status, saved.wash_historical) == (False, None, False)
+        assert repair.restore_day(conn, DAY) == 1
+        restored = conn.execute(sa.select(db.project_daily)).one()
+        assert restored.vol_7d == 123 and restored.is_spam is False
+        assert (restored.has_historical_usage, restored.activity_status, restored.wash_historical) == (False, None, False)

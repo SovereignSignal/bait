@@ -108,6 +108,40 @@ the app read $35.8K at about 01:00 UTC Oct 14, matching the on-chain rolling 24 
   swaps at $0 TVL) is listed in All with its red badge instead of 404ing. Wash-like volume is not spam: see "Wash rules
   (package 8)".
 
+**Historical listing and dormancy (2026-10-15).** Recent snapshot cumulative columns are bounded/reset by their source;
+they are not all-time totals. The existing current spam rule still consumes them for compatibility. Separately,
+`project_daily.has_historical_usage` preserves a listing when retained evidence strictly before the current seven days
+qualifies: at least 10 exact `pool_daily_onchain` Swap events and at least $100 priced volume in one real pool. Folded
+`hook:<address>` aggregates cannot satisfy that per-pool threshold; they can still supply the guarded $1M exemption. This $100
+historical *volume* floor is a new dust guard; it is distinct from the current $100 *TVL* test. The existing $1M project
+volume exemption can also be established from retained exact on-chain or non-estimated UTC-day snapshot volume; without
+the qualifying exact swap proof it keeps the `unverified` wash warning. For each pool the larger source total is used,
+never both overlapping totals. Cumulative snapshots, rolling estimates, old TVL, names, registry membership, source
+verification and audits do not establish this historical exemption. `pool_daily_onchain` is not pruned and snapshot
+days older than the rewritten recent window are retained; no synthetic lifetime counter is required.
+
+`activity_status` is `active` when a recent positive swap count or priced volume is observed, including positive unpriced
+on-chain swaps; it does not imply complete coverage. It is `dormant` only with qualifying historical usage, every mapped
+pool's full seven days of zero swap counts (including capped aggregate pools), a known hook pool census, and ready,
+fresh, backfilled indexers with coverage spanning the window and no owed lookups on every project chain. Other cases are
+`unknown`; legacy unscored rows have NULL status. A missing pool/day, stale chain or unknown coverage never proves zero.
+Snapshot swap counts contradicted by a larger raw on-chain count are NULL until the copy catches up. A volume window
+without any known daily value is NULL; where some pool-days are known, the displayed sum remains a partial observed
+total, not proof of full coverage. Historical evidence never adds to recent volume, swaps, TVL or growth.
+
+Historically qualified records stay in All/search/watchlists/details when coverage is unknown as well as when dormant;
+they are excluded from New/Trending while inactive/unknown. Wash controls remain independent. The latest prior wash
+warning is retained with `wash_historical = true` until a measured revival (positive known priced 7-day volume with no
+unknown-volume pool, on any chain, ready or not) lets current wash rules judge it, or until 14 days
+(`WASH_MEMORY_DAYS`) have passed since the last night a wash rule fired on fresh evidence; carried rows never restart
+that clock, so a flag cannot become permanent on a chain whose coverage never completes (Base, Robinhood, BNB). A
+partial/unpriced revival cannot erase that warning. Neither a historical badge nor a dormant label constitutes a safety
+endorsement.
+
+Migration 0016 adds the fields to project_daily and any existing repair backup; old rows remain unclassified until a score run. Fresh and
+migrated backup tables use false defaults for the new booleans so legacy explicit-column writers remain restorable.
+The web readiness endpoint checks these columns before serving this release.
+
 ## Pipeline (Railway cron service, Python, nightly ~06:00 UTC)
 
 1. ingest hooklist.json -> upsert hooks; diff -> new hook candidates

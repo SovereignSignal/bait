@@ -76,10 +76,12 @@ function plainClick(e: React.MouseEvent): boolean {
 function Delta({ r }: { r: RowView }) {
   if (r.isWash)
     return (
-      <span className="b b-r" title="Wash-like volume: listed here, never ranked.">
-        Wash
+      <span className="b b-r" title={r.washHistorical ? "Historical wash-like volume: an earlier finding, not evidence of wash in the current window." : "Wash-like volume: listed here, never ranked."}>
+        {r.washHistorical ? "Past wash" : "Wash"}
       </span>
     );
+  if (r.isDormant) return <span className="b b-n">Dormant</span>;
+  if (r.activityStatus === "unknown" && r.hasHistoricalUsage) return <span className="b b-n" title="Retained on historical usage; recent coverage cannot establish zero activity.">Unknown</span>;
   if (r.isNew) return <span className="b b-p">New</span>;
   const d = deltaText(r);
   if (!d) return <span className="mut3">{NONE}</span>;
@@ -119,6 +121,8 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
   // hydrates; the boundary must still render what the server did, so search and watchlist wait for the mount.
   const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false);
   const watching = hydrated && t.watchOnly;
+  // The provider can restore storage before this streamed boundary hydrates. Its first count must match SSR.
+  const watchCount = hydrated ? t.watchlist.length : 0;
   const searching = hydrated && t.q.trim().length > 0;
   const hooks = useHookIndex(t.q);
   // Before /api/rows lands, the seeded view is the only one we can draw; any other waits a moment for the full set.
@@ -178,11 +182,11 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
           type="button"
           className={`${s.tab} ${s.watchTab}`}
           aria-pressed={watching}
-          aria-label={`Watchlist, ${t.watchlist.length} saved`}
+          aria-label={`Watchlist, ${watchCount} saved`}
           onClick={() => t.setWatchOnly(!watching)}
         >
           <StarIcon size={14} filled={watching} />
-          <span className="num">{t.watchlist.length}</span>
+          <span className="num">{watchCount}</span>
         </button>
       </nav>
       {!watching && !searching && query.tab === "trending" && (
