@@ -18,6 +18,7 @@ Set `DATABASE_URL` to read Postgres. For local UI work without a database, run w
 |---|---|
 | `/` | terminal: movers strip, project list, detail of the list's first project, trade panel. `?tab=trending\|new\|verified\|all`, `?chain=<slug or id>`, `?category=<slug>`. Server-renders the first 100 rows of that view; tab, category and chain then change on the client (history.pushState). The New tab opens with the "Just launched" feed (latest 20 hooked pool initializations, filtered by the chain select) |
 | `/api/rows` | every listed project as packed rows `{keys, rows}` for the list's search, watchlist and client filtering; `?v=<hash>` from the page, cached a day when it matches, else a minute |
+| `/api/v1/projects`, `/api/v1/projects/[slug]`, `/api/v1/hooks/[address]` | the documented read API (`../docs/api.md`): stable snake_case over the same loads the pages use; 5 min cache, CORS, in-process rate limit (600/min) |
 | `/building` | dev radar: radar items grouped by kind (Launch, Audit, Hackathon, Incubator, Repo, Registry) with kind chips (`?kind=<kind>`), a "Live on Bait" pill when the item matches a project, and the "Just launched" feed. Dynamic (reads `?kind`); reads cached in-process (radar 5 min, launches 30s) |
 | `/api/launches` | latest 20 `v4_pools` rows as `{launches}` for the feed's 60s client refresh; 30s cache; empty list on any error |
 | `/p/[slug]` | the same terminal with that project selected (ISR 1h, hidden for spam-flagged projects; phone shows detail + trade with a back link) |

@@ -77,6 +77,11 @@ Per-service details: [`pipeline/README.md`](pipeline/README.md), [`web/README.md
 | DefiLlama | prices | current prices, so raw indexer USD is an estimate |
 | Exa, Parallel, Claude | links, team and audit details, the two text lines | paid; all three optional and budget-capped |
 
+## Read API
+
+A read-only JSON API serves the same figures the pages show: `/api/v1/projects`, `/api/v1/projects/{slug}` and
+`/api/v1/hooks/{address}`. No key, about 600 requests a minute, documented with examples in [`docs/api.md`](docs/api.md).
+
 ## Deploy
 
 Three services and a Postgres: a cron job, an always-on process, a web process. The reference deployment is Railway

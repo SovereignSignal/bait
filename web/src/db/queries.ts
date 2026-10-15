@@ -76,6 +76,11 @@ function rowOf(p: ProjectDetail): RowView {
 
 // ---------- public API ----------
 
+/** Every listed (non-spam) project with its hooks, for the read API (/api/v1). The same cached load the pages use. */
+export async function getAllProjects(): Promise<ProjectDetail[]> {
+  return (await loadAll()).filter((p) => !p.isSpam);
+}
+
 /** Every non-spam project as a light row (the terminal list, movers, search). */
 export async function getRows(): Promise<RowView[]> {
   return (await getRowSet()).rows;

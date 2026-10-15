@@ -35,6 +35,8 @@ export default function AboutPage() {
             from Nansen labels collected through early October 2026. &quot;Wallets 7d&quot; and the top wallet&apos;s share of swaps come from the indexer
             and are shown at any size, with no threshold; they are unknown unless every chain the project is on has caught up through the week. A project page names the wallet that deployed
             each hook (from the registry, or the explorer&apos;s contract creator) and the share of the week&apos;s swaps those wallets made.
+            The same figures are available as JSON from the read API: /api/v1/projects, /api/v1/projects/[slug] and /api/v1/hooks/[address].
+            The field reference is in the repository under docs/api.md.
           </p>
           <h3>Grouping</h3>
           <p>
