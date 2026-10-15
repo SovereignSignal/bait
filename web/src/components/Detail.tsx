@@ -4,7 +4,7 @@ import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { activityNote, routingNote } from "@/lib/research";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention } from "@/lib/present";
+import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention, topWalletText } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { variants } from "@/lib/variants";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
@@ -45,6 +45,8 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       v: walletsText(u.wallets24h, u.walletsExact),
       title: u.walletsExact === false ? "Upper bound: buyers + sellers per pool, so a wallet that bought and sold counts twice." : win.note,
     },
+    { k: "Wallets 7d", v: int(u.wallets7d), title: "Distinct wallets across the project's pools over the seven closed days, from the indexer. Unknown unless every chain the project is on has caught up through the week." },
+    { k: "Top wallet", v: topWalletText(u.topWalletShare7d), title: "Share of the week's swaps made by the single busiest wallet. Of swaps, not volume. Shown at any size; the wash rules only act past $250K a day." },
     // the closed UTC day, from score; when a day is missing, the rolling buys + sells the trade card shows, marked "≈"
     (u.tx24h == null || (u.tx24h === 0 && (u.wallets24h ?? 0) > 0)) && u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0
       ? { k: "Swaps 24h", v: `≈ ${int(u.buys24h + u.sells24h)}`, title: "Rolling 24h buys + sells from the pool feed; the closed-day count is not in yet." }
@@ -65,6 +67,9 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       : auditMention(p.whatLine, p.whyBlurb)
         ? { cls: "b-a", label: "Audit mentioned, not linked", why: "The description mentions an audit, but neither the registry nor the team's published details link one. Treat it as unverified." }
         : { cls: "b-n", label: "No audit link", why: "No audit link found." },
+    ...(u.topWalletShare7d != null && u.topWalletShare7d >= 0.5 && (u.wallets7d ?? 0) > 0
+      ? [{ cls: "b-a", label: `One wallet, ${topWalletText(u.topWalletShare7d)}`, why: "A single wallet made at least half of this week's swaps across the project's pools. Not a wash finding; small hooks often start this way. Check who it is before reading the volume as demand." }]
+      : []),
     ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
     ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
     ...(!p.isNew && p.rank ? [{ cls: "b-a", label: `#${p.rank} trending`, why: "Rank by 7-day volume growth, among projects older than a week with at least $10K this week and $1K the week before." }] : []),

@@ -170,6 +170,10 @@ project_daily = sa.Table(
     sa.Column("has_historical_usage", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column("activity_status", sa.Text),     # active | dormant | unknown; dormant requires complete 7d zero swaps
     sa.Column("wash_historical", sa.Boolean, nullable=False, server_default=sa.false()),
+    # 0018: wallet concentration over the 7-day window, from the indexer's exact per-wallet swap counts. NULL = unknown
+    # (a chain of the project is not ready or its history does not cover the window). The share is of swaps, not volume.
+    sa.Column("wallets_7d", sa.Integer),
+    sa.Column("top_wallet_share_7d", sa.Float),
     sa.Index("project_daily_day_score_idx", "day", "score_trending"),
 )
 
@@ -467,6 +471,10 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("project_daily_p9_backup", "has_historical_usage", "boolean NOT NULL DEFAULT false"),
     ("project_daily_p9_backup", "activity_status", "text"),
     ("project_daily_p9_backup", "wash_historical", "boolean NOT NULL DEFAULT false"),
+    ("project_daily", "wallets_7d", "integer"),
+    ("project_daily", "top_wallet_share_7d", "double precision"),
+    ("project_daily_p9_backup", "wallets_7d", "integer"),
+    ("project_daily_p9_backup", "top_wallet_share_7d", "double precision"),
     ("v4_pools", "sampled", "boolean NOT NULL DEFAULT false"),
     ("hooks", "pools_total", "bigint"),
     ("hooks", "code_shape", "text"),

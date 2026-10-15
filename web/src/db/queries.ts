@@ -46,7 +46,7 @@ const SMART_MONEY_MARKERS = ["smart money", "fund", "smart trader", "smart lp", 
 
 const KNOWN_CHAINS = sql.raw(`array[${Object.keys(CHAINS).join(",")}]::int[]`);
 
-const EMPTY_USAGE: Usage = { vol24h: null, vol24hRolling: null, tx24h: null, wallets24h: null, walletsExact: null, buys24h: null, sells24h: null, buyers24h: null, sellers24h: null, smartWallets: null };
+const EMPTY_USAGE: Usage = { vol24h: null, vol24hRolling: null, tx24h: null, wallets24h: null, walletsExact: null, wallets7d: null, topWalletShare7d: null, buys24h: null, sells24h: null, buyers24h: null, sellers24h: null, smartWallets: null };
 
 // ---------- derivation shared by both sources ----------
 
@@ -550,6 +550,8 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
       tx24h: d?.swaps24h ?? null,
       wallets24h: d?.wallets24h ?? null,
       walletsExact: d?.walletsExact ?? null,
+      wallets7d: d?.wallets7d ?? null,
+      topWalletShare7d: d?.topWalletShare7d ?? null,
       vol24hRolling: su ? num(su.rolling) : null,
       buys24h: su ? num(su.buys) : null,
       sells24h: su ? num(su.sells) : null,

@@ -1,7 +1,7 @@
 // One project, one set of figures across pages: names, counts, TVL and audit badges (demo smoke, 2026-10-14).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditLinks, auditMention, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
+import { auditLinks, auditMention, topWalletText, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
 import type { DigestItem } from "./types";
 
 const item = (slug: string, name: string, kind: DigestItem["kind"] = "trending"): DigestItem => ({ slug, name, kind, line: "", vol7d: 1 });
@@ -66,4 +66,12 @@ test("audit badge vs text: generated prose that names an audit without a link is
   assert.equal(auditMention("A per-block auction sells the right to arbitrage.", "LPs keep value."), false);
   assert.equal(auditMention("An auditorium of traders"), false);     // whole word only
   assert.equal(auditMention(null, undefined), false);
+});
+
+test("top wallet share reads as a share of swaps at any size, and unknown as a dash", () => {
+  assert.equal(topWalletText(null), "–");
+  assert.equal(topWalletText(0.3333), "33% of swaps");
+  assert.equal(topWalletText(0.8889), "89% of swaps");
+  assert.equal(topWalletText(1), "100% of swaps");
+  assert.equal(topWalletText(0.004), "<1% of swaps");
 });
