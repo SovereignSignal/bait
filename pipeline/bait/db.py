@@ -174,11 +174,14 @@ project_daily = sa.Table(
 )
 
 # Package 9 (`repair rescore`): the pre-repair copy of each re-scored day, so `repair rescore --restore` can put it back.
-# Same columns as project_daily, no defaults or foreign key (a copy, never read by the feed). create_all creates it; drop
-# it in the cleanup that removes the legacy cumulative columns (DESIGN.md "Data issues backlog").
+# Same columns as project_daily, no foreign key (a copy, never read by the feed). The new boolean fields keep false
+# defaults so a legacy repair writer that omits them still makes a restorable backup. Other values are copied explicitly.
+# create_all creates it; drop it with the legacy cumulative columns (DESIGN.md "Data issues backlog").
 project_daily_p9_backup = sa.Table(
     "project_daily_p9_backup", metadata,
-    *[sa.Column(c.name, c.type, primary_key=c.primary_key) for c in project_daily.c],
+    *[sa.Column(c.name, c.type, primary_key=c.primary_key,
+                **({"nullable": False, "server_default": sa.false()}
+                   if c.name in {"has_historical_usage", "wash_historical"} else {})) for c in project_daily.c],
 )
 
 signals = sa.Table(

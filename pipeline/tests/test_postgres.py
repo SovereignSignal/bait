@@ -343,3 +343,24 @@ def test_web_coverage_sql_counts_owed_history_and_keeps_live_edge_separate(pg_en
         assert result[8453].owed == 2  # strictly before the UTC end, or timestamp unknown
         assert result[8453].reported_through == '2026-10-13'
         assert result[1].queued == 0 and result[1].owed == 0
+
+
+def test_fresh_repair_backup_accepts_legacy_writer_and_restores_new_schema(pg_engine):
+    """A rolling-release repair writer names only its old columns; new backup fields must default safely."""
+    from bait import repair
+
+    new_columns = {"has_historical_usage", "activity_status", "wash_historical"}
+    legacy_columns = [c.name for c in db.project_daily.c if c.name not in new_columns]
+    with pg_engine.begin() as conn:
+        pid = conn.execute(sa.insert(db.projects).values(slug="legacy-backup", name="Legacy backup",
+                                                          norm_name="legacy-backup", first_seen_at=NOW)).inserted_primary_key[0]
+        conn.execute(sa.insert(db.project_daily).values(project_id=pid, day=DAY, vol_7d=123, is_spam=False,
+                                                         has_historical_usage=True, activity_status="active"))
+        conn.execute(sa.insert(db.project_daily_p9_backup).from_select(
+            legacy_columns, sa.select(*[db.project_daily.c[name] for name in legacy_columns])))
+        saved = conn.execute(sa.select(db.project_daily_p9_backup)).one()
+        assert (saved.has_historical_usage, saved.activity_status, saved.wash_historical) == (False, None, False)
+        assert repair.restore_day(conn, DAY) == 1
+        restored = conn.execute(sa.select(db.project_daily)).one()
+        assert restored.vol_7d == 123 and restored.is_spam is False
+        assert (restored.has_historical_usage, restored.activity_status, restored.wash_historical) == (False, None, False)

@@ -217,7 +217,9 @@ def _historical_usage(conn, before: date, pool_project: dict) -> tuple[set[int],
             continue
         pid, _ = pool_project[key]
         volume_by_pool[key] = max(0.0, r.volume or 0.0)
-        if r.swaps >= HISTORICAL_MIN_SWAPS and volume_by_pool[key] >= HISTORICAL_MIN_VOLUME:
+        # Folded rows combine many capped pools. They cannot establish a threshold that applies to one real pool.
+        if (not r.pool_id.startswith(HOOK_POOL_PREFIX) and r.swaps >= HISTORICAL_MIN_SWAPS
+                and volume_by_pool[key] >= HISTORICAL_MIN_VOLUME):
             qualified.add(pid)
     q = (sa.select(pool_snapshots.c.pool_id, pool_snapshots.c.chain_id,
                    sa.func.sum(pool_snapshots.c.volume_usd_day).label("volume"))
