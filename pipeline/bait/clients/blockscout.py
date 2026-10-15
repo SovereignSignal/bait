@@ -62,6 +62,22 @@ class Blockscout:
             **_proxy_verdict(d, code),
         )
 
+    def fetch_creator(self, chain_id: int, address: str) -> tuple[str | None, bool]:
+        """The address that deployed a contract, from Blockscout's address record (creator_address_hash), lowercased.
+        Returns (creator, definitive): definitive is False on a transport error, a bot challenge or a 5xx, so the caller
+        asks again next run; a 404 or a record without a creator is a definitive miss (an EOA, or an unindexed chain)."""
+        base = self.base_url(chain_id)
+        if not base:
+            return None, True
+        try:
+            d = http.get_json(self.c, f"{base}/api/v2/addresses/{address}", params=self.params)
+        except httpx.HTTPStatusError as e:
+            return None, e.response.status_code == 404
+        except (httpx.HTTPError, ValueError):
+            return None, False
+        creator = d.get("creator_address_hash") if isinstance(d, dict) else None
+        return (creator.lower() if isinstance(creator, str) and creator.startswith("0x") and len(creator) == 42 else None), True
+
     def _from_eth_get_code(self, base: str, address: str) -> CodeInfo | None:
         try:
             d = http.get_json(self.c, f"{base}/api", params={

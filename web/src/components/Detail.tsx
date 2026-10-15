@@ -4,7 +4,7 @@ import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { activityNote, routingNote } from "@/lib/research";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention, topWalletText } from "@/lib/present";
+import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention, topWalletText, deployerShareText, deployersOf } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { variants } from "@/lib/variants";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
@@ -47,6 +47,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     },
     { k: "Wallets 7d", v: int(u.wallets7d), title: "Distinct wallets across the project's pools over the seven closed days, from the indexer. Unknown unless every chain the project is on has caught up through the week." },
     { k: "Top wallet", v: topWalletText(u.topWalletShare7d), title: "Share of the week's swaps made by the single busiest wallet. Of swaps, not volume. Shown at any size; the wash rules only act past $250K a day." },
+    { k: "Deployer's swaps", v: deployerShareText(u.deployerSwapShare7d), title: "Share of the week's swaps made by the wallets that deployed this project's hooks (registry-supplied or the explorer's contract creator; CREATE2 factories excluded). Unknown when no deployer is known or coverage is incomplete. A team's own trades are not outside demand." },
     // the closed UTC day, from score; when a day is missing, the rolling buys + sells the trade card shows, marked "≈"
     (u.tx24h == null || (u.tx24h === 0 && (u.wallets24h ?? 0) > 0)) && u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0
       ? { k: "Swaps 24h", v: `≈ ${int(u.buys24h + u.sells24h)}`, title: "Rolling 24h buys + sells from the pool feed; the closed-day count is not in yet." }
@@ -70,6 +71,9 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     ...(u.topWalletShare7d != null && u.topWalletShare7d >= 0.5 && (u.wallets7d ?? 0) > 0
       ? [{ cls: "b-a", label: `One wallet, ${topWalletText(u.topWalletShare7d)}`, why: "A single wallet made at least half of this week's swaps across the project's pools. Not a wash finding; small hooks often start this way. Check who it is before reading the volume as demand." }]
       : []),
+    ...(u.deployerSwapShare7d != null && u.deployerSwapShare7d >= 0.5
+      ? [{ cls: "b-a", label: `Deployer made ${topWalletText(u.deployerSwapShare7d)}`, why: "The wallets that deployed this project's hooks made at least half of this week's swaps. The team trading its own pools is not outside demand; the volume may still be real." }]
+      : []),
     ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
     ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
     ...(!p.isNew && p.rank ? [{ cls: "b-a", label: `#${p.rank} trending`, why: "Rank by 7-day volume growth, among projects older than a week with at least $10K this week and $1K the week before." }] : []),
@@ -79,6 +83,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
   ];
   const partial = p.chains.filter((c) => fresh?.partialChains?.includes(c));
   const vs = variants(p.hooks);
+  const deployers = deployersOf(p.hooks);
   const busy = busiestPool(p);
   const pools = `${int(p.metrics.poolsN)} pool${p.metrics.poolsN === 1 ? "" : "s"}`;
   const why =
@@ -120,6 +125,22 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
                 ))}
                 {vs.length > VARIANTS_SHOWN && <span className="b b-n">+{vs.length - VARIANTS_SHOWN} more</span>}
               </div>
+            )}
+            {deployers.length > 0 && (
+              <p className="mut3" data-testid="deployer">
+                Deployer{deployers.length > 1 ? "s" : ""}:{" "}
+                {deployers.slice(0, 2).map((d, i) => {
+                  const href = explorerAddressUrl(d.chainId, d.address);
+                  const label = `${shortAddr(d.address)} (${chainNames([d.chainId], "")}, ${d.source === "hooklist" ? "registry" : d.source === "explorer" ? "contract creator" : "source unknown"})`;
+                  return (
+                    <span key={`${d.chainId}:${d.address}`}>
+                      {i > 0 ? ", " : ""}
+                      {href ? <a href={href} target="_blank" rel="noopener nofollow" className="mono">{label} ↗</a> : <span className="mono">{label}</span>}
+                    </span>
+                  );
+                })}
+                {deployers.length > 2 ? ` +${deployers.length - 2} more` : ""}
+              </p>
             )}
             {/* the titles above are hover-only; this works on touch and keyboard */}
             <details className={s.badgeHelp}>

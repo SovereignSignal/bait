@@ -154,6 +154,7 @@ function build(raw: Raw, i: number): ProjectDetail {
     auditUrl: raw.audited ? "https://github.com/Uniswap/hooklist" : null,
     hooklisted: raw.hooklisted,
     deployer: null,
+    deployerSource: null,
     firstSeenAt,
   }));
   const pools: PoolView[] = raw.top
@@ -224,6 +225,7 @@ function build(raw: Raw, i: number): ProjectDetail {
       smartWallets: topWallets.filter((w) => w.smartMoney).length,
       wallets7d: null,
       topWalletShare7d: null,
+      deployerSwapShare7d: null,
     },
     isNew,
     isSpam: false,

@@ -45,6 +45,8 @@ export const hooks = pgTable(
     auditUrl: text("audit_url"),
     hooklisted: boolean("hooklisted"),
     deployer: text("deployer"),
+    deployerSource: text("deployer_source").$type<"hooklist" | "explorer">(), // 0019: registry-supplied or the explorer's contract creator
+    deployerCheckedAt: timestamp("deployer_checked_at", { withTimezone: true }),
     codeHash: text("code_hash"),
     projectId: integer("project_id").references(() => projects.id),
     firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
@@ -107,6 +109,7 @@ export const projectDaily = pgTable(
     walletsExact: boolean("wallets_exact"), // true = distinct across the project's pools; false = upper bound
     wallets7d: integer("wallets_7d"), // 0018: distinct wallets over the 7-day window from the indexer; NULL = unknown
     topWalletShare7d: doublePrecision("top_wallet_share_7d"), // busiest wallet's share of the window's swaps (0..1)
+    deployerSwapShare7d: doublePrecision("deployer_swap_share_7d"), // 0019: known deployer wallets' share of the window's swaps; NULL = no deployer known or coverage unknown
     isWash: boolean("is_wash").notNull().default(false),
     washHistorical: boolean("wash_historical").notNull().default(false),
     washReason: text("wash_reason"), // comma list: 24h, 7d, vol_tvl, no_liquidity, symmetric

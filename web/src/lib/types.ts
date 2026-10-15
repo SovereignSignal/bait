@@ -70,6 +70,8 @@ export interface HookView {
   /** in the Uniswap hooklist as of the last ingest; null = not yet evaluated */
   hooklisted: boolean | null;
   deployer: string | null;
+  /** where the deployer came from: the hooklist registry, or the explorer's contract creator; null when unknown */
+  deployerSource: "hooklist" | "explorer" | null;
   firstSeenAt: string; // ISO
 }
 
@@ -113,6 +115,8 @@ export interface Usage {
   wallets7d: number | null;
   /** the busiest wallet's share of the window's swaps (0..1); of swaps, not volume; null when wallets7d is null or zero */
   topWalletShare7d: number | null;
+  /** the project's known deployer wallets' share of the window's swaps (0..1); null when no deployer is known or coverage is unknown */
+  deployerSwapShare7d: number | null;
   buys24h: number | null;
   sells24h: number | null;
   buyers24h: number | null;

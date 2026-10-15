@@ -160,8 +160,9 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out["unassigned"] = len(unassigned)
 
     # Name what is still "Unlisted hook ..." from verified source (free), merging same-named hooks on a chain.
-    from . import names
+    from . import deployers, names
     names.run(conn, ctx, out)
+    deployers.run(conn, ctx, out)
     for snap in splits:                                  # split projects' slugs and paid facts follow their hooks
         names.settle_split(conn, snap, ctx.now)
     # Rule 4 last, so projects the rules above created tonight (a new hooklist name, a verified-source name) merge

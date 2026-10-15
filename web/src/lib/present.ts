@@ -1,4 +1,5 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
+import type { HookView } from "./types";
 import { CHAINS, knownChain } from "./chains";
 import { weekDelta } from "./feed";
 import { clip, dayLabel, deltaWords, fmtDelta, int, usd } from "./format";
@@ -169,6 +170,24 @@ export function topWalletText(share: number | null): string {
   if (share == null) return int(null);
   const pct = share * 100;
   return `${pct >= 99.5 ? "100" : pct < 1 ? "<1" : Math.round(pct)}% of swaps`;
+}
+
+/** The known deployer wallets' share of the week's swaps: unknown as a dash, a known deployer that did not trade as "none". */
+export function deployerShareText(share: number | null): string {
+  if (share == null) return int(null);
+  if (share === 0) return "none";
+  return topWalletText(share);
+}
+
+/** Distinct deployer wallets across a project's hooks, registry-supplied first, for the page's "Deployer" line. */
+export function deployersOf(hooks: Array<Pick<HookView, "chainId" | "deployer" | "deployerSource">>): Array<{ chainId: ChainId; address: string; source: "hooklist" | "explorer" | null }> {
+  const seen = new Map<string, { chainId: ChainId; address: string; source: "hooklist" | "explorer" | null }>();
+  for (const h of hooks) {
+    if (!h.deployer) continue;
+    const k = `${h.chainId}:${h.deployer.toLowerCase()}`;
+    if (!seen.has(k)) seen.set(k, { chainId: h.chainId, address: h.deployer.toLowerCase(), source: h.deployerSource ?? null });
+  }
+  return [...seen.values()].sort((a, b) => Number(b.source === "hooklist") - Number(a.source === "hooklist"));
 }
 
 export function walletsText(n: number | null, exact: boolean | null): string {
