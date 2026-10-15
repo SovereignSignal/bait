@@ -58,6 +58,29 @@ def test_never_active_or_dust_is_not_historical_legitimacy(conn, ctx, swaps, vol
     assert d.is_spam and not d.has_historical_usage and d.activity_status == "unknown"
 
 
+@pytest.mark.parametrize("volume", [100, 1_000_000])
+def test_folded_historical_swaps_cannot_qualify_as_one_real_pool(conn, ctx, volume):
+    pid = _project(conn, old_swaps=None)
+    folded = db.hook_pool_id("0xhistorical")
+    insert_pool(conn, folded, 10, "0xhistorical", created=NOW - timedelta(days=90))
+    conn.execute(sa.update(db.hooks).values(pools_total=11))
+    # This may be ten separate one-swap/$10 dust pools, not ten swaps/$100 in one pool.
+    conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id=folded, day=OLD,
+                                                        swaps=10, volume_usd=volume))
+    for day in WEEK:
+        insert_snap(conn, folded, 10, day, 0, 0, 0, vol_day=0, tx_day=0)
+    score.run(conn, ctx)
+    d = _row(conn, pid)
+    if volume == 100:
+        assert d.is_spam and not d.has_historical_usage and d.activity_status == "unknown"
+    else:
+        # The existing large-project-volume exemption is independent and retains its wash safeguard.
+        assert not d.is_spam and d.has_historical_usage
+        assert d.is_wash and d.wash_reason == "unverified" and d.wash_historical
+    assert not d.is_new and d.score_trending == 0
+    assert (d.vol_24h, d.vol_7d, d.swaps_24h, d.swaps_7d) == (0, 0, 0, 0)
+
+
 @pytest.mark.parametrize("problem", ["missing_day", "missing_pool", "other_chain", "stale", "not_backfilled",
                                       "unknown_census", "capped_missing", "owed_lookup"])
 def test_incomplete_coverage_retains_history_but_never_calls_it_dormant(conn, ctx, problem):

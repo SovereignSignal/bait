@@ -8,7 +8,7 @@ import postgres from "postgres";
 
 const testUrl = process.env.BAIT_TEST_DATABASE_URL;
 
-test("Postgres project pages preserve unknown/zero windows and the pipeline listing contract", { skip: !testUrl }, async () => {
+test("Postgres readiness requires migration 0016 and project pages preserve unknown/zero windows", { skip: !testUrl }, async () => {
   const target = new URL(testUrl!);
   const socket = !target.hostname && process.env.PGHOST?.startsWith("/tmp/");
   assert.ok(socket || ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname), "Test database must be local");
@@ -21,10 +21,24 @@ test("Postgres project pages preserve unknown/zero windows and the pipeline list
   const oldDatabase = process.env.DATABASE_URL;
   const oldFixtures = process.env.BAIT_FIXTURES;
   try {
+    process.env.DATABASE_URL = isolatedUrl;
+    delete process.env.BAIT_FIXTURES;
+    const { GET: ready } = await import("../app/api/ready/route");
     const dir = new URL("../../../db/migrations/", import.meta.url);
     for (const file of readdirSync(dir).filter(f => f.endsWith(".sql")).sort()) {
+      if (file === "0016_historical_usage.sql") {
+        const beforeMigration = await ready();
+        assert.equal(beforeMigration.status, 503);
+        assert.equal(beforeMigration.headers.get("Cache-Control"), "no-store");
+        assert.deepEqual(await beforeMigration.json(), { ok: false, reason: "database or required schema unavailable" });
+      }
       await sql.unsafe(readFileSync(new URL(file, dir), "utf8"));
     }
+    // An empty database is ready once its schema is compatible; no run receipt or fresh data is required.
+    const migrated = await ready();
+    assert.equal(migrated.status, 200);
+    assert.equal(migrated.headers.get("Cache-Control"), "no-store");
+    assert.deepEqual(await migrated.json(), { ok: true });
     const states = ["dormant", "missing", "partial", "raw-ahead", "legacy-volume", "before-created", "dust", "prior-wash",
       "raw-earlier", "raw-measured", "raw-earlier-measured", "raw-positive-week-only"];
     for (const [index, name] of states.entries()) {
@@ -62,8 +76,6 @@ test("Postgres project pages preserve unknown/zero windows and the pipeline list
           values (${pool}, 1, ${name.startsWith("raw-earlier") ? "2026-10-10" : "2026-10-14"}, 2, 2)`;
       }
     }
-    process.env.DATABASE_URL = isolatedUrl;
-    delete process.env.BAIT_FIXTURES;
     const { getProjectPage, getHookIndex } = await import("../db/queries");
     const dormant = await getProjectPage("dormant");
     assert.equal(dormant.project?.isDormant, true);

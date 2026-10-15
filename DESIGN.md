@@ -111,7 +111,8 @@ the app read $35.8K at about 01:00 UTC Oct 14, matching the on-chain rolling 24 
 **Historical listing and dormancy (2026-10-15).** Recent snapshot cumulative columns are bounded/reset by their source;
 they are not all-time totals. The existing current spam rule still consumes them for compatibility. Separately,
 `project_daily.has_historical_usage` preserves a listing when retained evidence strictly before the current seven days
-qualifies: at least 10 exact `pool_daily_onchain` Swap events and at least $100 priced volume in one pool. This $100
+qualifies: at least 10 exact `pool_daily_onchain` Swap events and at least $100 priced volume in one real pool. Folded
+`hook:<address>` aggregates cannot satisfy that per-pool threshold; they can still supply the guarded $1M exemption. This $100
 historical *volume* floor is a new dust guard; it is distinct from the current $100 *TVL* test. The existing $1M project
 volume exemption can also be established from retained exact on-chain or non-estimated UTC-day snapshot volume; without
 the qualifying exact swap proof it keeps the `unverified` wash warning. For each pool the larger source total is used,
@@ -137,7 +138,9 @@ revival cannot erase that warning. Neither a historical badge nor a dormant labe
 This classifier does not import missing historical evidence or add support for a hook's custom Swap event. Projects
 whose old activity is independently documented but absent from accepted stored sources still require a reviewed source
 integration/backfill; no project name or protocol-specific exception is used to conceal that gap. Migration 0016 adds
-the fields to project_daily and any existing repair backup; old rows remain unclassified until a score run.
+the fields to project_daily and any existing repair backup; old rows remain unclassified until a score run. Fresh and
+migrated backup tables use false defaults for the new booleans so legacy explicit-column writers remain restorable.
+The web readiness endpoint checks these columns before serving this release.
 
 ## Pipeline (Railway cron service, Python, nightly ~06:00 UTC)
 
