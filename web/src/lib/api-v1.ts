@@ -97,6 +97,7 @@ export function projectSummaryV1(p: ProjectSummary & { rank?: number }, site: st
     is_factory: p.isFactory,
     upgradeable: p.upgradeable,
     routable: p.signals.routable,
+    routing_source: p.signals.routingSource ?? "rule",
     audit_url: p.signals.auditUrl ?? null,
     status: {
       is_new: p.isNew,
@@ -167,6 +168,7 @@ function poolV1(x: PoolView) {
     wallets_24h: num(x.wallets24h),
     wallets_24h_exact: x.walletsExact,
     routable: x.eligibility,
+    routing_source: x.routingSource ?? "rule",
   };
 }
 

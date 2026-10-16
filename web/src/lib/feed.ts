@@ -59,7 +59,7 @@ export function weekDelta(r: { vol7d: number | null; vol7dPrev: number | null })
   return r.vol7dPrev >= 1000 ? (r.vol7d / r.vol7dPrev - 1) * 100 : null;
 }
 
-/** Conservative automatic-routing criteria only. Individual Uniswap approvals and quote availability are not checked. */
+/** Uniswap's published allowlist, else its automatic rule; never a denylisted hook. Quote availability is not checked. */
 export function inApp(r: { routable: Eligibility }): boolean {
   return r.routable === "eligible";
 }
@@ -166,7 +166,7 @@ export function moversFor<T extends { chains: ChainId[] }>(rows: T[], chain?: Ch
 
 /** "No new Launchpad hooks on Base." for a filter that matched nothing. */
 export function emptyCopy(q: FeedQuery): string {
-  const adj = q.tab === "new" ? "new " : q.tab === "trending" ? "trending " : q.tab === "verified" ? "automatic-routing " : "";
+  const adj = q.tab === "new" ? "new " : q.tab === "trending" ? "trending " : q.tab === "verified" ? "routable " : "";
   const cat = q.category ? `${CATEGORY_LABEL[q.category]} ` : "";
   return `No ${adj}${cat}hooks${q.chain && CHAINS[q.chain] ? ` on ${CHAINS[q.chain].name}` : ""}.`;
 }

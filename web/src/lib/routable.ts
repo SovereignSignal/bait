@@ -1,4 +1,5 @@
 import type { Eligibility, HookFlags, HookProperties } from "./types";
+import { listedOn, type RoutingLists, type RoutingSource } from "./uniswap-routing";
 
 export type { Eligibility } from "./types";
 
@@ -57,26 +58,58 @@ export function isRoutable(
   return eligibility(address, flags, properties) === "eligible";
 }
 
+/** Routing for one pool: Uniswap's published lists first (the denylist wins), then the automatic rule. */
+export function poolRouting(
+  address: string,
+  chainId: number,
+  properties: Partial<HookProperties> | null | undefined,
+  poolFee: number | null | undefined,
+  lists?: RoutingLists,
+): { state: Eligibility; source: RoutingSource } {
+  const listed = listedOn(lists, chainId, address);
+  if (listed === "denylist") return { state: "ineligible", source: "denylist" };
+  if (listed === "allowlist") return { state: "eligible", source: "allowlist" };
+  return { state: eligibility(address, null, properties, poolFee), source: "rule" };
+}
+
 /**
- * A project routes if at least one of its pools does. A hook with known pools is judged per pool (that pool's fee
- * decides dynamic fee); a hook with none falls back to its own properties. Ineligible only when every hook is
- * ineligible on its own (0x91 or delta bits) or every known pool is dynamic; anything else short of eligible is unknown.
+ * A project routes if at least one of its pools does. A hook on Uniswap's denylist never routes and one on its
+ * allowlist always does (whatever its bits or fee); otherwise a hook with known pools is judged per pool (that pool's fee
+ * decides dynamic fee) and a hook with none falls back to its own properties. The address bits (0x91, returns-delta) rule
+ * a hook out before any pool is read; a hook's dynamicFee property never does when its pools are known, because a static
+ * pool through it is still eligible. Ineligible only when every hook is; anything else short of eligible is unknown.
  */
-export function projectRoutable(
-  hooks: Array<{ address: string; properties: Partial<HookProperties> | null | undefined }>,
-  pools: Array<{ hookAddress: string; fee: number | null | undefined }>,
-): Eligibility {
-  const results: Eligibility[] = [];
+export function projectRouting(
+  hooks: Array<{ address: string; chainId?: number; properties: Partial<HookProperties> | null | undefined }>,
+  pools: Array<{ hookAddress: string; chainId?: number; fee: number | null | undefined }>,
+  lists?: RoutingLists,
+): { state: Eligibility; source: RoutingSource } {
+  const results: Array<{ state: Eligibility; source: RoutingSource }> = [];
   for (const h of hooks) {
-    const own = eligibility(h.address, null, h.properties);
-    if (own === "ineligible") { results.push(own); continue; }
-    const hp = pools.filter((p) => p.hookAddress.toLowerCase() === h.address.toLowerCase() && p.fee != null);
-    if (hp.length === 0) { results.push(own); continue; } // "eligible" via properties, or "unknown"
-    results.push(...hp.map((p) => eligibility(h.address, null, h.properties, p.fee)));
+    const listed = h.chainId != null ? listedOn(lists, h.chainId, h.address) : null;
+    if (listed === "denylist") { results.push({ state: "ineligible", source: "denylist" }); continue; }
+    if (listed === "allowlist") { results.push({ state: "eligible", source: "allowlist" }); continue; }
+    if (eligibility(h.address, null, {}) === "ineligible") { results.push({ state: "ineligible", source: "rule" }); continue; }
+    const addr = h.address.toLowerCase();
+    const hp = pools.filter((p) => p.hookAddress.toLowerCase() === addr && p.fee != null
+      && (p.chainId == null || h.chainId == null || p.chainId === h.chainId));
+    if (hp.length === 0) { results.push({ state: eligibility(h.address, null, h.properties), source: "rule" }); continue; }
+    results.push(...hp.map((p) => ({ state: eligibility(h.address, null, h.properties, p.fee), source: "rule" as const })));
   }
-  if (results.includes("eligible")) return "eligible";
-  if (results.length && results.every((r) => r === "ineligible")) return "ineligible";
-  return "unknown";
+  const eligible = results.filter((r) => r.state === "eligible");
+  if (eligible.length) return { state: "eligible", source: eligible.some((r) => r.source === "allowlist") ? "allowlist" : "rule" };
+  if (results.length && results.every((r) => r.state === "ineligible")) {
+    return { state: "ineligible", source: results.some((r) => r.source === "denylist") ? "denylist" : "rule" };
+  }
+  return { state: "unknown", source: "rule" };
+}
+
+export function projectRoutable(
+  hooks: Array<{ address: string; chainId?: number; properties: Partial<HookProperties> | null | undefined }>,
+  pools: Array<{ hookAddress: string; chainId?: number; fee: number | null | undefined }>,
+  lists?: RoutingLists,
+): Eligibility {
+  return projectRouting(hooks, pools, lists).state;
 }
 
 const FLAG_SHORT: Array<[keyof HookFlags, string]> = [

@@ -1,5 +1,6 @@
 // View types shared by the DB query layer and the fixture fallback.
 // Everything the pages render comes through these shapes.
+import type { RoutingSource } from "./uniswap-routing";
 
 export type ChainId = 1 | 10 | 56 | 130 | 137 | 4663 | 8453 | 42161 | 43114 | 57073;
 
@@ -26,12 +27,12 @@ export type Tab = "trending" | "new" | "verified" | "all";
 export const TABS: Array<[Tab, string]> = [
   ["trending", "Trending"],
   ["new", "New"],
-  ["verified", "Automatic routing"],
+  ["verified", "Routable"],
   ["all", "All"],
 ];
 
 /** Visible label in the 320 px list column, where the full names plus the star need ~318 px of ~294; the full name stays the accessible name. */
-export const TAB_SHORT: Partial<Record<Tab, string>> = { verified: "Routing" };
+export const TAB_SHORT: Partial<Record<Tab, string>> = { verified: "Routable" };
 
 export interface HookFlags {
   beforeInitialize: boolean;
@@ -98,6 +99,8 @@ export interface PoolView {
   walletsExact: boolean;
   /** routing eligibility of this pool, evaluated with its own fee (set by derive in db/queries.ts) */
   eligibility: Eligibility;
+  /** what decided it: Uniswap's published allowlist or denylist, or the automatic rule */
+  routingSource?: RoutingSource;
 }
 
 /** Usage per project. Volume, swaps and wallets cover the closed UTC day before the latest run; buys/sells are
@@ -168,6 +171,10 @@ export interface SignalsView {
   /** ISO of the last Exa hit, if any */
   lastExaHitAt: string | null;
   routable: Eligibility;
+  /** what decided `routable`: Uniswap's published allowlist or denylist, or the automatic rule */
+  routingSource?: RoutingSource;
+  /** ISO time Uniswap's lists were read; null when they could not be, so "rule" means the rule alone */
+  routingListsAt?: string | null;
   auditCount: number;
   /** first published audit link (http/https only) */
   auditUrl?: string | null;

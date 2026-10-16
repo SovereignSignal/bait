@@ -50,7 +50,7 @@ test("rowLabel reads rank, name, category, chain, window, direction", () => {
 test("emptyCopy names the filter that matched nothing", () => {
   assert.equal(emptyCopy({ tab: "new", category: "launchpad", chain: 8453 }), "No new Launchpad hooks on Base.");
   assert.equal(emptyCopy({ tab: "all", chain: 8453 }), "No hooks on Base.");
-  assert.equal(emptyCopy({ tab: "verified", category: "oracle" }), "No automatic-routing Oracle hooks.");
+  assert.equal(emptyCopy({ tab: "verified", category: "oracle" }), "No routable Oracle hooks.");
 });
 test("tradesNote separates nothing-traded from feed-unavailable", () => {
   assert.equal(tradesNote("empty", 0), "No trades over $10 right now.");

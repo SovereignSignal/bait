@@ -99,9 +99,14 @@ test('pace does not cap numeric growth, and absent denominators stay unknown', (
   assert.equal(activityPace(200,700),200); assert.equal(activityPace(0,700),0);
   assert.equal(activityPace(100,0),null); assert.equal(activityPace(null,700),null); assert.equal(activityPace(Infinity,700),null);
 });
-test('routing labels describe automatic criteria without claiming an individual approval or executable quote', () => {
+test('routing labels say which list or rule decided, and never promise a quote', () => {
   assert.match(routingNote('eligible').detail, /have not been verified/);
-  assert.match(routingNote('ineligible').detail, /approve individual hooks/);
+  assert.match(routingNote('ineligible').detail, /could not be read/);                 // lists unavailable: approval unchecked
+  assert.match(routingNote('ineligible', 'rule', true).label, /Not on Uniswap’s routing allowlist/);
+  assert.match(routingNote('ineligible', 'rule', true).detail, /unlikely to route/);
+  assert.match(routingNote('eligible', 'allowlist', true).label, /allowlist/);
+  assert.match(routingNote('eligible', 'allowlist', true).detail, /depends on liquidity/);
+  assert.match(routingNote('ineligible', 'denylist', true).label, /will not route/);
   assert.doesNotMatch(routingNote('ineligible').label, /Not in app/);
 });
 const now = new Date('2026-10-15T01:00:00Z');

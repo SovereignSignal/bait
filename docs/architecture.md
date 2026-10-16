@@ -82,7 +82,10 @@ slugs redirect.
 - **Routable** (`eligibility`): computed from the permission bits in the hook address. A hook is `eligible` when it
   sets none of the returns-delta bits (the published rule's two, plus `afterAddLiquidityReturnsDelta` and
   `afterRemoveLiquidityReturnsDelta`, stricter than Labs' rule), is not a `0x91…` address, and has a static-fee pool;
-  `unknown` without a known pool. Hand-allowlisted hooks still read as not routable because no public list exists.
+  `unknown` without a known pool. Uniswap's published lists come first (`web/src/db/routing-lists.ts`, read from
+  Uniswap/uniroute-public every 6 hours): a denylisted hook is never routable, an allowlisted one always is. Every
+  pool's fee counts (one grouped query per load), so the list, the API and the project page agree; a hook's
+  `dynamicFee` property is a fallback only when none of its pools is known.
 
 Categories: dynamic-fee, launchpad, orders, lp-management, compliance, oracle, mev-lvr, lending, gaming-nft, other,
 assigned during enrichment; until then `rules.fallback_category` guesses from hook properties, pool fee flags, the
