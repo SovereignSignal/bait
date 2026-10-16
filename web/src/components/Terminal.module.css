@@ -18,6 +18,8 @@ select.pill { appearance: none; -webkit-appearance: none; padding-right: 28px; c
 select.pill option { background: var(--panel); color: var(--fg); }
 
 /* movers strip */
+.intro { position: relative; z-index: 1; max-width: 1520px; margin: 0 auto; padding: 12px 16px 0; font-size: 13px; line-height: 1.45; color: var(--fg2); }
+.intro a { color: var(--pink2); white-space: nowrap; }
 .movers { position: relative; z-index: 1; display: flex; gap: 8px; overflow-x: auto; padding: 12px 16px 4px; scrollbar-width: none; max-width: 1520px; margin: 0 auto; }
 .movers::-webkit-scrollbar { display: none; }
 .mover { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); min-width: 178px; }
@@ -73,8 +75,8 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .listTitle { display: none; }
 
 /* dock */
-.dock { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; justify-content: space-around; align-items: center; height: calc(60px + env(safe-area-inset-bottom, 0px)); padding: 0 16px env(safe-area-inset-bottom, 0px); background: rgba(10,10,19,.92); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
-.dock button, .dock a { display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11px; color: var(--fg3); font-weight: 600; min-width: 52px; }
+.dock { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; justify-content: space-around; align-items: center; height: calc(60px + env(safe-area-inset-bottom, 0px)); padding: 0 8px env(safe-area-inset-bottom, 0px); background: rgba(10,10,19,.92); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-top: 1px solid var(--line); }
+.dock button, .dock a { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11px; color: var(--fg3); font-weight: 600; min-width: 48px; min-height: 44px; }
 .dock [aria-current="true"], .dock [aria-current="page"] { color: var(--fg); }
 
 /* tablet: trade panel moves under the detail */

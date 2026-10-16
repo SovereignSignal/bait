@@ -96,6 +96,8 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
             a["pools"] += 1
             active[pool_hook[key]] = active.get(pool_hook[key], 0) + 1
         a["tvl"] += now.tvl_usd or 0.0
+        if now.tvl_usd is not None:
+            a["tvl_known"] = True                     # one priced pool is enough for a (lower-bound) total
         a["max_tvl"] = max(a["max_tvl"], now.tvl_usd or 0.0)
         a["stats"].append((now.tvl_usd or 0.0, max(now.tx_count_cum or 0, cur.tx_count_cum or 0)))
         if cur.volume_usd_cum is not None:
@@ -185,12 +187,14 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
         known = a["vol_known"] or (not a["usage_rows"] and not a["missing_rows"])
         young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
         rows.append({
-            "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"], "pools_n": a["pools"] + extra.get(pid, 0),
+            "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"] if a["tvl_known"] else None, "pools_n": a["pools"] + extra.get(pid, 0),
             "vol_24h": a["vol24"] if known and a["vol24_known"] else None,
             "vol_7d": a["vol7"] if known and a["vol7_known"] else None,
             "vol_7d_prev": a["vol7p"] if known and a["vol7p_known"] else None,
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
-            "wallets_24h": wallets.get(pid, (None, None))[0], "wallets_exact": wallets.get(pid, (None, None))[1],
+            # every chain ready and covering the window (concentration has the project) and no wallet that day: a measured 0
+            "wallets_24h": wallets.get(pid, (0, True) if pid in concentration else (None, None))[0],
+            "wallets_exact": wallets.get(pid, (0, True) if pid in concentration else (None, None))[1],
             "wallets_7d": concentration.get(pid, (None, None))[0],
             "top_wallet_share_7d": concentration.get(pid, (None, None))[1],
             "deployer_swap_share_7d": concentration.get(pid, (None, None, None))[2],
@@ -396,7 +400,7 @@ def _custom(hook: str | None) -> bool:
 
 
 def _empty() -> dict:
-    return {"tvl": 0.0, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
+    return {"tvl": 0.0, "tvl_known": False, "max_tvl": 0.0, "pools": 0, "vol24": 0.0, "vol7": 0.0, "vol7p": 0.0, "tx24": 0, "tx7": 0,
             "vol24_known": False, "vol7_known": False, "vol7p_known": False,
             "tx24_known": True, "tx7_known": True, "stats": [], "legacy_volume": 0.0,
             "vol_known": False, "usage_rows": 0, "missing_rows": False, "fold_vol24": 0.0, "fold_vol7": 0.0, "fold_vol7p": 0.0}

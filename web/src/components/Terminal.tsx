@@ -1,6 +1,7 @@
 // The terminal shell shared by "/" and "/p/[slug]": movers, list | detail | trade, footer.
 // List, movers and the back link read the URL on the client; on the statically rendered
 // project page they suspend and the fallback renders the default tab.
+import Link from "next/link";
 import { Suspense } from "react";
 import type { FeedSeed } from "@/lib/feed";
 import type { Freshness } from "@/lib/health";
@@ -40,6 +41,12 @@ export function Terminal({
 }) {
   return (
     <div className={s.shell} data-view={view}>
+      {view === "list" && (
+        <p className={s.intro}>
+          Uniswap v4 hooks are add-on contracts that change how a pool trades. Bait shows which ones people actually use,
+          grouped by project, with figures from its own on-chain indexer. <Link href="/about">How it works</Link>
+        </p>
+      )}
       <Suspense fallback={<MoversFallback rows={moverRows} />}>
         <Movers rows={moverRows} />
       </Suspense>

@@ -587,7 +587,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
         hooklisted: hs.some((h) => h.hooklisted === true),
         upgradeable: hs.some((h) => !!h.properties.upgradeable),
         metrics: {
-          tvlUsd: d?.tvlUsd ?? 0,
+          tvlUsd: d?.tvlUsd ?? null,
           // NULL = every pool's volume unknown (score): rendered as unknown, never $0
           vol7d: d ? d.vol7d : 0,
           vol7dPrev: d ? d.vol7dPrev : 0,

@@ -13,6 +13,21 @@ export default function AboutPage() {
         </div>
 
         <section className="block">
+          <h2>What you are looking at</h2>
+          <p>
+            A Uniswap v4 pool can name a hook: a contract that runs before or after swaps and liquidity changes and can change
+            fees, block trades, take a cut or run an auction. Thousands of hooks are deployed; most see no use. Bait finds every
+            hook with a live pool on the chains it covers, groups hooks that belong to one team into a project, and shows how
+            much people trade through it, how many wallets, and whether the volume looks like real use.
+          </p>
+          <p>
+            Every figure is a closed UTC day, refreshed nightly; a project page says which day. A dash means unknown, never zero.
+            Badges explain themselves when you tap &quot;What these badges mean&quot;. Nothing here is an audit, an endorsement or
+            trading advice, and Bait never executes trades.
+          </p>
+        </section>
+
+        <section className="block">
           <h2>Method</h2>
           <p>
             Identity comes from the public <a className="inline" href="https://github.com/Uniswap/hooklist" target="_blank" rel="noopener">hooklist</a> registry and from the chain:

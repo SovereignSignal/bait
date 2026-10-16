@@ -35,10 +35,12 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
   // The day the data ends on, else the run receipt's: labels name that UTC day, never "24h" (see dayWindow).
   const through = p.through ?? fresh?.through ?? null;
   const win = dayWindow(through);
+  // Rows scored before 10/16 stored "no pool TVL known" as 0; the pools say whether any TVL is known at all.
+  const tvl = p.metrics.tvlUsd === 0 && p.pools.length > 0 && p.pools.every((x) => x.tvlUsd == null) ? null : p.metrics.tvlUsd;
   const stats: Array<{ k: string; v: string; cls?: string; title?: string }> = [
     { k: "7d volume", v: usd(p.metrics.vol7d) },
     { k: "vs last week", v: d == null ? (p.isNew ? "new" : NONE) : fmtDelta(d), cls: d == null ? undefined : d >= 0 ? "up" : "down" },
-    { k: "TVL", v: usd(p.metrics.tvlUsd) },
+    { k: "TVL", v: usd(tvl), title: tvl == null ? "Unknown: no pool of this project has a priced reserve." : undefined },
     { k: "Pools", v: int(p.metrics.poolsN || p.pools.length) },
     {
       k: `Wallets ${win.short}`,
@@ -68,7 +70,9 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       : auditMention(p.whatLine, p.whyBlurb)
         ? { cls: "b-a", label: "Audit mentioned, not linked", why: "The description mentions an audit, but neither the registry nor the team's published details link one. Treat it as unverified." }
         : { cls: "b-n", label: "No audit link", why: "No audit link found." },
+    // when the deployer's share equals the top wallet's, the top wallet is the deployer: the deployer badge says it
     ...(u.topWalletShare7d != null && u.topWalletShare7d >= 0.5 && (u.wallets7d ?? 0) > 0
+      && !(u.deployerSwapShare7d != null && Math.abs(u.deployerSwapShare7d - u.topWalletShare7d) < 0.0005)
       ? [{ cls: "b-a", label: `One wallet, ${topWalletText(u.topWalletShare7d)}`, why: "A single wallet made at least half of this week's swaps across the project's pools. Not a wash finding; small hooks often start this way. Check who it is before reading the volume as demand." }]
       : []),
     ...(u.deployerSwapShare7d != null && u.deployerSwapShare7d >= 0.5
@@ -131,7 +135,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
                 Deployer{deployers.length > 1 ? "s" : ""}:{" "}
                 {deployers.slice(0, 2).map((d, i) => {
                   const href = explorerAddressUrl(d.chainId, d.address);
-                  const label = `${shortAddr(d.address)} (${chainNames([d.chainId], "")}, ${d.source === "hooklist" ? "registry" : d.source === "explorer" ? "contract creator" : "source unknown"})`;
+                  const label = `${shortAddr(d.address)} (${chainNames([d.chainId], "")}, ${d.source === "hooklist" ? "registry" : d.source === "explorer" ? "creator" : "source unknown"})`;
                   return (
                     <span key={`${d.chainId}:${d.address}`}>
                       {i > 0 ? ", " : ""}
@@ -195,9 +199,9 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
         {p.hasHistoricalUsage && p.activityStatus === "unknown" && <p className="mut">Retained on historical usage evidence. Missing recent coverage is not evidence of zero activity.</p>}
         {p.whyBlurb && (
           <details className={s.badgeHelp}>
-            <summary>Historical generated context{p.whyBlurbAt ? ` · ${dayLabel(p.whyBlurbAt.slice(0, 10))}` : " · date unknown"}</summary>
+            <summary>Why it matters (AI summary{p.whyBlurbAt ? `, ${dayLabel(p.whyBlurbAt.slice(0, 10))}` : ""})</summary>
             <p>{p.whyBlurb}</p>
-            <p className="mut3">Generated research may be stale or incorrect. Its numbers refer to the generation date, not the current snapshot.</p>
+            <p className="mut3">Written by an AI model from public sources on that date. It may be stale or wrong; the figures above are current.</p>
           </details>
         )}
         {p.receipts.length > 0 && (
@@ -242,7 +246,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       <div className={s.two}>
         <div className={`panel ${s.blk}`}>
           <h2>Pools</h2>
-          <PoolsTable pools={p.pools} total={p.metrics.poolsN} tvl={p.metrics.tvlUsd} win={win} />
+          <PoolsTable pools={p.pools} total={p.metrics.poolsN} tvl={tvl} win={win} />
         </div>
         <div className={`panel ${s.blk}`}>
           <h2>Activity</h2>
@@ -331,7 +335,7 @@ function PoolVolume({ x, day, stacked = false }: { x: PoolView; day: string; sta
   );
 }
 
-function PoolsTable({ pools, total, tvl, win }: { pools: PoolView[]; total: number; tvl: number; win: { short: string; note: string } }) {
+function PoolsTable({ pools, total, tvl, win }: { pools: PoolView[]; total: number; tvl: number | null; win: { short: string; note: string } }) {
   const known = pools.filter((x) => knownChain(x.chainId));
   const active = known.filter(activePool);
   const shown = (active.length ? active : known).slice(0, POOLS_SHOWN);
@@ -460,7 +464,7 @@ function TopWallets({ p, now }: { p: ProjectDetail; now: number }) {
         {p.topWallets.length > 0 && <span>by volume in the latest ~300 trades of each busy pool</span>}
       </div>
       {p.topWallets.length === 0 ? (
-        <div className="mut">No wallet data for this project yet.</div>
+        <div className="mut">Top wallets are collected once a day for Bait&apos;s 30 busiest pools; this project&apos;s pools are not among them. The live trades above show who is trading now.</div>
       ) : (
         <div className={s.tw}>
           <table className={s.table}>
