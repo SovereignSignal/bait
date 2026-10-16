@@ -1,5 +1,9 @@
-// Fetches Uniswap's published hook routing lists (lib/uniswap-routing.ts) for the server, at most every 6 hours. A failed
-// fetch keeps the last good lists; with none yet, routing falls back to the automatic rule alone and says so.
+// Fetches Uniswap's published hook routing lists (lib/uniswap-routing.ts) for the server, at most every 6 hours.
+// Never on a page's critical path: routingLists() answers at once with the last good lists (or none yet) and refreshes
+// in the background. 2026-10-16: awaiting Next's patched fetch inside page rendering hung every data page for about 15
+// minutes after deploy while API routes, which fetched the same files, answered. Node's own https client is used so Next
+// neither intercepts the request nor reclassifies the page.
+import { get } from "node:https";
 import {
   ALLOWLIST_FILE,
   DENYLIST_FILE,
@@ -12,19 +16,36 @@ import {
 
 const TTL_MS = 6 * 3600_000;
 const RETRY_MS = 10 * 60_000;
+const TIMEOUT_MS = 8000;
+const MAX_BYTES = 2_000_000;
 // The allowlist held 587 hooks on 2026-10-16. Far fewer means the file layout changed and the parse is not trustworthy.
 const MIN_ALLOWLISTED = 100;
 const UA = "bait/0.1 (+https://github.com/SovereignSignal/bait; hook discovery feed)";
 
 let last: { lists: RoutingLists; at: number } | null = null;
-let pending: Promise<RoutingLists> | null = null;
+let pending: Promise<void> | null = null;
 let failedAt = 0;
 
-async function text(file: string): Promise<string> {
-  // revalidate, not no-store: a no-store fetch during render would turn the cached project pages dynamic
-  const res = await fetch(LISTS_BASE + file, { headers: { "User-Agent": UA }, next: { revalidate: TTL_MS / 1000 }, signal: AbortSignal.timeout(8000) });
-  if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
-  return res.text();
+function text(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = get(LISTS_BASE + file, { headers: { "User-Agent": UA } }, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error(`${file}: HTTP ${res.statusCode}`));
+        return;
+      }
+      res.setEncoding("utf8");
+      let body = "";
+      res.on("data", (chunk: string) => {
+        body += chunk;
+        if (body.length > MAX_BYTES) req.destroy(new Error(`${file}: over ${MAX_BYTES} bytes`));
+      });
+      res.on("end", () => resolve(body));
+      res.on("error", reject);
+    });
+    req.setTimeout(TIMEOUT_MS, () => req.destroy(new Error(`${file}: timed out`)));
+    req.on("error", reject);
+  });
 }
 
 async function load(): Promise<RoutingLists> {
@@ -35,27 +56,29 @@ async function load(): Promise<RoutingLists> {
   return { allow, deny, checkedAt: new Date().toISOString() };
 }
 
-/** The current lists, or the last good ones, or NO_LISTS. Never throws; off in fixture mode and when BAIT_ROUTING_LISTS=0. */
+/** Off in fixture mode and when BAIT_ROUTING_LISTS=0; routing then uses the automatic rule alone and says so. */
+export function routingListsEnabled(): boolean {
+  return process.env.BAIT_ROUTING_LISTS !== "0" && process.env.BAIT_FIXTURES !== "1";
+}
+
+/** The last good lists, or NO_LISTS; starts a background refresh when they are missing or older than 6 hours. Never
+ * waits on the network and never throws. */
 export async function routingLists(): Promise<RoutingLists> {
-  if (process.env.BAIT_ROUTING_LISTS === "0" || process.env.BAIT_FIXTURES === "1") return NO_LISTS;
+  if (!routingListsEnabled()) return NO_LISTS;
   const now = Date.now();
-  if (last && now - last.at < TTL_MS) return last.lists;
-  if (!last && now - failedAt < RETRY_MS) return NO_LISTS;
-  if (!pending) {
+  const stale = !last || now - last.at >= TTL_MS;
+  if (stale && !pending && now - failedAt >= RETRY_MS) {
     pending = load()
       .then((lists) => {
         last = { lists, at: Date.now() };
-        return lists;
       })
       .catch((e) => {
         failedAt = Date.now();
         console.warn(`[bait] routing lists unavailable: ${e instanceof Error ? e.message : e}`);
-        return last?.lists ?? NO_LISTS;
       })
       .finally(() => {
         pending = null;
       });
   }
-  // a stale copy answers at once while the refresh runs; only the very first load is waited for
-  return last ? last.lists : pending;
+  return last?.lists ?? NO_LISTS;
 }
