@@ -717,3 +717,30 @@ def test_deployer_share_of_swaps_from_known_deployer_wallets(conn, ctx):
     assert daily(conn, quiet).deployer_swap_share_7d == 0.0
     assert daily(conn, factory).deployer_swap_share_7d is None       # a CREATE2 factory is nobody's wallet
     assert daily(conn, unknown).deployer_swap_share_7d is None
+
+
+def test_project_tvl_is_unknown_not_zero_when_no_pool_tvl_is_known(conn, ctx):
+    """10/16 UX pass: 377 trading projects read "TVL $0" because unknown pool TVLs summed to zero."""
+    p = insert_project(conn, "Unpriced", first_seen=NOW - timedelta(days=30))
+    insert_hook(conn, "0xunpriced", 8453, project_id=p, name="Unpriced")
+    insert_pool(conn, "0xup", 8453, "0xunpriced", created=NOW - timedelta(days=30))
+    for i in range(7):
+        insert_snap(conn, "0xup", 8453, END - timedelta(days=i), None, 1000.0 * (i + 1), 10 * (i + 1), vol_day=1000.0, tx_day=10)
+    q = insert_project(conn, "Priced", first_seen=NOW - timedelta(days=30))
+    insert_hook(conn, "0xpriced", 8453, project_id=q, name="Priced")
+    insert_pool(conn, "0xpp", 8453, "0xpriced", created=NOW - timedelta(days=30))
+    insert_pool(conn, "0xpq", 8453, "0xpriced", created=NOW - timedelta(days=30))
+    for i in range(7):
+        insert_snap(conn, "0xpp", 8453, END - timedelta(days=i), 0.0, 1000.0 * (i + 1), 10 * (i + 1), vol_day=1000.0, tx_day=10)
+        insert_snap(conn, "0xpq", 8453, END - timedelta(days=i), None, 1000.0 * (i + 1), 10 * (i + 1), vol_day=1000.0, tx_day=10)
+    score.run(conn, ctx)
+    assert daily(conn, p).tvl_usd is None
+    assert daily(conn, q).tvl_usd == 0.0                     # one known pool at $0 is a measured zero
+
+
+def test_covered_quiet_day_reads_zero_wallets_not_unknown(conn, ctx):
+    pid = _onchain_project(conn, "Quiet2", "0xq2", wallets=0, vol_per_day=0)
+    _optimism_ready(conn)
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert (d.wallets_24h, d.wallets_exact, d.wallets_7d) == (0, True, 0)

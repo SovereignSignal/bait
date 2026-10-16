@@ -26,6 +26,7 @@ test("digest intro counts what /leaders counts; an older digest says what its nu
 
 test("pool TVL note: unknown pool TVL is not zero or evidence that the total belongs to omitted pools", () => {
   assert.equal(poolTvlNote(9_800, [{ tvlUsd: 9_800 }]), null);
+  assert.equal(poolTvlNote(null, [{ tvlUsd: null }]), null);                          // project TVL unknown: no contradictory note
   assert.equal(poolTvlNote(9_800, [{ tvlUsd: 9_790 }]), null);                       // rounding between the reads
   assert.equal(poolTvlNote(0, []), null);
   assert.equal(poolTvlNote(9_800, [{ tvlUsd: null }]), "Reported project TVL is $9.8K; 1 listed pool has unknown TVL, so the listed pool total is unknown.");
@@ -66,6 +67,11 @@ test("audit badge vs text: generated prose that names an audit without a link is
   assert.equal(auditMention("A per-block auction sells the right to arbitrage.", "LPs keep value."), false);
   assert.equal(auditMention("An auditorium of traders"), false);     // whole word only
   assert.equal(auditMention(null, undefined), false);
+  // negated mentions are not mentions (live text from 10/16)
+  assert.equal(auditMention(null, "Reported TVL is zero and the GitHub repo has no recent commits or stars, so there is no sign of outside attention and no audit is listed."), false);
+  assert.equal(auditMention(null, "No team, audit, website or press coverage is listed, and the fee-setting logic is unknown."), false);
+  assert.equal(auditMention(null, "It has not been audited."), false);
+  assert.equal(auditMention(null, "Development looks quieter, with no GitHub commits in the last 30 days, though the team links audit reports from Spearbit via Cantina and Trail of Bits."), true);
 });
 
 test("top wallet share reads as a share of swaps at any size, and unknown as a dash", () => {

@@ -149,7 +149,8 @@ def why_blurb_prompt(ctx: dict) -> str:
     # No figures: a blurb is rewritten only when signals change, while the page shows current numbers beside it, so a
     # quoted figure goes stale (an Oct 8 blurb said $119.7M next to a $135.5M tile).
     return ("Write 'why people care' for this hook project: two sentences grounded in the metrics, "
-            "signals and receipts below. Do not quote dollar amounts, counts or percentages: the page shows the current "
+            "signals and receipts below. A null metric is unknown, never zero: do not call unknown TVL or volume zero. "
+            "Do not quote dollar amounts, counts or percentages: the page shows the current "
             "figures beside this text. Say what they mean instead: growing or fading, concentrated or broad, who uses it.\n\n"
             + json.dumps(ctx, indent=1, default=str)[:12000])
 

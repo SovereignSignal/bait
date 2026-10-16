@@ -174,7 +174,8 @@ export interface SignalsView {
 }
 
 export interface Metrics {
-  tvlUsd: number;
+  /** sum of the pools with a known TVL; null when no pool's TVL is known (shown as unknown, never $0) */
+  tvlUsd: number | null;
   /** the 7 closed UTC days; null when every pool's volume is unknown (shown as unknown, never $0) */
   vol7d: number | null;
   vol7dPrev: number | null;
@@ -267,7 +268,7 @@ export interface RowView {
   vol7d: number | null;
   vol7dPrev: number | null;
   vol24h: number | null;
-  tvlUsd: number;
+  tvlUsd: number | null;
   routable: Eligibility;
   rank?: number;
 }

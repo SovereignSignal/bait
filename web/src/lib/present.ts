@@ -79,8 +79,19 @@ const CORE_AUDIT = /^https?:\/\/(www\.)?github\.com\/uniswap\/v4-(core|periphery
  * hook is just an address, so an audit "found" for it belongs to someone else. Count = links.length; badge = links[0].
  */
 /** The generated text names an audit the registry and team details do not link: the badge must say so, not "No audit". */
+const AUDIT_WORD = /\baudit(?:ed|s|or|ors|ing)?\b/gi;
+const NEGATION = /\b(no|not|never|without|lacks?|lacking|missing|none|nor)\b/i;
+
 export function auditMention(...texts: Array<string | null | undefined>): boolean {
-  return /\baudit(?:ed|s|or|ors|ing)?\b/i.test(texts.filter(Boolean).join(" "));
+  // "no audit is listed" and "No team, audit, website or press coverage" are statements that there is no audit: a
+  // mention counts only when none of the four words before it negates it (10/16 UX pass: 22 of 28 badges were these).
+  for (const sentence of texts.filter(Boolean).join(" ").split(/(?<=[.!?])\s+/)) {
+    for (const m of sentence.matchAll(AUDIT_WORD)) {
+      const before = sentence.slice(0, m.index).split(/\s+/).filter(Boolean).slice(-4).join(" ");
+      if (!NEGATION.test(before)) return true;
+    }
+  }
+  return false;
 }
 
 export function auditLinks(
@@ -101,7 +112,8 @@ export function auditLinks(
 
 /** Explain why the shown pools cannot account for the project total. Missing pool TVL is unknown, never a zero
  * balance or proof that the difference belongs to omitted pools. */
-export function poolTvlNote(headerTvl: number, rows: Array<{ tvlUsd: number | null }>): string | null {
+export function poolTvlNote(headerTvl: number | null, rows: Array<{ tvlUsd: number | null }>): string | null {
+  if (headerTvl == null) return null;                        // no pool's TVL is known: every cell already says so
   const unknown = rows.filter(r => r.tvlUsd == null).length;
   if (unknown) return `Reported project TVL is ${usd(headerTvl)}; ${unknown} listed pool${unknown === 1 ? " has" : "s have"} unknown TVL, so the listed pool total is unknown.`;
   const shown = rows.reduce((s, r) => s + (r.tvlUsd ?? 0), 0);
@@ -140,7 +152,7 @@ export function toRow(p: ProjectSummary): RowView {
     vol7d: dollars(p.metrics.vol7d),
     vol7dPrev: dollars(p.metrics.vol7dPrev),
     vol24h: dollars(p.usage.vol24h),
-    tvlUsd: Math.round(p.metrics.tvlUsd),
+    tvlUsd: p.metrics.tvlUsd == null ? null : Math.round(p.metrics.tvlUsd),
     routable: p.signals.routable,
     rank: p.rank,
   };

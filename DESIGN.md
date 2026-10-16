@@ -661,3 +661,15 @@ Update 2026-10-16: the first nightly left 172 of the 276 projects at $10K+ in "o
 category in its sources is not evidence against a dynamic-fee property or a launchpad pattern); a specific category
 from enrichment is never replaced, and a lapsed guess on an enriched project goes back to "other". Measured on that
 night's data: 42 of the 172 move.
+
+## UX pass fixes (2026-10-16)
+
+- `project_daily.tvl_usd` is NULL when no pool of the project has a known TVL (it was the sum of known pools, so "none
+  known" read as $0 on 377 trading projects). One known pool at $0 is still a measured zero. The why-blurb prompt says a
+  null metric is unknown, and a blurb that calls an unknown TVL zero is rewritten the next time the project is a
+  signals target.
+- `wallets_24h` is a measured 0 (exact) for a project whose every chain is ready and covers the window and that had no
+  wallet on the closed day; it was NULL beside a measured "Wallets 7d 0".
+- "Audit mentioned, not linked" counts a mention only when none of the four words before it negates it ("no audit is
+  listed" is not a mention); 22 of 28 such badges were negations.
+- The "One wallet" badge is dropped when the deployer's share equals the top wallet's share: same wallet, one badge.

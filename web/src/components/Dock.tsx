@@ -1,8 +1,8 @@
 "use client";
-// Phone-only bottom dock: Feed, Search, Building, Watchlist, Leaders.
+// Phone-only bottom dock: Feed, Search, Building, Watchlist, Leaders, About.
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { DockSearchIcon, HomeIcon, LeadersIcon, RadarIcon, StarIcon } from "./Icons";
+import { DockSearchIcon, HomeIcon, InfoIcon, LeadersIcon, RadarIcon, StarIcon } from "./Icons";
 import { useTerminal } from "./TerminalProvider";
 import s from "./Terminal.module.css";
 
@@ -18,7 +18,7 @@ export function Dock() {
     if (!onFeed) router.push(`/${qs}`);
   };
 
-  const current = pathname === "/leaders" ? "leaders" : pathname === "/building" ? "building" : t.searchOpen ? "search" : onFeed && t.watchOnly ? "watch" : onFeed ? "feed" : null;
+  const current = pathname === "/leaders" ? "leaders" : pathname === "/building" ? "building" : pathname === "/about" ? "about" : t.searchOpen ? "search" : onFeed && t.watchOnly ? "watch" : onFeed ? "feed" : null;
 
   return (
     <nav className={s.dock} aria-label="Sections">
@@ -65,6 +65,10 @@ export function Dock() {
       <Link href="/leaders" aria-current={current === "leaders" ? "page" : undefined} onClick={() => t.closeSearch()}>
         <LeadersIcon />
         Leaders
+      </Link>
+      <Link href="/about" aria-current={current === "about" ? "page" : undefined} onClick={() => t.closeSearch()}>
+        <InfoIcon />
+        About
       </Link>
     </nav>
   );

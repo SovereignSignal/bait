@@ -2,6 +2,8 @@
 then Claude why_blurb when signals changed since blurb_at."""
 from __future__ import annotations
 
+import re
+
 import json
 import os
 from datetime import datetime
@@ -51,7 +53,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         except Exception as e:
             out["errors"] += 1
             log.warning("signals project=%s failed: %s", p.slug, e)
-        if claude is not None and _needs_blurb(conn, p):
+        if claude is not None and _needs_blurb(conn, p, daily):
             try:
                 with savepoint(conn):
                     blurb = claude.why_blurb(_blurb_ctx(conn, p, daily))
@@ -109,9 +111,15 @@ def _dt(s):
         return None
 
 
-def _needs_blurb(conn, p) -> bool:
+# A blurb written while unknown TVL was stored as $0 says so ("Reported TVL is zero"); rewrite it once TVL reads unknown.
+_ZERO_TVL = re.compile(r"\b(zero|no|\$0)\b[^.]{0,24}\bTVL\b|\bTVL\b[^.]{0,24}\b(zero|\$0)\b", re.I)
+
+
+def _needs_blurb(conn, p, daily=None) -> bool:
     latest = conn.execute(sa.select(sa.func.max(signals.c.as_of)).where(signals.c.project_id == p.id)).scalar_one()
     if p.blurb_at is None:
+        return True
+    if daily is not None and daily.tvl_usd is None and p.why_blurb and _ZERO_TVL.search(p.why_blurb):
         return True
     return latest is not None and as_utc(latest) > as_utc(p.blurb_at)
 

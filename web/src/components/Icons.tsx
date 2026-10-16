@@ -80,6 +80,16 @@ export function LeadersIcon() {
   );
 }
 
+export function InfoIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="7.5" stroke="currentColor" strokeWidth="1.8" fill="none" />
+      <path d="M10 9v5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="10" cy="6.2" r="1.1" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function RadarIcon() {
   return (
     <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">

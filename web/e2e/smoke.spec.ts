@@ -167,9 +167,9 @@ test("/p/angstrom: the audit badge links out, the summary says when it was writt
   const errs = watch(page);
   await page.goto("/p/angstrom");
   await expect(page.getByTestId("badges").getByRole("link", { name: /Audit linked/ })).toHaveAttribute("href", "https://github.com/Uniswap/hooklist");
-  await expect(page.getByText("Historical generated context · Oct 8")).toBeVisible();
-  await page.getByText("Historical generated context · Oct 8").click();
-  await expect(page.getByText(/Generated research may be stale or incorrect/)).toBeVisible();
+  await expect(page.getByText("Why it matters (AI summary, Oct 8)")).toBeVisible();
+  await page.getByText("Why it matters (AI summary, Oct 8)").click();
+  await expect(page.getByText(/It may be stale or wrong; the figures above are current/)).toBeVisible();
   await page.getByText("What these badges mean").click();
   await expect(page.getByText("Audit link: https://github.com/Uniswap/hooklist. It says nothing about scope or findings.").last()).toBeVisible();
   expect(errs).toEqual([]);
