@@ -215,7 +215,14 @@ def _parallel_batch(conn, ctx, par, todo, out) -> tuple[dict, set]:
     for p in need:
         descs = sorted({r.description for r in conn.execute(sa.select(hooks.c.description).where(
             hooks.c.project_id == p.id, hooks.c.description.is_not(None))) if r.description})[:5]
-        hints[p.id] = "; ".join(descs)[:800]
+        # the addresses let Parallel tell this hook from a different project with a similar name (2026-10-16 audit: 11
+        # of 36 sampled projects carried another team's site, X or GitHub; a launch template carried the Uniswap
+        # Foundation's)
+        hk = conn.execute(sa.select(hooks.c.address, hooks.c.chain_id).where(hooks.c.project_id == p.id)
+                          .order_by(hooks.c.first_seen_at).limit(5)).all()
+        where = ", ".join(f"{r.address} on {CHAIN_BY_ID[r.chain_id].slug if r.chain_id in CHAIN_BY_ID else r.chain_id}" for r in hk)
+        hints[p.id] = (f"hook contracts: {where}. " if where else "") + "; ".join(descs)
+        hints[p.id] = hints[p.id][:800]
 
     from ..clients.parallel import RunGone
 

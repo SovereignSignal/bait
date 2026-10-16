@@ -362,3 +362,27 @@ def test_enriched_but_empty_projects_are_retried_weekly_behind_new_ones(conn, ct
     blank = conn.execute(sa.select(db.projects).where(db.projects.c.id == rows["Blank"])).one()
     assert blank.what_line == "Blank does a thing." and db.as_utc(blank.enriched_at) > NOW - timedelta(days=1)
     assert enrich.select_candidates(conn, now=NOW) == []     # nothing left to retry tonight
+
+
+def test_parallel_hears_the_hook_addresses_so_a_namesake_is_not_this_project(conn, ctx, monkeypatch):
+    """2026-10-16 audit: a name-only lookup gave FoundationHookV2 the Uniswap Foundation's site, GitHub and X."""
+    monkeypatch.setenv("ENRICH_MAX", "1")
+    pid = insert_project(conn, "FoundationHookV2", first_seen=NOW - timedelta(days=30), slug="foundationhookv2")
+    insert_hook(conn, "0xcf4bc34383b0568361dc6b5519a4072c2e81e0cc", 1, project_id=pid, name="FoundationHookV2")
+    insert_pool(conn, "0xpoolf", 1, "0xcf4bc34383b0568361dc6b5519a4072c2e81e0cc", NOW - timedelta(days=30))
+    conn.execute(sa.insert(db.pool_stats).values(pool_id="0xpoolf", chain_id=1, day=DAY, vol_24h=1000.0, traders_24h=50))
+    seen = {}
+
+    class Recorder:
+        processor = "core"
+
+        def submit(self, name, hints):
+            seen[name] = hints
+            return "run-1"
+
+        def result(self, run_id, max_wait_s=None):
+            return {"team": ""}
+
+    ctx.clients.update(claude=FakeClaude(), parallel=Recorder(), blockscout=None)
+    enrich.run(conn, ctx)
+    assert "0xcf4bc34383b0568361dc6b5519a4072c2e81e0cc on ethereum" in seen["FoundationHookV2"]
