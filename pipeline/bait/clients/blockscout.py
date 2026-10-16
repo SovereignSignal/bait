@@ -62,21 +62,25 @@ class Blockscout:
             **_proxy_verdict(d, code),
         )
 
-    def fetch_creator(self, chain_id: int, address: str) -> tuple[str | None, bool]:
+    def fetch_creator(self, chain_id: int, address: str) -> tuple[str | None, str]:
         """The address that deployed a contract, from Blockscout's address record (creator_address_hash), lowercased.
-        Returns (creator, definitive): definitive is False on a transport error, a bot challenge or a 5xx, so the caller
-        asks again next run; a 404 or a record without a creator is a definitive miss (an EOA, or an unindexed chain)."""
+        Returns (creator, outcome): "found"; "miss" (404, or a record without a creator: an EOA, an unindexed chain, no
+        instance); "blocked" (403: the instance challenges bots, as Base and Robinhood do from this server, so asking
+        again tonight is pointless); "transient" (429, 5xx, a transport error or a non-JSON reply: ask next run)."""
         base = self.base_url(chain_id)
         if not base:
-            return None, True
+            return None, "miss"
         try:
             d = http.get_json(self.c, f"{base}/api/v2/addresses/{address}", params=self.params)
         except httpx.HTTPStatusError as e:
-            return None, e.response.status_code == 404
+            code = e.response.status_code
+            return None, "miss" if code == 404 else "blocked" if code == 403 else "transient"
         except (httpx.HTTPError, ValueError):
-            return None, False
+            return None, "transient"
         creator = d.get("creator_address_hash") if isinstance(d, dict) else None
-        return (creator.lower() if isinstance(creator, str) and creator.startswith("0x") and len(creator) == 42 else None), True
+        if isinstance(creator, str) and creator.startswith("0x") and len(creator) == 42:
+            return creator.lower(), "found"
+        return None, "miss"
 
     def _from_eth_get_code(self, base: str, address: str) -> CodeInfo | None:
         try:

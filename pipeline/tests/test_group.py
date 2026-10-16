@@ -495,3 +495,20 @@ def test_group_guesses_a_category_for_unenriched_projects_and_leaves_enriched_on
     assert _fallback_categories(conn) == 0                                   # idempotent
     conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xaeg").values(description="A TWAMM for stable pairs"))
     assert _fallback_categories(conn) == 1 and conn.execute(sa.select(db.projects.c.category).where(db.projects.c.id == plain)).scalar_one() == "orders"
+
+
+def test_rules_refine_an_enrichment_other_but_never_a_specific_enrichment_category(conn, ctx):
+    from bait.steps.group import _fallback_categories
+    other = insert_project(conn, "Fee Router", first_seen=NOW)
+    insert_hook(conn, "0xfr", 10, project_id=other, name="Fee Router")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xfr").values(properties={"dynamicFee": True}))
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == other).values(category="other", category_source="enrich", enriched_at=NOW))
+    named = insert_project(conn, "Lend Thing", first_seen=NOW)
+    insert_hook(conn, "0xlt", 10, project_id=named, name="LimitOrderHook")          # words say orders...
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == named).values(category="lending", category_source="enrich", enriched_at=NOW))
+    assert _fallback_categories(conn) == 1
+    cat = lambda pid: conn.execute(sa.select(db.projects.c.category, db.projects.c.category_source).where(db.projects.c.id == pid)).one()
+    assert tuple(cat(other)) == ("dynamic-fee", "rules")
+    assert tuple(cat(named)) == ("lending", "enrich")                                 # ...but enrichment named it
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xfr").values(properties={}))
+    assert _fallback_categories(conn) == 1 and tuple(cat(other)) == ("other", "enrich")  # the guess lapses back to other

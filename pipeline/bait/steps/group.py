@@ -181,17 +181,20 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
 
 def _fallback_categories(conn) -> int:
-    """Projects enrichment has not categorised get rules.fallback_category from their hooks and pools; a guess is
-    re-made every night (the inputs change as hooks and pools arrive) and overwritten the night enrichment writes one."""
-    cands = conn.execute(sa.select(projects.c.id, projects.c.is_factory, projects.c.category, projects.c.category_source)
-                         .where(projects.c.enriched_at.is_(None),
-                                sa.or_(projects.c.category.is_(None), projects.c.category == "other",
+    """Projects with no category, or "other" (enrichment's answer when its sources named none), get
+    rules.fallback_category from their hooks and pools. A specific category from enrichment is never touched. A guess is
+    re-made every night (the inputs change as hooks and pools arrive); when it stops holding, the project goes back to
+    what it had: "other" if enrichment ran, else nothing."""
+    cands = conn.execute(sa.select(projects.c.id, projects.c.is_factory, projects.c.category, projects.c.category_source,
+                                   projects.c.enriched_at)
+                         .where(sa.or_(projects.c.category.is_(None), projects.c.category == "other",
                                        projects.c.category_source == "rules"))).all()
     if not cands:
         return 0
     ids = [c.id for c in cands]
     by_project: dict[int, dict] = {c.id: {"texts": [], "props": [], "fees": [], "pools_total": None, "factory": bool(c.is_factory),
-                                          "current": (c.category, c.category_source)} for c in cands}
+                                          "current": (c.category, c.category_source), "enriched": c.enriched_at is not None}
+                                     for c in cands}
     for h in conn.execute(sa.select(hooks.c.project_id, hooks.c.name, hooks.c.description, hooks.c.contract_name, hooks.c.properties,
                                     hooks.c.pools_total).where(hooks.c.project_id.in_(ids))):
         b = by_project[h.project_id]
@@ -209,7 +212,7 @@ def _fallback_categories(conn) -> int:
         if cat:
             new = (cat, "rules")
         elif b["current"][1] == "rules":
-            new = (None, None)                       # our own earlier guess no longer holds; never touch another source
+            new = ("other", "enrich") if b["enriched"] else (None, None)   # our earlier guess no longer holds
         else:
             continue
         if new != b["current"]:
