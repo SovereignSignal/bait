@@ -51,7 +51,8 @@ export default function AboutPage() {
           <p>
             A category comes from the generated description where one exists. Until then it is guessed from what the chain and the registry
             already say: a dynamic-fee property or pool, a factory or a hook with many pools, or words in the hook&apos;s own name or description
-            (limit order, lending, auction, oracle, KYC, vault, NFT). A guess is replaced the night the description is written.
+            (limit order, lending, auction, oracle, KYC, vault, NFT). A category written from the description wins; where the description
+            found none, the guess applies.
           </p>
         </section>
 

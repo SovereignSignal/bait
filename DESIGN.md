@@ -638,6 +638,14 @@ is unknown, 0.0 when a deployer is known and did not trade. The project page nam
 explorer link and shows "Deployer's swaps"; an amber badge appears at 50% or more. First cut: the deployer wallet
 itself, not wallets it funded.
 
+Update 2026-10-16: the first nightly checked 200 hooks and stamped 1. Base and Robinhood's Blockscout instances answer
+this server with a Cloudflare challenge (403), Ethereum and Unichain answer; busiest-first ordering put Base and
+Robinhood hooks in nearly every slot, and as "transient" failures they were first in line again the next night. The
+lookup now probes each chain once a night, skips a blocking chain without stamping its hooks, and fills the cap from
+chains that answer (candidates read at 5x the cap). Routescan's getcontractcreation answers only Ethereum among these
+chains, so it is not a fallback; Base, Robinhood, Arbitrum, Polygon and BNB deployers stay unknown until an explorer
+answers or a trace-based source is added.
+
 ## Category fallback (2026-10-15)
 
 89% of listed projects sat in "other" because a category only came from enrichment (a few dozen projects a night).
@@ -647,3 +655,9 @@ oracle, compliance, LP management, gaming/NFT, launchpad, dynamic fee), then the
 that initialized `LAUNCHPAD_MIN_POOLS` = 100 pools), then a dynamic fee (registry property or a pool's fee flag).
 Nothing matching stays unguessed, never "other" by rule. `projects.category_source` (migration 0020) says `rules` or
 `enrich`; enrichment overwrites a guess and the guess is re-made nightly while the project is unenriched.
+
+Update 2026-10-16: the first nightly left 172 of the 276 projects at $10K+ in "other", because enrichment had answered
+"other" and the fallback never touched it. The rules now also refine enrichment's "other" (a model that found no
+category in its sources is not evidence against a dynamic-fee property or a launchpad pattern); a specific category
+from enrichment is never replaced, and a lapsed guess on an enriched project goes back to "other". Measured on that
+night's data: 42 of the 172 move.
