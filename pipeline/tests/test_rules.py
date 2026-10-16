@@ -283,3 +283,41 @@ def test_fallback_category_reads_words_then_factory_pattern_then_dynamic_fee():
     assert fallback_category(["Something"], [{}], [8388608], False, 1) == "dynamic-fee"
     assert fallback_category(["Aegis"], [{}], [3000], False, 2) is None          # nothing says: stays unguessed
     assert fallback_category([], [], [], False, None) is None
+
+
+def test_lookalike_pool_catches_address_poisoning_and_same_symbol_pairs():
+    from bait.rules import is_lookalike_pool
+    usdc = {"id": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "symbol": "USDC"}
+    spoof = {"id": "0x8335cb97db9ccdd95325c2da5622eebdd6ca2913", "symbol": "USDC"}
+    weth = {"id": "0x4200000000000000000000000000000000000006", "symbol": "WETH"}
+    meme = {"id": "0x1234567890abcdef1234567890abcdef12345678", "symbol": "MEME"}
+    assert is_lookalike_pool(8453, usdc, spoof)
+    assert is_lookalike_pool(8453, weth, {**spoof, "symbol": "USD Coin"})        # the address alone gives it away
+    assert is_lookalike_pool(8453, usdc, {"id": meme["id"], "symbol": "usdc"})   # USDC/USDC with one side not canonical
+    assert not is_lookalike_pool(8453, usdc, weth)
+    assert not is_lookalike_pool(8453, meme, weth)
+    assert not is_lookalike_pool(8453, {"id": "0x" + "0" * 40, "symbol": "ETH"}, usdc)
+    assert not is_lookalike_pool(999_999, usdc, spoof)                            # no canonical list for the chain
+    assert not is_lookalike_pool(8453, None, None)
+
+
+def test_idle_tvl_needs_a_full_measured_week():
+    from datetime import date
+    from bait.rules import is_idle_tvl
+    end = date(2026, 10, 15)
+    assert is_idle_tvl(155_863_042.0, 0.12, 7, date(2026, 9, 1), end)
+    assert not is_idle_tvl(155_863_042.0, 0.12, 6, date(2026, 9, 1), end)       # a day unmeasured
+    assert not is_idle_tvl(155_863_042.0, 0.12, 7, date(2026, 10, 12), end)      # younger than a week
+    assert not is_idle_tvl(900_000.0, 0.0, 7, None, end)                         # under $1M
+    assert not is_idle_tvl(5_000_000.0, 6_000.0, 7, None, end)                   # traded 0.12% of it
+    assert not is_idle_tvl(5_000_000.0, None, 7, None, end)
+
+
+def test_self_priced_supply_needs_half_the_fdv_and_almost_no_trading():
+    from bait.rules import is_self_priced_supply
+    assert is_self_priced_supply(160_115_034.0, 222_804_287.0, 0.0)          # KATIE/WETH
+    assert is_self_priced_supply(10_336_205.0, 10_300_000.0, None)            # HOOD/WETH, no volume
+    assert not is_self_priced_supply(14_095_343.0, 19_821_224.0, 1_188_555.0) # trades: keeps its TVL
+    assert not is_self_priced_supply(1_351_643_510.0, 4_391_052_633.0, 0.0)   # 31% of FDV (the spoof: lookalike rule)
+    assert not is_self_priced_supply(900_000.0, 900_000.0, 0.0)               # under $1M
+    assert not is_self_priced_supply(5_000_000.0, None, 0.0)                  # no FDV, no judgement
