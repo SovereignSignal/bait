@@ -21,7 +21,8 @@ let pending: Promise<RoutingLists> | null = null;
 let failedAt = 0;
 
 async function text(file: string): Promise<string> {
-  const res = await fetch(LISTS_BASE + file, { headers: { "User-Agent": UA }, cache: "no-store", signal: AbortSignal.timeout(8000) });
+  // revalidate, not no-store: a no-store fetch during render would turn the cached project pages dynamic
+  const res = await fetch(LISTS_BASE + file, { headers: { "User-Agent": UA }, next: { revalidate: TTL_MS / 1000 }, signal: AbortSignal.timeout(8000) });
   if (!res.ok) throw new Error(`${file}: HTTP ${res.status}`);
   return res.text();
 }

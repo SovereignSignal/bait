@@ -83,7 +83,7 @@ for (const p of sourceProjects) {
     await expect(page.getByTestId("badges").getByText("Dormant in reported window", { exact: true })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Project context and evidence", exact: true })).toBeVisible();
     await page.getByText("What these badges mean", { exact: true }).click();
-    await expect(detail.getByText(/Current Uniswap routing and quote availability have not been verified|Bait has not checked that approval|Insufficient pool or fee data/).first()).toBeVisible();
+    await expect(detail.getByText(/Current routing and quote availability have not been verified|a manual approval is unchecked|Insufficient pool or fee data|routing allowlist|will not route/).first()).toBeVisible();
     if (p.signals.auditUrl) await expect(page.getByTestId("badges").getByRole("link", { name: /Audit linked/ })).toHaveAttribute("href", new URL(p.signals.auditUrl).href);
     if (p.website) await expect(detail.getByRole("link", { name: "Website", exact: true })).toHaveAttribute("href", new URL(p.website).href);
     await expect(page.getByRole("link", { name: "Swap on Uniswap", exact: true })).toHaveCount(0);
