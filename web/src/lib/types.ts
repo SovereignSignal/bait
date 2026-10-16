@@ -231,7 +231,7 @@ export interface ProjectSummary {
   activityStatus?: ActivityStatus | null;
   /** Historical usage and a fully covered zero-swap window, classified by the pipeline; never ranked. */
   isDormant?: boolean;
-  /** comma list of reasons: 24h, 7d, concentrated, vol_tvl, no_liquidity, symmetric, uniform, unverified */
+  /** comma list of reasons: 24h, 7d, concentrated, vol_tvl, no_liquidity, symmetric, uniform, unverified, lookalike */
   washReason: string | null;
   scoreTrending: number;
   /** 1-based trending rank, set when listing the Trending tab */

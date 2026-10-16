@@ -389,10 +389,73 @@ def is_spam(pool_stats: list[tuple[float, int]], volume: float = 0.0) -> bool:
     return all((tvl or 0) < 100 and (txs or 0) < 10 for tvl, txs in pool_stats)
 
 
+# --- TVL trust (score.py). GeckoTerminal's reserve_in_usd values every side of a pool at the pool's own price, so a
+# token that copies USDC, or a launch's whole supply priced by its own pool, reads as hundreds of millions of TVL. Both
+# cases make the pool's TVL unknown; a lookalike pool is also wash-like ("lookalike"). 2026-10-16 audit: a spoof-USDC pool
+# on Base read $1.307B TVL (81% of everything listed) and $221M of one wallet's round trips; a Clanker launch pool read
+# $155.9M TVL on $0.12 of volume in a week. ---------------------------------------------------------------------------
+IDLE_TVL_MIN = 1_000_000.0
+IDLE_TURNOVER = 0.001               # traded under 0.1% of its TVL in a full measured week: the TVL is not liquidity
+_ZERO_ADDRESS = "0x" + "0" * 40
+
+
+def canonical_tokens(chain_id: int) -> frozenset[str]:
+    """Wrapped native coin and major stablecoins Bait prices without DefiLlama (indexer/prices.py)."""
+    from .indexer.prices import STABLES, WRAPPED_NATIVE
+    out = set(STABLES.get(chain_id, {}))
+    if chain_id in WRAPPED_NATIVE:
+        out.add(WRAPPED_NATIVE[chain_id])
+    return frozenset(a.lower() for a in out)
+
+
+def _token(t) -> tuple[str, str]:
+    if not isinstance(t, dict):
+        return "", ""
+    return str(t.get("id") or t.get("address") or "").lower(), str(t.get("symbol") or "").strip().lower()
+
+
+def is_lookalike_pool(chain_id: int, token0, token1) -> bool:
+    """A pool with a token posing as a canonical one: an address that copies a canonical token's first and last four hex
+    digits (address poisoning; a chance collision is about 1 in 4 billion), or a same-symbol pair such as USDC/USDC where
+    exactly one side is the canonical token."""
+    canon = canonical_tokens(chain_id)
+    if not canon:
+        return False
+    toks = [_token(token0), _token(token1)]
+    for addr, _ in toks:
+        if len(addr) != 42 or addr in canon or addr == _ZERO_ADDRESS:
+            continue
+        if any(c != _ZERO_ADDRESS and addr[2:6] == c[2:6] and addr[-4:] == c[-4:] for c in canon):
+            return True
+    (a0, s0), (a1, s1) = toks
+    return bool(s0) and s0 == s1 and a0 != a1 and (a0 in canon) != (a1 in canon)
+
+
+SELF_PRICED_SHARE = 0.5            # the pool holds at least half the token's supply (GeckoTerminal fdv_usd of its base)
+
+
+def is_self_priced_supply(tvl: float | None, fdv: float | None, vol_24h: float | None) -> bool:
+    """$1M+ of TVL that is mostly one token's own supply valued at the pool's price, in a pool that barely trades: at least
+    half the base token's fully diluted value sits in the pool and its rolling 24h volume is under 0.1% of the TVL."""
+    if tvl is None or tvl < IDLE_TVL_MIN or not fdv or fdv <= 0:
+        return False
+    return tvl >= SELF_PRICED_SHARE * fdv and (vol_24h or 0.0) < tvl * IDLE_TURNOVER
+
+
+def is_idle_tvl(tvl: float | None, vol_7d: float | None, measured_days: int, created: date | None, end: date) -> bool:
+    """$1M+ of TVL that traded under 0.1% of it over a fully measured week, in a pool at least a week old."""
+    if tvl is None or tvl < IDLE_TVL_MIN or vol_7d is None or measured_days < 7:
+        return False
+    if created is not None and created > end - timedelta(days=6):
+        return False
+    return vol_7d < tvl * IDLE_TURNOVER
+
+
 # --- wash rules (DESIGN.md "Wash rules"). A project is wash-like for a reason when the pools that rule flags carry
 # >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
 # "unverified" is not a rule: a project that only escaped the spam rule by moving >= $1M and has no wallet data at all.
-WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified")
+# "lookalike": the volume runs through a pool with a token posing as USDC, USDT or the wrapped native coin.
+WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified", "lookalike")
 WASH_SHARE = 0.5
 WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
 

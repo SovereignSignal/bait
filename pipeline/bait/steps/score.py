@@ -30,7 +30,8 @@ from ..db import (HOOK_POOL_PREFIX, as_utc, historical_swap_evidence, hooks, ind
                   project_daily, projects, upsert)
 from ..rules import (SHARED_DEPLOYERS, SPAM_EXEMPT_VOL, WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
-                     is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound)
+                     is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound, is_idle_tvl,
+                     is_lookalike_pool)
 from . import RunContext, log
 from .onchain import owed_before, ready_chains
 
@@ -63,11 +64,15 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
     hook_to_project = {(r.chain_id, r.address): r.project_id for r in hook_rows}
     pool_project, custom = {}, set()   # custom: pools of custom-accounting hooks (liquidity lives in the hook)
     pool_hook: dict[tuple, tuple] = {}
-    for p in conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id, pools.c.hook_address, pools.c.created_at)):
+    lookalike: set[tuple] = set()      # pools with a token posing as USDC, USDT or the wrapped native coin (rules.py)
+    for p in conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id, pools.c.hook_address, pools.c.created_at,
+                                    pools.c.token0, pools.c.token1)):
         pid = hook_to_project.get((p.chain_id, p.hook_address))
         if pid:
             pool_project[(p.pool_id, p.chain_id)] = (pid, as_utc(p.created_at).date() if p.created_at else None)
             pool_hook[(p.pool_id, p.chain_id)] = (p.chain_id, p.hook_address)
+            if is_lookalike_pool(p.chain_id, p.token0, p.token1):
+                lookalike.add((p.pool_id, p.chain_id))
             if _custom(p.hook_address):
                 custom.add((p.pool_id, p.chain_id))
     by_pool: dict[tuple, dict] = {}
@@ -82,6 +87,8 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
     pool_vol7: dict[tuple, float] = {}
     pool_swaps7: dict[tuple, int] = {}     # swaps on the days that carry the 7-day volume: an upper bound of its wallets
     pool_vol_days: dict[tuple, list[date]] = {}   # the days that carry it
+    pool_now: dict[tuple, tuple] = {}     # latest TVL (GeckoTerminal's reserve), lifetime swaps and that row's day
+    pool_measured: dict[tuple, int] = {}  # days of the 7-day window with a known volume
     for key, rows in by_pool.items():
         if key not in pool_project:
             continue
@@ -95,15 +102,11 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
         if not folded:                                 # a hook's aggregate pool adds usage, never a pool
             a["pools"] += 1
             active[pool_hook[key]] = active.get(pool_hook[key], 0) + 1
-        a["tvl"] += now.tvl_usd or 0.0
-        if now.tvl_usd is not None:
-            a["tvl_known"] = True                     # one priced pool is enough for a (lower-bound) total
-        a["max_tvl"] = max(a["max_tvl"], now.tvl_usd or 0.0)
-        a["stats"].append((now.tvl_usd or 0.0, max(now.tx_count_cum or 0, cur.tx_count_cum or 0)))
+        pool_now[key] = (now.tvl_usd, max(now.tx_count_cum or 0, cur.tx_count_cum or 0), max(rows))
+        pool_measured[key] = sum(1 for d, r in rows.items() if w7[0] <= d <= w7[1] and r.volume_usd_day is not None)
         if cur.volume_usd_cum is not None:
             # Legacy cumulative is bounded/reset by sources, not lifetime evidence. Preserve the current spam rule only.
             a["legacy_volume"] += cur.volume_usd_cum
-        pool_tvl[key] = now.tvl_usd
         if cur.volume_usd_cum is None:
             unknown_vol.add(key)
         else:
@@ -128,6 +131,30 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
             if not known:
                 a[name + "_known"] = False
 
+    # TVL Bait cannot trust (rules.py "TVL trust"): a lookalike token's pool, or $1M+ that traded under 0.1% of itself in a
+    # fully measured week. It is unknown: out of the totals, the spam and wash rules, and the pool row the page shows.
+    untrusted = {key for key, (tvl, _tx, _d) in pool_now.items()
+                 if tvl is not None and (key in lookalike or is_idle_tvl(
+                     tvl, None if key in unknown_vol else pool_vol7.get(key), pool_measured.get(key, 0), pool_project[key][1], end))}
+    for key, (tvl, tx, seen) in pool_now.items():
+        a = agg[pool_project[key][0]]
+        # TVL is a current reading or unknown: a pool GeckoTerminal stopped listing keeps its last row for the 14-day
+        # window, and a launch's first-night reserve ($155.9M, Clanker KATIE/WETH) must not stand for a week.
+        t = None if key in untrusted or seen < end - _D else tvl
+        a["tvl"] += t or 0.0
+        if t is not None:
+            a["tvl_known"] = True                     # one priced pool is enough for a (lower-bound) total
+        a["max_tvl"] = max(a["max_tvl"], t or 0.0)
+        a["stats"].append((t or 0.0, tx))
+        pool_tvl[key] = t
+    blank = [{"k_pool": k[0], "k_chain": k[1], "k_day": pool_now[k][2]} for k in sorted(untrusted)
+             if project_ids is None or pool_project[k][0] in project_ids]
+    if blank:
+        conn.execute(pool_snapshots.update()
+                     .where(pool_snapshots.c.pool_id == sa.bindparam("k_pool"), pool_snapshots.c.chain_id == sa.bindparam("k_chain"),
+                            pool_snapshots.c.day == sa.bindparam("k_day"))
+                     .values(tvl_usd=None), blank)
+
     # A pool missing from the recent snapshot set is missing evidence, even if another pool supplies the project's totals.
     for key, (pid, created) in pool_project.items():
         if key not in by_pool and (created is None or created <= end):
@@ -150,7 +177,7 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
     _check_swap_copy(conn, w7, pool_project, by_pool, agg)
     prior_wash = _prior_wash(conn, day)
     reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom,
-                                  pool_vol_days)
+                                  pool_vol_days, lookalike)
     wallets = _wallets(conn, day, end, ready, pool_project)
     concentration = _wallets_7d(conn, w7, ready, hook_rows)
 
@@ -216,7 +243,8 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
     if reasons:
         log.info("score: %d wash-like projects (%s)", len(reasons), " ".join(f"{k}={v}" for k, v in counts.items()))
     return {"projects": len(rows), "with_pools": sum(project_ids is None or pid in project_ids for pid in agg), "new": sum(r["is_new"] for r in rows),
-            "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(reasons), **counts}
+            "trending": trending, "spam": sum(r["is_spam"] for r in rows), "wash": len(reasons), "tvl_untrusted": len(untrusted),
+            **counts}
 
 
 def _historical_usage(conn, before: date, pool_project: dict) -> tuple[set[int], set[int]]:
@@ -514,7 +542,8 @@ def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -
 
 
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,
-          tvl: dict, swaps7: dict, custom: set[tuple], vol_days: dict) -> tuple[dict[int, list[str]], set[int]]:
+          tvl: dict, swaps7: dict, custom: set[tuple], vol_days: dict,
+          lookalike: set[tuple] = frozenset()) -> tuple[dict[int, list[str]], set[int]]:
     """Wash reasons per project (DESIGN.md "Wash rules"). Each rule judges pools; a project gets the reason when the
     pools it flags carry >= WASH_SHARE of the project's volume in that rule's window, leaving out a capped hook's aggregate
     pool ('hook:<address>', folded swaps no rule can judge) on both sides of the share. Pools with unknown volume are never
@@ -569,6 +598,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
         "uniform": {k: (r.vol_24h_rolling or 0.0, is_uniform(top.get(k, []), r.vol_24h_rolling,
                                                              r.wallets_24h if r.wallets_24h else r.traders_24h))
                     for k, r in stats.items()},
+        # a token posing as USDC, USDT or the wrapped native coin: no wallet count needed, the pool itself is the finding
+        "lookalike": {k: (v, k in lookalike) for k, v in vol7.items()},
     }
     reasons: dict[int, list[str]] = {}
     for reason in (r for r in WASH_REASONS if r in judged):

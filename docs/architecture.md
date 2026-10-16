@@ -72,8 +72,13 @@ slugs redirect.
   volume over 300 times a known TVL with fewer than 50 wallets); `no_liquidity` ($1M in a week through a pool with at
   most $1K of known TVL and fewer than 50 wallets); `symmetric` (top wallets buy and sell equally and carry most of
   the pool); `uniform` (top wallets' volumes within 3% of each other, each near the pool's per-wallet average);
-  `unverified` ($1M or more through pools too small to list, with no wallet data). A finding is remembered through
-  quiet or unknown nights for 14 days after it was last measured, then forgotten unless measured again.
+  `unverified` ($1M or more through pools too small to list, with no wallet data); `lookalike` (a token in the pool
+  copies USDC, USDT or the wrapped native coin by symbol or by the first and last four hex digits of its address). A
+  finding is remembered through quiet or unknown nights for 14 days after it was last measured, then forgotten unless
+  measured again.
+- **TVL trust** (`rules.is_lookalike_pool`, `rules.is_idle_tvl`): GeckoTerminal's `reserve_in_usd` values every side at
+  the pool's own price. Score treats a pool's TVL as unknown, and blanks it on that day's snapshot so the page agrees,
+  when the pool has a lookalike token or holds $1M or more that traded under 0.1% of itself over a fully measured week.
 - **Routable** (`eligibility`): computed from the permission bits in the hook address. A hook is `eligible` when it
   sets none of the returns-delta bits (the published rule's two, plus `afterAddLiquidityReturnsDelta` and
   `afterRemoveLiquidityReturnsDelta`, stricter than Labs' rule), is not a `0x91…` address, and has a static-fee pool;

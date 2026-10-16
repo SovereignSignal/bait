@@ -715,10 +715,11 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
         where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${shiftDay(end, -13)} and ${end}
         order by x.day desc limit 1
       ) lc on true
-      -- TVL as score sums it into the header: the latest row up to the running day, so the rows add up to the header
+      -- TVL as score sums it into the header: the latest row up to the running day, and only a current one (seen on the
+      -- last two nights), so the rows add up to the header and a pool GeckoTerminal stopped listing reads unknown
       left join lateral (
         select x.tvl_usd from ${t.poolSnapshots} x
-        where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${shiftDay(end, -13)} and ${latest}
+        where x.pool_id = p.pool_id and x.chain_id = p.chain_id and x.day between ${shiftDay(end, -1)} and ${latest}
         order by x.day desc limit 1
       ) lt on true
       left join lateral (
