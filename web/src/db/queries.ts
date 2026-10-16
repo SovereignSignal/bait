@@ -312,9 +312,30 @@ export function usingFixtures(): boolean {
 }
 
 /** Before the pipeline's first run the tables may not exist yet; render empty rather than 500 (and fail the healthcheck). */
-export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
+// A query that has not answered in QUERY_TIMEOUT_MS fails (and is logged) instead of holding the page open: on 2026-10-16
+// fresh web containers twice hung every data page on a query Postgres had finished and was waiting to send. Anything
+// slower than SLOW_QUERY_MS is logged with its label, so the next stall names its query.
+const QUERY_TIMEOUT_MS = Number(process.env.BAIT_QUERY_TIMEOUT_MS) || 20_000;
+const SLOW_QUERY_MS = 3_000;
+
+export async function withTimeout<T>(label: string, work: PromiseLike<T>, ms = QUERY_TIMEOUT_MS): Promise<T> {
+  const t0 = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms} ms`)), ms);
+  });
   try {
-    return await fn();
+    return await Promise.race([Promise.resolve(work), timeout]);
+  } finally {
+    clearTimeout(timer);
+    const took = Date.now() - t0;
+    if (took > SLOW_QUERY_MS) console.warn(`[db] ${label} took ${took} ms`);
+  }
+}
+
+export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T, timeoutMs?: number): Promise<T> {
+  try {
+    return timeoutMs ? await withTimeout(label, fn(), timeoutMs) : await fn();
   } catch (e) {
     // Drizzle wraps the driver error; the cause carries the reason (missing table, connection reset).
     const err = e as Error & { cause?: { message?: string; code?: string } };
@@ -445,19 +466,19 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
   const end = latest ? shiftDay(latest, -1) : null;
 
   const [daily, hookRows, signalRows, receiptRows, topPools, statsUsage, smartUsage, lists, hookFees] = await Promise.all([
-    latest ? db.select().from(t.projectDaily).where(and(eq(t.projectDaily.day, latest), inArray(t.projectDaily.projectId, ids))) : [],
-    db.select().from(t.hooks).where(inArray(t.hooks.projectId, ids)),
-    db.select().from(t.signals).where(inArray(t.signals.projectId, ids)),
+    latest ? withTimeout("load:project_daily", db.select().from(t.projectDaily).where(and(eq(t.projectDaily.day, latest), inArray(t.projectDaily.projectId, ids)))) : [],
+    withTimeout("load:hooks", db.select().from(t.hooks).where(inArray(t.hooks.projectId, ids))),
+    withTimeout("load:signals", db.select().from(t.signals).where(inArray(t.signals.projectId, ids))),
     // Receipts only render on the project page; the list load skips them.
     opts.full
-      ? db
+      ? withTimeout("load:receipts", db
           .select()
           .from(t.receipts)
           .where(inArray(t.receipts.projectId, ids))
-          .orderBy(sql`${t.receipts.publishedAt} desc nulls last`)
+          .orderBy(sql`${t.receipts.publishedAt} desc nulls last`))
       : [],
     latest && end
-      ? db.execute<TopPoolRow>(sql`
+      ? withTimeout("load:top_pools", db.execute<TopPoolRow>(sql`
           with pp as (
             select h.project_id, p.pool_id, p.chain_id, p.hook_address, p.token0, p.token1
             from ${t.pools} p
@@ -478,7 +499,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
                  pp.token0->>'id' as token0_id, pp.token1->>'id' as token1_id
           from pp join w on w.pool_id = pp.pool_id and w.chain_id = pp.chain_id
           -- the same keys as lib/unlisted.ts compareTopPool, ending on the pool id so ties never flip between loads
-          order by pp.project_id, w.vol7d desc nulls last, w.tvl desc nulls last, pp.pool_id`)
+          order by pp.project_id, w.vol7d desc nulls last, w.tvl desc nulls last, pp.pool_id`))
       : [],
     // Rolling 24h volume and buy/sell counts, latest pool_stats day. Table may be missing: null, not a failure.
     safe(
@@ -499,6 +520,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
           where h.project_id = any(${idArray})
           group by h.project_id`),
       null,
+      QUERY_TIMEOUT_MS,
     ),
     // Distinct smart-money wallets among the latest top wallets.
     safe(
@@ -515,6 +537,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
           where h.project_id = any(${idArray})
           group by h.project_id`),
       null,
+      QUERY_TIMEOUT_MS,
     ),
     routingLists(),
     // Static and dynamic fees per hook across every pool (about 80 ms over 230K pools): routing needs all of them.
@@ -529,6 +552,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
           where h.project_id = any(${idArray}) and p.fee is not null and p.pool_id not like 'hook:%'
           group by p.hook_address, p.chain_id`),
       null,
+      QUERY_TIMEOUT_MS,
     ),
   ]);
 
@@ -583,9 +607,9 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
     let topWallets: WalletView[] = [];
     if (opts.full) {
       [pools, series, topWallets] = await Promise.all([
-        safe("pools", () => loadPools(db, p.id, latest), []),
-        safe("series", () => loadSeries(db, p.id, latest), []),
-        safe("topWallets", () => loadTopWallets(db, p.id), []),
+        safe("pools", () => loadPools(db, p.id, latest), [], QUERY_TIMEOUT_MS),
+        safe("series", () => loadSeries(db, p.id, latest), [], QUERY_TIMEOUT_MS),
+        safe("topWallets", () => loadTopWallets(db, p.id), [], QUERY_TIMEOUT_MS),
       ]);
     }
 
