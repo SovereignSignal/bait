@@ -3,7 +3,6 @@ import { CHAINS, explorerAddressUrl, knownChain, poolDeepLink } from "@/lib/chai
 import { feeLabel, int, NONE, paletteColor, shortAddr } from "@/lib/format";
 import { tradePool } from "@/lib/present";
 import { activityPace, routingNote } from "@/lib/research";
-import { eligibility } from "@/lib/routable";
 import type { ProjectDetail } from "@/lib/types";
 import { WatchStar } from "./WatchStar";
 import s from "./Trade.module.css";
@@ -21,13 +20,14 @@ function Token({ sym }: { sym: string }) {
 
 export function TradePanel({ p }: { p: ProjectDetail }) {
   const pool = tradePool(p.pools, p.topPool);
-  const hookProps = (addr: string | null | undefined) => p.hooks.find((h) => h.address.toLowerCase() === (addr ?? "").toLowerCase())?.properties ?? {};
   const top = pool
-    ? { poolId: pool.poolId, chainId: pool.chainId, s0: pool.token0Symbol, s1: pool.token1Symbol, fee: feeLabel(pool.fee), hook: pool.hookAddress, eligibility: pool.eligibility, tvlUsd: pool.tvlUsd as number | null }
+    ? { poolId: pool.poolId, chainId: pool.chainId, s0: pool.token0Symbol, s1: pool.token1Symbol, fee: feeLabel(pool.fee), hook: pool.hookAddress, eligibility: pool.eligibility, source: pool.routingSource, tvlUsd: pool.tvlUsd as number | null }
     : p.topPool && knownChain(p.topPool.chainId)
       ? {
           poolId: p.topPool.poolId, chainId: p.topPool.chainId, s0: p.topPool.token0Symbol, s1: p.topPool.token1Symbol, fee: "", hook: p.topPool.hookAddress,
-          eligibility: p.topPool.hookAddress ? eligibility(p.topPool.hookAddress, {}, hookProps(p.topPool.hookAddress), null) : p.signals.routable,
+          // no pool rows loaded: the project's routing (Uniswap's lists are applied server-side, in derive)
+          eligibility: p.signals.routable,
+          source: p.signals.routingSource,
           tvlUsd: p.metrics.tvlUsd as number | null,
         }
       : null;
@@ -39,7 +39,7 @@ export function TradePanel({ p }: { p: ProjectDetail }) {
   const hookChain = top?.chainId ?? p.hooks[0]?.chainId;
   const hookHref = hook && hookChain != null ? explorerAddressUrl(hookChain, hook) : null;
   const cta = link && top ? {
-    reason: routingNote(top.eligibility).detail,
+    reason: routingNote(top.eligibility, top.source, !!p.signals.routingListsAt).detail,
     label: "View pool on Uniswap",
   } : null;
   const share = activityPace(p.usage.vol24hRolling, p.metrics.vol7d);

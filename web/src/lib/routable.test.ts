@@ -5,7 +5,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eligibility, isRoutable, permissionsFromAddress, projectRoutable } from "./routable";
+import { eligibility, isRoutable, permissionsFromAddress, poolRouting, projectRoutable, projectRouting } from "./routable";
+import type { RoutingLists } from "./uniswap-routing";
 import type { Eligibility, HookFlags, HookProperties } from "./types";
 
 interface Case {
@@ -47,4 +48,30 @@ test("projectRoutable evaluates hook and pool together", () => {
   assert.equal(projectRoutable([{ address: clean, properties: {} }], []), "unknown");
   assert.equal(projectRoutable([{ address: delta, properties: {} }], [{ hookAddress: delta, fee: 3000 }]), "ineligible");
   assert.equal(projectRoutable([{ address: delta, properties: {} }, { address: clean, properties: {} }], [{ hookAddress: clean, fee: 500 }]), "eligible");
+});
+
+test("a hook's dynamicFee property does not hide a static-fee pool through it", () => {
+  // arrakisprivatehook, spot (2026-10-16 audit): registry says dynamicFee, but a pool through the hook has a static fee
+  const clean = "0x5555000000000000000000000000000000000080";
+  assert.equal(projectRoutable([{ address: clean, properties: { dynamicFee: true } }], [{ hookAddress: clean, fee: 3000 }]), "eligible");
+  assert.equal(projectRoutable([{ address: clean, properties: { dynamicFee: true } }], []), "ineligible");
+});
+
+test("Uniswap's denylist beats the rule and its allowlist beats the bits and the fee", () => {
+  const clean = "0xa735d365630987d86789d5aefbd91b244a7feac0";     // CASHCAT/USDG, quoter-exempt, denylisted on Robinhood
+  const dyn = "0x0000113dcf4add69999fad8f20f2b63f979bfcc0";       // StablePairHook, dynamic fee, allowlisted on Ethereum
+  const lists: RoutingLists = {
+    allow: new Map([[1, new Set([dyn])]]),
+    deny: new Map([[4663, new Set([clean])]]),
+    checkedAt: "2026-10-16T19:00:00Z",
+  };
+  assert.deepEqual(projectRouting([{ address: clean, chainId: 4663, properties: {} }], [{ hookAddress: clean, chainId: 4663, fee: 3000 }], lists),
+    { state: "ineligible", source: "denylist" });
+  assert.deepEqual(projectRouting([{ address: dyn, chainId: 1, properties: { dynamicFee: true } }], [{ hookAddress: dyn, chainId: 1, fee: 8388608 }], lists),
+    { state: "eligible", source: "allowlist" });
+  // the same address on another chain is not on that chain's list
+  assert.deepEqual(projectRouting([{ address: dyn, chainId: 42161, properties: {} }], [{ hookAddress: dyn, chainId: 42161, fee: 8388608 }], lists),
+    { state: "ineligible", source: "rule" });
+  assert.deepEqual(poolRouting(clean, 4663, {}, 3000, lists), { state: "ineligible", source: "denylist" });
+  assert.deepEqual(poolRouting(clean, 4663, {}, 3000, undefined), { state: "eligible", source: "rule" });
 });

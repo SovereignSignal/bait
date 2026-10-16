@@ -1,5 +1,6 @@
 // Publication rules for research views. Provider strings are evidence candidates, never trusted URLs.
 import type { ProjectDetail, Eligibility } from './types';
+import type { RoutingSource } from './uniswap-routing';
 
 export function webUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -73,10 +74,17 @@ export function researchProject(p: ProjectDetail): ProjectDetail {
   };
 }
 
-/** The stored enum is an automatic-allowlist heuristic, not the result of an individual routing review. */
-export function routingNote(state: Eligibility): { label: string; detail: string } {
-  if (state === 'eligible') return {label: 'Automatic routing criteria', detail: 'Meets Bait’s conservative automatic-routing rule. Current Uniswap routing and quote availability have not been verified.'};
-  if (state === 'ineligible') return {label: 'Routing review needed', detail: 'Does not meet Bait’s automatic-routing rule. Uniswap Labs can approve individual hooks; Bait has not checked that approval. This does not mean routing is unavailable.'};
+/** Routing as Uniswap publishes it: its hook denylist and allowlist (github.com/Uniswap/uniroute-public) first, then the
+ * automatic rule. `listsChecked` is false when the lists could not be read, so the rule stands alone. Never proves a quote. */
+export function routingNote(state: Eligibility, source: RoutingSource = 'rule', listsChecked = false): { label: string; detail: string } {
+  if (source === 'denylist') return {label: 'Uniswap will not route', detail: 'Uniswap’s published routing denylist names this hook: its router never sends swaps through it. Read the reason in Uniswap’s list before trading through it directly.'};
+  if (source === 'allowlist') return {label: 'On Uniswap’s routing allowlist', detail: 'Uniswap Labs approved this hook for routing in its published allowlist. Whether a swap routes here still depends on liquidity and price.'};
+  if (state === 'eligible') return {label: 'Automatic routing criteria', detail: 'Meets the automatic routing rule Uniswap publishes (no swap-delta permission, not a 0x91 address, a static-fee pool). Current routing and quote availability have not been verified.'};
+  if (state === 'ineligible') {
+    return listsChecked
+      ? {label: 'Not on Uniswap’s routing allowlist', detail: 'Not on Uniswap’s published allowlist, and fails the automatic routing rule (a dynamic fee or a returns-delta permission), so the Uniswap app is unlikely to route through it. Trading through the pool directly still works.'}
+      : {label: 'Routing review needed', detail: 'Does not meet the automatic routing rule, and Uniswap’s published allowlist could not be read just now, so a manual approval is unchecked.'};
+  }
   return {label: 'Routing unknown', detail: 'Insufficient pool or fee data to assess automatic routing. Check current availability in Uniswap.'};
 }
 

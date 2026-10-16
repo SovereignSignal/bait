@@ -38,7 +38,7 @@ test("feed: tab labels, category chips, one h1", async ({ page }) => {
   const errs = watch(page);
   await page.goto("/");
   const tabs = page.getByRole("navigation", { name: "Feed views" });
-  for (const label of ["Trending", "New", "Automatic routing", "All"]) await expect(tabs.getByRole("link", { name: label, exact: true })).toBeVisible();
+  for (const label of ["Trending", "New", "Routable", "All"]) await expect(tabs.getByRole("link", { name: label, exact: true })).toBeVisible();
   const heights = await page.getByRole("group", { name: "Category" }).getByRole("link").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
   expect(heights.length).toBeGreaterThan(2);
   for (const h of heights) expect(h).toBeGreaterThanOrEqual(24);

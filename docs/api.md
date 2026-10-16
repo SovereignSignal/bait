@@ -50,7 +50,7 @@ hooklisted, deployer, deployer_source}] }] }`.
 | `category`, `secondary_categories` | see the list above |
 | `chains[]` | `{id, slug}` the project's hooks are deployed on |
 | `first_seen_at` | first time Bait saw any of its hooks |
-| `hooklisted`, `is_factory`, `upgradeable`, `routable` (`eligible` / `ineligible` / `unknown`), `audit_url` | registry and address-derived facts; `routable` is Bait's conservative rule, not Uniswap's allowlist |
+| `hooklisted`, `is_factory`, `upgradeable`, `routable` (`eligible` / `ineligible` / `unknown`), `routing_source` (`allowlist` / `denylist` / `rule`), `audit_url` | registry and address-derived facts; `routable` applies Uniswap's published hook allowlist and denylist first, then the automatic rule, and `routing_source` says which decided |
 | `status.is_new`, `status.is_wash`, `status.wash_reasons[]`, `status.wash_historical`, `status.is_dormant`, `status.activity_status`, `status.has_historical_usage` | the pipeline's classification; reasons are `24h`, `7d`, `concentrated`, `vol_tvl`, `no_liquidity`, `symmetric`, `uniform`, `unverified` |
 | `metrics.vol_7d_usd`, `vol_7d_prev_usd`, `vol_24h_usd`, `tvl_usd`, `swaps_7d`, `swaps_24h`, `pools`, `hooks` | closed UTC days; volume is a USD estimate |
 | `metrics.wallets_24h`, `wallets_24h_exact` | distinct wallets on the last closed day; when `exact` is false the number is an upper bound |

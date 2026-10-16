@@ -15,7 +15,9 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
 import { SAMPLE_ALIASES, SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
-import { eligibility, flagLabels, projectRoutable } from "@/lib/routable";
+import { DYNAMIC_FEE_FLAG, flagLabels, poolRouting, projectRouting } from "@/lib/routable";
+import type { RoutingLists } from "@/lib/uniswap-routing";
+import { routingLists } from "./routing-lists";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate } from "@/lib/format";
@@ -50,21 +52,40 @@ const EMPTY_USAGE: Usage = { vol24h: null, vol24hRolling: null, tx24h: null, wal
 
 // ---------- derivation shared by both sources ----------
 
-function derive(p: ProjectDetail): ProjectDetail {
+/** Per hook (`chain:address`): whether any pool through it has a static fee (s) or a dynamic one (d). Read for every
+ * pool, so a launchpad's routing does not depend on which 50 pools the page lists or whether pools were loaded at all. */
+type HookFees = Map<string, { s: boolean; d: boolean }>;
+
+function feePools(hooks: ProjectDetail["hooks"], fees: HookFees): Array<{ hookAddress: string; chainId: number; fee: number }> {
+  return hooks.flatMap((h) => {
+    const f = fees.get(`${h.chainId}:${h.address.toLowerCase()}`);
+    if (!f) return [];
+    return [
+      ...(f.s ? [{ hookAddress: h.address, chainId: h.chainId, fee: 0 }] : []),
+      ...(f.d ? [{ hookAddress: h.address, chainId: h.chainId, fee: DYNAMIC_FEE_FLAG }] : []),
+    ];
+  });
+}
+
+function derive(p: ProjectDetail, ctx: { lists?: RoutingLists; fees?: HookFees } = {}): ProjectDetail {
   const primary = p.hooks[0];
+  const routing = projectRouting(p.hooks, ctx.fees ? feePools(p.hooks, ctx.fees) : p.pools, ctx.lists);
   const labels = primary ? flagLabels(primary.address, primary.flags, primary.properties) : [];
   const flagLine = p.isFactory && p.metrics.hooksN > 1 ? [`${p.metrics.hooksN.toLocaleString("en-US")} hooks`, "one per pool"] : labels;
   return researchProject({
     ...p,
     flagLabels: flagLine,
     hooklisted: p.hooks.some((h) => h.hooklisted === true),
-    pools: p.pools.map((pool) => ({
-      ...pool,
-      eligibility: eligibility(pool.hookAddress, null, p.hooks.find((h) => h.address.toLowerCase() === pool.hookAddress.toLowerCase() && h.chainId === pool.chainId)?.properties ?? {}, pool.fee),
-    })),
+    pools: p.pools.map((pool) => {
+      const props = p.hooks.find((h) => h.address.toLowerCase() === pool.hookAddress.toLowerCase() && h.chainId === pool.chainId)?.properties ?? {};
+      const r = poolRouting(pool.hookAddress, pool.chainId, props, pool.fee, ctx.lists);
+      return { ...pool, eligibility: r.state, routingSource: r.source };
+    }),
     signals: {
       ...p.signals,
-      routable: projectRoutable(p.hooks, p.pools),
+      routable: routing.state,
+      routingSource: routing.source,
+      routingListsAt: ctx.lists?.checkedAt ?? null,
       smartMoneyLps: nansenCovers(p.chains) ? (p.signals.smartMoneyLps ?? 0) : null,
     },
   });
@@ -337,7 +358,7 @@ async function refreshIfNewDay(db: NonNullable<ReturnType<typeof getDb>>): Promi
 let lastGen: number | undefined;
 async function loadAll(): Promise<ProjectDetail[]> {
   const db = getDb();
-  if (!db) return usingFixtures() ? SAMPLE_PROJECTS.map(derive) : [];
+  if (!db) return usingFixtures() ? SAMPLE_PROJECTS.map((p) => derive(p)) : [];
   await refreshIfNewDay(db);
   const all: Loaded = await safe("loadAll", () => cached<Loaded>("loadAll", () => loadFromDb(db, { full: false }), degradedTtl), []);
   // a new list load retires the details cached against the old one (they would never be read again)
@@ -423,7 +444,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
   // the running day and is never read.
   const end = latest ? shiftDay(latest, -1) : null;
 
-  const [daily, hookRows, signalRows, receiptRows, topPools, statsUsage, smartUsage] = await Promise.all([
+  const [daily, hookRows, signalRows, receiptRows, topPools, statsUsage, smartUsage, lists, hookFees] = await Promise.all([
     latest ? db.select().from(t.projectDaily).where(and(eq(t.projectDaily.day, latest), inArray(t.projectDaily.projectId, ids))) : [],
     db.select().from(t.hooks).where(inArray(t.hooks.projectId, ids)),
     db.select().from(t.signals).where(inArray(t.signals.projectId, ids)),
@@ -495,9 +516,27 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
           group by h.project_id`),
       null,
     ),
+    routingLists(),
+    // Static and dynamic fees per hook across every pool (about 80 ms over 230K pools): routing needs all of them.
+    safe(
+      "routing:hook_fees",
+      () =>
+        db.execute<HookFeeRow>(sql`
+          select p.hook_address, p.chain_id,
+                 bool_or((p.fee & ${DYNAMIC_FEE_FLAG}) = 0) as s, bool_or((p.fee & ${DYNAMIC_FEE_FLAG}) <> 0) as d
+          from ${t.pools} p
+          join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
+          where h.project_id = any(${idArray}) and p.fee is not null and p.pool_id not like 'hook:%'
+          group by p.hook_address, p.chain_id`),
+      null,
+    ),
   ]);
 
   const dailyBy = new Map(daily.map((d) => [d.projectId, d]));
+  // null when the summary failed: routing then reads the loaded pools, as before (none on a list load)
+  const fees: HookFees | undefined = hookFees
+    ? new Map(rowsOf<HookFeeRow>(hookFees).map((r) => [`${Number(r.chain_id)}:${String(r.hook_address).toLowerCase()}`, { s: !!r.s, d: !!r.d }]))
+    : undefined;
   const hooksBy = groupBy(hookRows, (h) => h.projectId ?? -1);
   const receiptsBy = groupBy(receiptRows, (r) => r.projectId);
   const topBy = new Map(rowsOf<TopPoolRow>(topPools).map((r) => [Number(r.project_id), r]));
@@ -629,7 +668,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
         series,
         topWallets,
         through: end,
-      }),
+      }, { lists, fees }),
     );
   }
   return out;
@@ -650,6 +689,7 @@ type PoolRow = {
   vol24: unknown;
 };
 type PoolStatRow = { pool_id: string; chain_id: number; wallets_24h: unknown; traders_24h: unknown };
+type HookFeeRow = { hook_address: string; chain_id: number; s: boolean | null; d: boolean | null };
 
 async function loadPools(db: Db, projectId: number, latest: string | null): Promise<PoolView[]> {
   if (!latest) return [];

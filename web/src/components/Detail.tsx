@@ -55,7 +55,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       ? { k: "Swaps 24h", v: `≈ ${int(u.buys24h + u.sells24h)}`, title: "Rolling 24h buys + sells from the pool feed; the closed-day count is not in yet." }
       : { k: `Swaps ${win.short}`, v: int(u.tx24h), title: win.note },
   ];
-  const routing = routingNote(p.signals.routable);
+  const routing = routingNote(p.signals.routable, p.signals.routingSource, !!p.signals.routingListsAt);
   const activity = activityNote(p);
   const badges: Array<{ cls: string; label: string; why: string; href?: string }> = [
     ...(p.isWash ? [{ cls: "b-r", label: p.washHistorical ? "Historical wash-like volume" : "Wash-like volume", why: washLine(p.washReason, p.washHistorical) }] : []),
@@ -195,7 +195,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
         <h2>Project context and evidence</h2>
         <div className={s.why}>{why}</div>
         <p className="mut3">Usage describes the available seven-day window{through ? ` ending ${dayLabel(through)} UTC` : ""}. Volume alone does not establish organic demand, safety, or returns.</p>
-        {p.isDormant && <p className="mut">Retained for research and search. Excluded from New, Trending, Movers and automatic-routing discovery.</p>}
+        {p.isDormant && <p className="mut">Retained for research and search. Excluded from New, Trending, Movers and the Routable tab.</p>}
         {p.hasHistoricalUsage && p.activityStatus === "unknown" && <p className="mut">Retained on historical usage evidence. Missing recent coverage is not evidence of zero activity.</p>}
         {p.whyBlurb && (
           <details className={s.badgeHelp}>
