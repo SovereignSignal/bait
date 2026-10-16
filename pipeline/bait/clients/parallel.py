@@ -52,7 +52,11 @@ class Parallel:
         self.meter.check("parallel", price)
         try:
             run = http.post_json_paid(self.c, "https://api.parallel.ai/v1/tasks/runs", headers=self.headers, json={
-                "input": f"Uniswap v4 hook project '{project_name}'. Known facts: {hints}",
+                "input": (f"Uniswap v4 hook project '{project_name}'. Known facts: {hints}. Fill website, github, x_handle "
+                          "and audit_url only from a source that names one of these hook contract addresses or "
+                          "plainly describes this hook; a different project with a similar name is not this one. "
+                          "Uniswap Labs and the Uniswap Foundation are not the team unless a source says they "
+                          "deployed this hook. Leave a field empty rather than guess."),
                 "task_spec": {"output_schema": OUTPUT_SCHEMA},
                 "processor": self.processor,
             })

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { SAMPLE_PROJECTS } from '../fixtures/sample';
-import { activityNote, activityPace, githubUrl, researchProject, retainedDormant, routingNote, webUrl, xHandle } from './research';
+import { activityNote, activityPace, githubUrl, isUniswapBrand, researchProject, retainedDormant, routingNote, webUrl, xHandle } from './research';
 import { applyTab, listFor, movers, searchRows } from './feed';
 import { hookKeys, toRow } from './present';
 import { evaluateCoverage, evaluateHealth, freshness, type HealthChain } from './health';
@@ -131,4 +131,29 @@ test('cursor time, absent evidence, no chains and stale evidence fail coverage c
 test('actual scored day outranks run receipt date in freshness labels', () => {
   assert.equal(freshness({receipt,chains:[chain],reportedThrough:'2026-10-12'},now).through,'2026-10-12');
   assert.equal(evaluateCoverage({receipt,chains:[chain],reportedThrough:null},now).status,'unknown');
+});
+
+test('Uniswap and Uniswap Foundation links show only on a project in the hooklist registry', () => {
+  // FoundationHookV2 (2026-10-16 audit): a launch template linked to the Foundation by a name-only search
+  const fake = p();
+  fake.hooklisted = false;
+  fake.hooks = fake.hooks.map((h) => ({...h, hooklisted: false, deployer: null}));
+  Object.assign(fake, {website: 'https://uniswapfoundation.org/', github: 'https://github.com/uniswapfoundation/foundational-hooks', xHandle: 'UniswapFND'});
+  fake.signals = {...fake.signals, auditUrl: 'https://developers.uniswap.org/docs/audit.pdf'};
+  const r = researchProject(fake);
+  assert.deepEqual([r.website, r.github, r.xHandle, r.signals.auditUrl], [null, null, null, null]);
+  // StablePairHook, DualPool, the Liquidity Launcher strategies: in Uniswap's hooklist
+  const real = structuredClone(fake);
+  real.hooklisted = true;
+  real.hooks = real.hooks.map((h, i) => ({...h, hooklisted: i === 0}));
+  Object.assign(real, {website: 'https://developers.uniswap.org/docs/protocols/uniswap-labs-hooks/stable-pair/overview', github: 'https://github.com/Uniswap/v4-hooks-public', xHandle: 'Uniswap'});
+  const k = researchProject(real);
+  assert.deepEqual([k.website, k.github, k.xHandle], ['https://developers.uniswap.org/docs/protocols/uniswap-labs-hooks/stable-pair/overview', 'https://github.com/Uniswap/v4-hooks-public', 'Uniswap']);
+  // other teams' links are untouched
+  const other = structuredClone(fake);
+  Object.assign(other, {website: 'https://kyber.network/', github: 'https://github.com/KyberNetwork/kyber-exclusive-amm-sc', xHandle: 'KyberNetwork'});
+  assert.equal(researchProject(other).github, 'https://github.com/KyberNetwork/kyber-exclusive-amm-sc');
+  assert.equal(isUniswapBrand('https://blog.uniswap.org/x'), true);
+  assert.equal(isUniswapBrand('https://notuniswap.org/'), false);
+  assert.equal(isUniswapBrand('https://x.com/UniswapFND'), true);
 });

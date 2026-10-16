@@ -35,6 +35,29 @@ export function xHandle(value: unknown): string | null {
   return text;
 }
 
+// A link to a Uniswap or Uniswap Foundation property shows only on a project with a hook in Uniswap's own hooklist
+// registry (StablePair, VolatilePair, DualPool, the Liquidity Launcher strategies). The 2026-10-16 audit found an
+// unlisted launch template (FoundationHookV2, 61 projects) linked to uniswapfoundation.org, the Foundation's GitHub and
+// @UniswapFND by a name-only search.
+
+/** A URL on uniswap.org or uniswapfoundation.org (any subdomain), a GitHub or X account whose name starts with
+ * "uniswap", or such a bare X handle. */
+export function isUniswapBrand(link: string | null | undefined): boolean {
+  if (!link) return false;
+  if (/^[A-Za-z0-9_]{1,15}$/.test(link)) return /^uniswap/i.test(link);
+  try {
+    const u = new URL(link);
+    const host = u.hostname.toLowerCase().replace(/^www\./, '');
+    if (/(^|\.)uniswap(foundation)?\.org$/.test(host)) return true;
+    if (['github.com', 'x.com', 'twitter.com'].includes(host)) return /^\/uniswap/i.test(u.pathname);
+    return false;
+  } catch { return false; }
+}
+
+export function uniswapBuilt(p: Pick<ProjectDetail, 'hooks'>): boolean {
+  return p.hooks.some((h) => h.hooklisted === true);
+}
+
 /** Only the pipeline can establish historical usage and complete recent zero-swap coverage. A zero USD value,
  * registry membership, verified source or an old frontend flag cannot establish dormancy or override spam. */
 export function retainedDormant(p: ProjectDetail): boolean {
@@ -56,6 +79,8 @@ export function activityNote(p: ProjectDetail): { label: string; detail: string 
 }
 
 export function researchProject(p: ProjectDetail): ProjectDetail {
+  const official = uniswapBuilt(p);
+  const brand = (v: string | null): string | null => (v && !official && isUniswapBrand(v) ? null : v);
   const isDormant = retainedDormant(p);
   const unidentified = !p.hooklisted && (/^unlisted-hook(?:-|$)/.test(p.slug) || /^(?:unlisted hook|.* hook(?: family)? · 0x)/i.test(p.name));
   return {
@@ -63,14 +88,14 @@ export function researchProject(p: ProjectDetail): ProjectDetail {
     isDormant,
     isNew: !isDormant && p.isNew,
     scoreTrending: isDormant ? 0 : p.scoreTrending,
-    website: unidentified ? null : webUrl(p.website),
-    github: unidentified ? null : githubUrl(p.github),
-    xHandle: unidentified ? null : xHandle(p.xHandle),
+    website: unidentified ? null : brand(webUrl(p.website)),
+    github: unidentified ? null : brand(githubUrl(p.github)),
+    xHandle: unidentified ? null : brand(xHandle(p.xHandle)),
     // A search on an address-family placeholder can return an unrelated team's site. Keep the observed label and metrics.
     whatLine: unidentified ? 'On-chain hook activity. Project identity and purpose have not been independently confirmed.' : p.whatLine,
     whyBlurb: unidentified ? '' : p.whyBlurb,
     receipts: (unidentified ? [] : p.receipts).filter(r => webUrl(r.url)).map(r => ({...r, url: webUrl(r.url)!})),
-    signals: {...p.signals, auditUrl: unidentified ? null : webUrl(p.signals.auditUrl)},
+    signals: {...p.signals, auditUrl: unidentified ? null : brand(webUrl(p.signals.auditUrl))},
   };
 }
 
