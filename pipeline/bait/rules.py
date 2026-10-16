@@ -673,3 +673,43 @@ def fallback_category(texts, properties, pool_fees, is_factory: bool, pools_tota
     if any((p or {}).get("dynamicFee") for p in properties) or any(is_dynamic_fee(f) for f in pool_fees):
         return "dynamic-fee"
     return None
+
+
+# --- pool labels (steps/snapshot.py). Symbols Bait can vouch for by address: the native coin (currency 0x0), the wrapped
+# native coin and major stablecoins. Used to put back labels written in GeckoTerminal's base/quote order instead of
+# currency0/currency1 (2026-10-16 audit: about 10% of pools). --------------------------------------------------------
+_NATIVE_SYMBOL = {56: {"BNB"}, 137: {"POL", "MATIC"}, 43114: {"AVAX"}, 42220: {"CELO"}}
+_WRAPPED_SYMBOL = {56: {"WBNB"}, 137: {"WPOL", "WMATIC"}, 43114: {"WAVAX"}, 42220: {"CELO"}}
+_KNOWN_SYMBOLS: dict[int, dict[str, set[str]]] = {
+    1: {"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": {"USDC"}, "0xdac17f958d2ee523a2206206994597c13d831ec7": {"USDT"},
+        "0x6b175474e89094c44da98b954eedeac495271d0f": {"DAI"}},
+    10: {"0x0b2c639c533813f4aa9d7837caf62653d097ff85": {"USDC"}},
+    56: {"0x55d398326f99059ff775485246999027b3197955": {"USDT", "BSC-USD"}, "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": {"USDC"}},
+    130: {"0x078d782b760474a361dda0af3839290b0ef57ad6": {"USDC"}},
+    8453: {"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": {"USDC"}},
+    42161: {"0xaf88d065e77c8cc2239327c5edb3a432268e5831": {"USDC"}},
+    43114: {"0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e": {"USDC"}, "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7": {"USDT"}},
+}
+
+
+def known_symbols(chain_id: int, address: str) -> set[str]:
+    from .indexer.prices import WRAPPED_NATIVE
+    a = (address or "").lower()
+    if a == "0x" + "0" * 40:
+        return _NATIVE_SYMBOL.get(chain_id, {"ETH"})
+    if WRAPPED_NATIVE.get(chain_id) == a:
+        return _WRAPPED_SYMBOL.get(chain_id, {"WETH"})
+    return _KNOWN_SYMBOLS.get(chain_id, {}).get(a, set())
+
+
+def symbols_swapped(chain_id: int, token0, token1) -> bool:
+    """True when a pool's two symbols sit on the wrong addresses: a side Bait knows by address carries the other side's
+    symbol, and the known side's own symbol is not on it (USDC at the USDG address and USDG at USDC's)."""
+    def tok(t) -> tuple[str, str]:
+        return (str(t.get("id") or "").lower(), str(t.get("symbol") or "").strip().lower()) if isinstance(t, dict) else ("", "")
+    (a0, s0), (a1, s1) = tok(token0), tok(token1)
+    if not (s0 and s1) or s0 == s1:
+        return False
+    e0 = {x.lower() for x in known_symbols(chain_id, a0)}
+    e1 = {x.lower() for x in known_symbols(chain_id, a1)}
+    return (bool(e1) and s0 in e1 and s1 not in e1 and s0 not in e0) or (bool(e0) and s1 in e0 and s0 not in e0 and s1 not in e1)

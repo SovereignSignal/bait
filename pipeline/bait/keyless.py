@@ -197,6 +197,18 @@ def flag_labels(flags: dict) -> list[str]:
     return [v for k, v in names.items() if flags.get(k)][:4]
 
 
+def token_ids(p: dict) -> tuple[str | None, str | None]:
+    """GeckoTerminal's base and quote token addresses ("eth_0xabc..." ids). The pool's "A / B" name lists base then quote,
+    which is not currency0 then currency1."""
+    rel = p.get("relationships") or {}
+
+    def addr(k: str) -> str | None:
+        tid = ((rel.get(k) or {}).get("data") or {}).get("id") or ""
+        a = tid.rsplit("_", 1)[-1].lower()
+        return a if a.startswith("0x") else None
+    return addr("base_token"), addr("quote_token")
+
+
 def collect(http: Http, pages: int, new_pages: int = 2, nets: list[str] | None = None) -> dict:
     pools: dict[tuple[str, str], dict] = {}
     for net, (cid, cname, _, _) in CHAINS.items():
@@ -218,7 +230,7 @@ def collect(http: Http, pages: int, new_pages: int = 2, nets: list[str] | None =
                 rows = (res or {}).get("data", [])
                 for p in rows:
                     a = p["attributes"]
-                    pools[(net, a["address"].lower())] = {"net": net, "attrs": a}
+                    pools[(net, a["address"].lower())] = {"net": net, "attrs": a, "tokens": token_ids(p)}
                 if len(rows) < 20:
                     break
         # newest pools across all dexes, keep v4 ones
@@ -228,7 +240,7 @@ def collect(http: Http, pages: int, new_pages: int = 2, nets: list[str] | None =
                 dex_rel = (((p.get("relationships") or {}).get("dex") or {}).get("data") or {}).get("id", "")
                 if dex_rel == dex:
                     a = p["attributes"]
-                    pools[(net, a["address"].lower())] = {"net": net, "attrs": a}
+                    pools[(net, a["address"].lower())] = {"net": net, "attrs": a, "tokens": token_ids(p)}
         log(f"{cname}: {len(pools) - before} v4 pools from GeckoTerminal ({dex})")
     return pools
 

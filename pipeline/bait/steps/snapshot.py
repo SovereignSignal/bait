@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
 from ..config import CHAINS
 from ..db import hooks, pool_snapshots, pool_stats, pools, savepoint, upsert
-from ..rules import flags_from_address, is_self_priced_supply
+from ..rules import flags_from_address, is_self_priced_supply, symbols_swapped
 from . import RunContext, log
 
 SERIES_DAYS = 15          # candles per pool (fetch_ohlcv limit=15): the 14 closed days score reads plus the running day
@@ -34,6 +35,7 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
         except Exception as e:  # one bad subgraph must not kill the night
             out["errors"] += 1
             log.warning("snapshot chain=%s failed: %s", ch.slug, e)
+    out["symbols_fixed"] = _fix_swapped_symbols(conn)
     rest = [ch.chain_id for ch in wanted if ch.chain_id not in covered]
     if rest and os.environ.get("KEYLESS", "1") != "0":
         try:
@@ -76,7 +78,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
                                       "description": "", "flags": flags_from_address(hook), "properties": {}, "hooklisted": False,
                                       "verified_source": None,
                                       "audit_url": None, "deployer": None, "first_seen_at": ctx.now}
-        sym0, sym1 = _symbols(a.get("name", ""))
+        sym0, sym1 = pool_symbols(a.get("name", ""), p.get("tokens"), k["currency0"], k["currency1"])
         pool_rows.append({"pool_id": pid, "chain_id": cid, "hook_address": hook,
                           "token0": {"id": k["currency0"], "symbol": sym0}, "token1": {"id": k["currency1"], "symbol": sym1},
                           "fee": k["fee"], "tick_spacing": k["tickSpacing"],
@@ -208,11 +210,49 @@ def keyless_http(ctx: RunContext):
     return http
 
 
-def _symbols(name: str) -> tuple[str | None, str | None]:
+def _fix_swapped_symbols(conn) -> int:
+    """Put back pool labels written in GeckoTerminal's base/quote order on earlier nights: where a side Bait knows by
+    address (native coin, wrapped native, major stablecoins) carries the other side's symbol, swap the two. Pools
+    GeckoTerminal lists tonight are rewritten from token ids anyway; this covers the ones it no longer lists."""
+    fixes = []
+    for r in conn.execute(sa.select(pools.c.pool_id, pools.c.chain_id, pools.c.token0, pools.c.token1)
+                          .where(pools.c.token0.is_not(None), pools.c.token1.is_not(None))):
+        if isinstance(r.token0, dict) and isinstance(r.token1, dict) and symbols_swapped(r.chain_id, r.token0, r.token1):
+            fixes.append({"k_pool": r.pool_id, "k_chain": r.chain_id,
+                          "t0": {**r.token0, "symbol": r.token1.get("symbol")}, "t1": {**r.token1, "symbol": r.token0.get("symbol")}})
+    if fixes:
+        conn.execute(pools.update().where(pools.c.pool_id == sa.bindparam("k_pool"), pools.c.chain_id == sa.bindparam("k_chain"))
+                     .values(token0=sa.bindparam("t0"), token1=sa.bindparam("t1")), fixes)
+        log.info("snapshot: %d pool labels put back on the right token", len(fixes))
+    return len(fixes)
+
+
+def _name_symbols(name: str) -> tuple[str | None, str | None]:
+    """GeckoTerminal's "BASE / QUOTE 0.3%" -> (base, quote); a symbol may contain spaces, only the fee tier is cut."""
     if " / " not in name:
         return None, None
     a, b = name.split(" / ", 1)
-    return a.strip() or None, (b.split(" ")[0].strip() or None)
+    b = re.sub(r"\s+\d+(\.\d+)?%$", "", b.strip())
+    return a.strip() or None, b.strip() or None
+
+
+def pool_symbols(name: str, tokens, currency0: str, currency1: str) -> tuple[str | None, str | None]:
+    """Symbols for currency0 and currency1, matched through GeckoTerminal's base and quote token addresses. Native ETH
+    (currency 0x0) has its own GeckoTerminal id, so a side that matches neither takes the other symbol when exactly one
+    side matched. Without token ids the order is unknown: no symbols (the web resolves them on-chain), never a guess.
+    2026-10-16 audit: assigning base/quote by position mislabelled about 10% of pools (USDC as USDG, ETH as the launch
+    token) and the unlisted names built from them."""
+    base, quote = _name_symbols(name)
+    b_addr, q_addr = tokens or (None, None)
+    if not (b_addr or q_addr):
+        return None, None
+    by_addr = {x: s for x, s in ((b_addr, base), (q_addr, quote)) if x}
+    s0, s1 = by_addr.get(currency0.lower()), by_addr.get(currency1.lower())
+    if s0 is None and s1 is not None:
+        s0 = quote if s1 == base else base
+    elif s1 is None and s0 is not None:
+        s1 = quote if s0 == base else base
+    return s0, s1
 
 
 def _ts(iso: str | None):

@@ -11,7 +11,7 @@ def _pool(addr, hook, vol24, buyers, created, daily, reserve="2000000"):
                                      "reserve_in_usd": reserve, "volume_usd": {"h24": str(vol24)},
                                      "transactions": {"h24": {"buys": 300, "sells": 200, "buyers": buyers, "sellers": 0}}},
             "key": {"currency0": "0x" + "0" * 40, "currency1": "0x" + "1" * 40, "fee": 3000, "tickSpacing": 60, "hooks": hook},
-            "daily": daily}
+            "tokens": ("0x" + "0" * 40, "0x" + "1" * 40), "daily": daily}
 
 
 def _t(d):
@@ -128,6 +128,34 @@ def test_a_running_day_partial_candle_is_replaced_when_the_pool_leaves_the_cap(c
     r = _rows(conn, pid)[ctx.day - timedelta(days=1)]
     assert (r.volume_usd_day, r.estimated) == (9_000.0, True)
 
+
+USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+USDG = "0xe343167631d89b6ffc58b88d6b7fb0228795491d"
+CLAUS = "0x1234567890abcdef1234567890abcdef12345678"
+NATIVE = "0x" + "0" * 40
+
+
+def test_pool_symbols_follow_token_ids_not_name_order():
+    """StablePairHook USDG/USDC, live 2026-10-16: GeckoTerminal names it "USDG / USDC" (base USDG) while currency0 is USDC;
+    by position Bait labelled USDC's address "USDG". Native ETH has its own GeckoTerminal id."""
+    assert snapshot.pool_symbols("USDG / USDC 0.01%", (USDG, USDC), USDC, USDG) == ("USDC", "USDG")
+    assert snapshot.pool_symbols("CLAUS / ETH", (CLAUS, "0x" + "e" * 40), NATIVE, CLAUS) == ("ETH", "CLAUS")
+    assert snapshot.pool_symbols("GTI 6 / WETH 1%", ("0x" + "6" * 40, "0x" + "7" * 40), "0x" + "6" * 40, "0x" + "7" * 40) == ("GTI 6", "WETH")
+    assert snapshot.pool_symbols("USDC / WETH", None, USDC, "0x" + "4" * 40) == (None, None)    # order unknown: no guess
+
+
+def test_labels_written_in_name_order_are_put_back(conn, ctx, monkeypatch):
+    conn.execute(sa.insert(db.pools).values([
+        {"pool_id": "0xsp", "chain_id": 1, "hook_address": "0xh", "token0": {"id": USDC, "symbol": "USDG"}, "token1": {"id": USDG, "symbol": "USDC"}},
+        {"pool_id": "0xcl", "chain_id": 1, "hook_address": "0xh", "token0": {"id": NATIVE, "symbol": "CLAUS"}, "token1": {"id": CLAUS, "symbol": "ETH"}},
+        {"pool_id": "0xok", "chain_id": 1, "hook_address": "0xh", "token0": {"id": NATIVE, "symbol": "ETH"}, "token1": {"id": CLAUS, "symbol": "CLAUS"}},
+        {"pool_id": "0xuu", "chain_id": 8453, "hook_address": "0xh", "token0": {"id": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "symbol": "USDC"},
+         "token1": {"id": "0x8335cb97db9ccdd95325c2da5622eebdd6ca2913", "symbol": "USDC"}},       # same symbol: nothing to swap
+    ]))
+    out = _run_keyless(conn, ctx, monkeypatch, [])
+    got = {r.pool_id: (r.token0["symbol"], r.token1["symbol"]) for r in conn.execute(sa.select(db.pools))}
+    assert got == {"0xsp": ("USDC", "USDG"), "0xcl": ("ETH", "CLAUS"), "0xok": ("ETH", "CLAUS"), "0xuu": ("USDC", "USDC")}
+    assert out["symbols_fixed"] == 2
 
 def test_an_idle_launch_holding_most_of_its_supply_has_unknown_tvl(conn, ctx, monkeypatch):
     """Clanker v2 KATIE/WETH on Base, live 2026-10-16: reserve $160.1M against a $222.8M FDV, $0 in 24h. Its TVL is the
