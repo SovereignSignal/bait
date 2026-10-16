@@ -17,7 +17,7 @@ import * as t from "./schema";
 import { SAMPLE_ALIASES, SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
 import { DYNAMIC_FEE_FLAG, flagLabels, poolRouting, projectRouting } from "@/lib/routable";
 import type { RoutingLists } from "@/lib/uniswap-routing";
-import { routingLists } from "./routing-lists";
+import { routingLists, routingListsEnabled } from "./routing-lists";
 import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate } from "@/lib/format";
@@ -559,7 +559,9 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
   }
 
   const out: Loaded = [];
-  out.degraded = statsUsage === null || smartUsage === null;
+  // without Uniswap's lists routing is rule-only: keep the load short-lived so the lists, fetched in the background,
+  // reach the rows within minutes instead of an hour
+  out.degraded = statsUsage === null || smartUsage === null || (lists.checkedAt === null && routingListsEnabled());
   out.day = latest;
   out.gen = ++loads;
   for (const p of projectRows) {
