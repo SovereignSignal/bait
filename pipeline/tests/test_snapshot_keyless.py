@@ -156,3 +156,18 @@ def test_labels_written_in_name_order_are_put_back(conn, ctx, monkeypatch):
     got = {r.pool_id: (r.token0["symbol"], r.token1["symbol"]) for r in conn.execute(sa.select(db.pools))}
     assert got == {"0xsp": ("USDC", "USDG"), "0xcl": ("ETH", "CLAUS"), "0xok": ("ETH", "CLAUS"), "0xuu": ("USDC", "USDC")}
     assert out["symbols_fixed"] == 2
+
+def test_an_idle_launch_holding_most_of_its_supply_has_unknown_tvl(conn, ctx, monkeypatch):
+    """Clanker v2 KATIE/WETH on Base, live 2026-10-16: reserve $160.1M against a $222.8M FDV, $0 in 24h. Its TVL is the
+    token's own supply at the pool's price. A launch that trades keeps its TVL (The Standard Reserve: 71% of FDV, $1.2M a
+    day)."""
+    day = ctx.day
+    daily = [(_t(day - timedelta(days=i)), 0.0) for i in range(3, -1, -1)]
+    idle = _pool("0x" + "e" * 64, "0x" + "f" * 40, 0, 0, "2026-10-10T05:38:13Z", daily, reserve="160115034")
+    idle["attrs"]["fdv_usd"] = "222804287"
+    busy = _pool("0x" + "9" * 64, "0x" + "8" * 40, 1_188_555, 300, "2026-09-01T00:00:00Z", daily, reserve="14095343")
+    busy["attrs"]["fdv_usd"] = "19821224"
+    out = _run_keyless(conn, ctx, monkeypatch, [idle, busy])
+    assert out["tvl_self_priced"] == 1
+    assert {r.tvl_usd for r in _rows(conn, idle["attrs"]["address"]).values()} == {None}
+    assert {r.tvl_usd for r in _rows(conn, busy["attrs"]["address"]).values()} == {14_095_343.0}

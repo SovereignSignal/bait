@@ -9,7 +9,7 @@ import sqlalchemy as sa
 
 from ..config import CHAINS
 from ..db import hooks, pool_snapshots, pool_stats, pools, savepoint, upsert
-from ..rules import flags_from_address, symbols_swapped
+from ..rules import flags_from_address, is_self_priced_supply, symbols_swapped
 from . import RunContext, log
 
 SERIES_DAYS = 15          # candles per pool (fetch_ohlcv limit=15): the 14 closed days score reads plus the running day
@@ -68,6 +68,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     end = ctx.day - timedelta(days=1)
     known = {(r.address, r.chain_id) for r in conn.execute(sa.select(hooks.c.address, hooks.c.chain_id))}
     new_hooks, pool_rows, snap_rows, stat_rows, capped, swaps = {}, [], [], [], [], {}
+    self_priced = 0
     for p in hooked:
         a, k = p["attrs"], p["key"]
         cid = K.CHAINS[p["net"]][0]
@@ -86,6 +87,9 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
         tx = a.get("transactions", {}).get("h24", {})
         counts = {f"{n}_24h": _int(tx.get(n)) for n in ("buys", "sells", "buyers", "sellers")}
         vol24 = float(a["volume_usd"]["h24"] or 0)
+        if is_self_priced_supply(tvl, _float(a.get("fdv_usd")), vol24):
+            tvl = None                          # a launch's own supply at its own price, idle: not liquidity (rules.py)
+            self_priced += 1
         # vol_source=None (keyless): a same-day rerun must not leave the onchain step's label on a keyless number.
         # traders_24h = buyers + sellers: an upper bound of distinct wallets (one that bought and sold counts twice).
         stat_rows.append({"pool_id": pid, "chain_id": cid, "day": ctx.day, "vol_24h": vol24, "vol_24h_rolling": vol24,
@@ -121,6 +125,7 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     out["keyless_chains"] = len(nets)
     out["keyless_pools"] = len(pool_rows)
     out["estimated_pools"] = len(est)
+    out["tvl_self_priced"] = self_priced
     out["pools"] += len(pool_rows)
     log.info("snapshot keyless hooked_pools=%d unlisted_hooks=%d estimated=%d gt_calls=%d", len(pool_rows), len(new_hooks),
              len(est), http.gt_calls)
