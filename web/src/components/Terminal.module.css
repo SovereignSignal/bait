@@ -3,7 +3,7 @@
 /* top bar */
 .top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: rgba(10,10,19,.82); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 20px; letter-spacing: -.02em; }
-.search { flex: 1; max-width: 520px; margin: 0 auto; display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); color: var(--fg3); }
+.search { flex: 1; min-width: 0; max-width: 520px; margin: 0 auto; display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); color: var(--fg3); }
 .search input { flex: 1; min-width: 0; background: none; border: 0; outline: none; color: var(--fg); }
 .search input::placeholder { color: var(--fg3); }
 .search:focus-within { border-color: var(--pink); box-shadow: 0 0 0 3px var(--pinkbg); }
@@ -80,6 +80,12 @@ select.pill option { background: var(--panel); color: var(--fg); }
 .dock [aria-current="true"], .dock [aria-current="page"] { color: var(--fg); }
 
 /* tablet: trade panel moves under the detail */
+/* laptop widths: the search box gives way first, then the link padding; the ⌘K hint goes */
+@media (max-width: 1100px) {
+  .links a { padding: 8px 6px; }
+  .kbd { display: none; }
+}
+
 @media (max-width: 1180px) {
   .app { grid-template-columns: 320px minmax(0,1fr); }
   .side { grid-column: 2; position: static; }

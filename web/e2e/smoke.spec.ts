@@ -267,3 +267,14 @@ test("read API: list, one project, hook lookup, and the errors a script can act 
   expect((await request.get("/api/v1/projects/no-such-project-xyz")).status()).toBe(404);
   expect((await request.get("/api/v1/hooks/0xnothex")).status()).toBe(400);
 });
+
+
+test("desktop at 1000px: the header fits without wrapping a link or scrolling sideways", async ({ page }) => {
+  test.skip(phone(), "desktop header only");
+  await page.setViewportSize({ width: 1000, height: 800 });
+  await page.goto("/");
+  const pages = page.getByRole("navigation", { name: "Pages" });
+  for (const h of await pages.getByRole("link").evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height))) expect(h).toBeLessThan(40);
+  const { sw, cw } = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
+  expect(sw).toBeLessThanOrEqual(cw);
+});
