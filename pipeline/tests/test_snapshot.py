@@ -40,7 +40,7 @@ def test_snapshot_paginates_and_writes_pools_and_snapshots(conn, ctx):
     ctx.clients["graph"] = make_graph(seen)
     ctx.chains = [8453]
     out = snapshot.run(conn, ctx)
-    assert out == {"chains": 1, "skipped": 0, "pools": 1002, "errors": 0, "keyless_chains": 0, "keyless_pools": 0}
+    assert out == {"chains": 1, "skipped": 0, "pools": 1002, "errors": 0, "keyless_chains": 0, "keyless_pools": 0, "symbols_fixed": 0}
     assert all(auth == "Bearer test-key" for _, auth, _ in seen)
     assert "/subgraphs/id/Gqm2b5J85n1bhCyDMpGbtbVn4935EvvdyHdHrx3dibyj" in seen[0][0]
     assert [v["lastId"] for _, _, v in seen[1:]] == ["", f"0x{1000:064x}"]
@@ -61,7 +61,7 @@ def test_snapshot_skips_chains_without_subgraph(conn, ctx):
     ctx.clients["graph"] = make_graph(seen)
     ctx.chains = [4663, 57073]     # robinhood, ink
     out = snapshot.run(conn, ctx)
-    assert out == {"chains": 0, "skipped": 2, "pools": 0, "errors": 0, "keyless_chains": 0, "keyless_pools": 0}
+    assert out == {"chains": 0, "skipped": 2, "pools": 0, "errors": 0, "keyless_chains": 0, "keyless_pools": 0, "symbols_fixed": 0}
     assert seen == []
 
 
