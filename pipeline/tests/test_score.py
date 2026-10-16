@@ -49,7 +49,7 @@ def test_score_hand_computed(conn, ctx):
     assert d.is_spam is False
     assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_24h": 0, "wash_7d": 0,
                    "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_uniform": 0, "wash_unverified": 0,
-                   "wash_concentrated": 0}
+                   "wash_concentrated": 0, "wash_lookalike": 0, "tvl_untrusted": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):
@@ -744,3 +744,92 @@ def test_covered_quiet_day_reads_zero_wallets_not_unknown(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, pid)
     assert (d.wallets_24h, d.wallets_exact, d.wallets_7d) == (0, True, 0)
+
+
+USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+SPOOF_USDC_BASE = "0x8335cb97db9ccdd95325c2da5622eebdd6ca2913"   # live 2026-10-15: same first and last four hex digits
+
+
+def _set_tokens(conn, pool_id, chain_id, t0, t1):
+    conn.execute(db.pools.update().where(db.pools.c.pool_id == pool_id, db.pools.c.chain_id == chain_id)
+                 .values(token0=t0, token1=t1))
+
+
+def _snap_tvl(conn, pool_id, day):
+    return conn.execute(sa.select(db.pool_snapshots.c.tvl_usd).where(db.pool_snapshots.c.pool_id == pool_id,
+                                                                     db.pool_snapshots.c.day == day)).scalar_one()
+
+
+def test_a_spoof_usdc_pool_is_wash_like_and_its_tvl_unknown(conn, ctx):
+    """2026-10-16 audit: "USDC/USDC hook" on Base, real USDC against a vanity copy, read $1.307B TVL and $221M volume (one
+    wallet's round trips) and topped Leaders. No wallet data on Base, so only the token itself can flag it."""
+    p = insert_project(conn, "USDC/USDC hook", first_seen=NOW - timedelta(days=1), slug="spoof")
+    insert_hook(conn, "0xspoofhook", 8453, project_id=p)
+    insert_pool(conn, "0xspoof", 8453, "0xspoofhook", created=NOW - timedelta(days=1))
+    _set_tokens(conn, "0xspoof", 8453, {"id": USDC_BASE, "symbol": "USDC"}, {"id": SPOOF_USDC_BASE, "symbol": "USDC"})
+    insert_snap(conn, "0xspoof", 8453, END, 1_307_100_542.97, 221_123_342.0, 498, vol_day=221_123_342.0, tx_day=498)
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.is_wash and d.wash_reason == "lookalike" and not d.is_new and d.score_trending == 0.0
+    assert d.tvl_usd is None and _snap_tvl(conn, "0xspoof", END) is None    # the page's pool row reads unknown too
+    assert d.vol_7d == pytest.approx(221_123_342.0)                         # volume stays shown, behind the badge
+    assert (out["wash_lookalike"], out["tvl_untrusted"]) == (1, 1)
+
+
+def test_a_launch_supply_priced_by_its_own_pool_is_not_tvl(conn, ctx):
+    """Clanker v2 KATIE/WETH on Base: $155.9M TVL on $0.12 of volume in 7 days. Its TVL is unknown; the project's real
+    pool still counts, and the project is not wash-like for it."""
+    p = insert_project(conn, "Launchpad", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xlaunch", 8453, project_id=p)
+    insert_pool(conn, "0xidle", 8453, "0xlaunch", created=NOW - timedelta(days=30))
+    insert_pool(conn, "0xlive", 8453, "0xlaunch", created=NOW - timedelta(days=30))
+    series(conn, "0xidle", 8453, {END - timedelta(days=i): (0.12 if i == 3 else 0.0) for i in range(7)}, tvl=155_863_042.0)
+    series(conn, "0xlive", 8453, {END - timedelta(days=i): 60_000.0 for i in range(7)}, tvl=327_211.0)
+    out = score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.tvl_usd == pytest.approx(327_211.0) and not d.is_wash
+    assert _snap_tvl(conn, "0xidle", END) is None and _snap_tvl(conn, "0xlive", END) == pytest.approx(327_211.0)
+    assert out["tvl_untrusted"] == 1
+
+
+def test_a_deep_pool_younger_than_a_week_or_partly_measured_keeps_its_tvl(conn, ctx):
+    p = insert_project(conn, "Fresh", first_seen=NOW - timedelta(days=2))
+    insert_hook(conn, "0xfresh", 1, project_id=p)
+    insert_pool(conn, "0xyoung", 1, "0xfresh", created=NOW - timedelta(days=2))
+    series(conn, "0xyoung", 1, {END - timedelta(days=i): 0.0 for i in range(2)}, tvl=15_000_000.0)
+    q = insert_project(conn, "Gappy", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xgappy", 1, project_id=q)
+    insert_pool(conn, "0xgap", 1, "0xgappy", created=NOW - timedelta(days=60))
+    series(conn, "0xgap", 1, {END - timedelta(days=i): 0.0 for i in (0, 3, 5)}, tvl=5_000_000.0)   # 3 of 7 days known
+    score.run(conn, ctx)
+    assert daily(conn, p).tvl_usd == pytest.approx(15_000_000.0)
+    assert daily(conn, q).tvl_usd == pytest.approx(5_000_000.0)
+
+
+def test_targeted_score_blanks_only_its_own_projects_pools(conn, ctx):
+    p = insert_project(conn, "A", first_seen=NOW - timedelta(days=60), slug="a")
+    insert_hook(conn, "0xa", 8453, project_id=p)
+    insert_pool(conn, "0xpa", 8453, "0xa", created=NOW - timedelta(days=30))
+    series(conn, "0xpa", 8453, {END - timedelta(days=i): 0.0 for i in range(7)}, tvl=2_000_000.0)
+    q = insert_project(conn, "B", first_seen=NOW - timedelta(days=60), slug="b")
+    insert_hook(conn, "0xb", 8453, project_id=q)
+    insert_pool(conn, "0xpb", 8453, "0xb", created=NOW - timedelta(days=30))
+    series(conn, "0xpb", 8453, {END - timedelta(days=i): 0.0 for i in range(7)}, tvl=2_000_000.0)
+    score.run(conn, ctx)                                   # creates both rows (and blanks both)
+    for pool in ("0xpa", "0xpb"):
+        conn.execute(db.pool_snapshots.update().where(db.pool_snapshots.c.pool_id == pool).values(tvl_usd=2_000_000.0))
+    score.run(conn, ctx, project_ids={p})
+    assert _snap_tvl(conn, "0xpa", END) is None and _snap_tvl(conn, "0xpb", END) == pytest.approx(2_000_000.0)
+
+
+def test_a_week_old_tvl_reading_is_unknown_not_current(conn, ctx):
+    """Clanker KATIE/WETH: one keyless row on 10/09 ($155.9M) still stood as "now" on 10/16 because score looked back 14
+    days for the latest row. A pool not seen on the last two nights has unknown TVL."""
+    p = insert_project(conn, "Stale", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xstale", 8453, project_id=p)
+    insert_pool(conn, "0xold", 8453, "0xstale", created=NOW - timedelta(days=8))
+    insert_snap(conn, "0xold", 8453, END - timedelta(days=6), 155_863_042.0, 0.12, 1, vol_day=0.12, tx_day=1)
+    insert_pool(conn, "0xnow", 8453, "0xstale", created=NOW - timedelta(days=30))
+    insert_snap(conn, "0xnow", 8453, END - timedelta(days=1), 50_000.0, 1_000.0, 10, vol_day=1_000.0, tx_day=10)
+    score.run(conn, ctx)
+    assert daily(conn, p).tvl_usd == pytest.approx(50_000.0)

@@ -102,11 +102,15 @@ export default function AboutPage() {
             <li><b>Volume far above liquidity</b>: 7-day volume over 300 times a known TVL, with fewer than 50 wallets.</li>
             <li><b>No liquidity</b>: $1M or more in a week through a pool with at most $1K of known TVL and fewer than 50 wallets.</li>
             <li><b>Symmetric</b>: the top wallets each buy and sell equally and carry most of the pool&apos;s volume (bots trading with themselves).</li>
+            <li><b>Uniform</b>: the top wallets each made one trade of the same size, and the pool averages that size per wallet.</li>
             <li><b>Unverified</b>: $1M or more through pools too small to list, with no wallet data to check who moved it.</li>
+            <li><b>Lookalike token</b>: the volume runs through a pool with a token posing as USDC, USDT or the chain&apos;s wrapped coin, by copying its symbol or the start and end of its address.</li>
           </ul>
           <p className="muted">
             Wallet counts are lower bounds and unknown TVL is never treated as zero. A private or RFQ hook with few counterparties and real
-            liquidity is not flagged unless one or two wallets carry it.
+            liquidity is not flagged unless one or two wallets carry it. TVL is GeckoTerminal&apos;s valuation of a pool at its own prices, so Bait
+            shows it as unknown when it cannot be liquidity: a pool with a lookalike token, or $1M or more that traded under 0.1% of itself in a
+            fully measured week (usually a launch&apos;s own supply).
           </p>
         </section>
 
