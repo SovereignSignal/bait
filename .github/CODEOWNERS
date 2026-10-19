@@ -1,1 +1,5 @@
 * @SovereignSignal
+# Dependency manifests have no owner, so Dependabot's weekly PRs request no review. Workflow files stay owned.
+/web/package.json
+/web/package-lock.json
+/pipeline/requirements.txt

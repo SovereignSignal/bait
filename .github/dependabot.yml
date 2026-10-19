@@ -1,10 +1,16 @@
 # Weekly, grouped: at most one minor/patch PR and one major PR per ecosystem, and one PR for all actions, so a
-# refresh is a handful of CI runs rather than one per package. Dependabot PRs skip the e2e job (ci-e2e.yml).
+# refresh is a handful of CI runs rather than one per package. The web-minor and pipeline-minor groups merge themselves
+# once their CI passes, browser suites included (ci-web.yml, ci-pipeline.yml); majors and the actions group stay manual.
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /web
     schedule: { interval: weekly, day: monday }
+    ignore:
+      # TypeScript 7 (the Go port) passed CI and both browser suites on 2026-10-19 (#67) but buys this project little
+      # yet. Delete this to be offered TypeScript majors again.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
     groups:
       web-minor: { update-types: [minor, patch] }
       web-major: { update-types: [major] }

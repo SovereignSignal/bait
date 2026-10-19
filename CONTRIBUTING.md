@@ -49,13 +49,14 @@ verify.
 
 ## CI minutes
 
-The repo is private, so every job minute is paid (rounded up per job). The workflows are scoped to keep the bill
-small; work with them rather than around them:
+The repo is public, so GitHub-hosted job minutes are free, but the workflows are still scoped so a change runs only
+the jobs it can affect; work with them rather than around them:
 
-- `ci-pipeline.yml` runs for `pipeline/`, `db/` and `fixtures/` changes; `ci-web.yml` for `web/` and `fixtures/`;
-  `ci-e2e.yml` for `web/`. A docs-only change runs nothing.
+- `ci-pipeline.yml` runs for `pipeline/`, `db/` and `fixtures/` changes; `ci-web.yml` (unit, typecheck, build,
+  then the browser suites) for `web/` and `fixtures/`. A docs-only change runs nothing.
 - The browser suites run on pushes to `main` and on pull requests that are **ready for review**. Open a PR as a
-  draft while iterating; mark it ready (or push once it is ready) to get the e2e run. Dependabot PRs never run e2e.
+  draft while iterating; mark it ready (or push once it is ready) to get the e2e run. Dependabot's minor/patch groups
+  run everything and merge themselves when it passes; majors and the actions group wait for a human.
 - A newer push to a PR cancels its running jobs, so push a checkpoint, not every commit. Several pushes in a minute
   still cost the first job minute of each.
 - Every merge to `main` runs the scoped workflows again. When stacked PRs are ready together, fold them into one

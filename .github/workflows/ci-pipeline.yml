@@ -28,3 +28,18 @@ jobs:
       - run: pip install -r pipeline/requirements.txt
       - run: cd pipeline && python -m pytest -q
         env: { TEST_DATABASE_URL: "postgresql+psycopg://postgres:ci@localhost:5432/bait" }
+  # Dependabot's pipeline-minor group merges itself once the suite passes; majors stay manual. See ci-web.yml.
+  automerge:
+    needs: pipeline
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      startsWith(github.head_ref, 'dependabot/pip/pipeline/pipeline-minor-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: write, pull-requests: write }
+    steps:
+      - run: gh pr merge "$PR" --squash --match-head-commit "$SHA" --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
