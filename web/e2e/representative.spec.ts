@@ -103,7 +103,12 @@ test("Aegis sampled deployments keep chain and pool identities distinct; synthet
   expect(new Set(keys).size).toBe(keys.length);
   const alias = await request.get("/p/qa-retired-aegis", { maxRedirects: 0 });
   expect(alias.status()).toBe(308);
-  expect(alias.headers().location).toBe("/p/aegis");
+  // Every Location must be the canonical page. On an ISR cache miss Next 16.4 sends the header twice (app-render sets
+  // it, then the miss path re-applies the cached headers) and on a hit once, so the joined value depended on which
+  // project reached the page first.
+  const locations = alias.headersArray().filter((h) => h.name.toLowerCase() === "location").map((h) => h.value);
+  expect(locations.length).toBeGreaterThan(0);
+  expect(new Set(locations)).toEqual(new Set(["/p/aegis"]));
   await page.goto("/p/qa-retired-aegis");
   await expect(page).toHaveURL(/\/p\/aegis$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Aegis");

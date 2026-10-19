@@ -7,6 +7,8 @@ on:
     paths: ["pipeline/**", "db/**", "fixtures/**", ".github/workflows/ci-pipeline.yml"]
   pull_request:
     paths: ["pipeline/**", "db/**", "fixtures/**", ".github/workflows/ci-pipeline.yml"]
+# Jobs that build and test PR code get a read-only token; automerge asks for write itself.
+permissions: { contents: read }
 concurrency:
   group: ci-pipeline-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -32,7 +34,7 @@ jobs:
   automerge:
     needs: pipeline
     if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]' &&
       startsWith(github.head_ref, 'dependabot/pip/pipeline/pipeline-minor-')
     runs-on: ubuntu-latest
     timeout-minutes: 5

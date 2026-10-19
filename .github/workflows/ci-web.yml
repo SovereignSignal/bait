@@ -11,6 +11,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths: ["web/**", "fixtures/**", ".github/workflows/ci-web.yml"]
+# Jobs that build and test PR code get a read-only token; automerge asks for write itself.
+permissions: { contents: read }
 concurrency:
   group: ci-web-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -52,13 +54,14 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with: { name: playwright-results, path: web/test-results, if-no-files-found: ignore }
-  # Dependabot's web-minor group merges itself once every job above passes; majors stay manual. --match-head-commit
-  # merges only the commit these jobs tested. A merge made with GITHUB_TOKEN starts no push-to-main runs; Railway
+  # Dependabot's web-minor group merges itself once every job above passes; majors stay manual. Only when Dependabot
+  # pushed the commit itself (a human push to its branch waits for a human), and --match-head-commit merges only the
+  # commit these jobs tested. A merge made with GITHUB_TOKEN starts no push-to-main runs; Railway
   # deploys from its own GitHub hook as usual.
   automerge:
     needs: [web, e2e]
     if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]' &&
       startsWith(github.head_ref, 'dependabot/npm_and_yarn/web/web-minor-')
     runs-on: ubuntu-latest
     timeout-minutes: 5
