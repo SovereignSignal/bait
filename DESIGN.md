@@ -673,3 +673,25 @@ night's data: 42 of the 172 move.
 - "Audit mentioned, not linked" counts a mention only when none of the four words before it negates it ("no audit is
   listed" is not a mention); 22 of 28 such badges were negations.
 - The "One wallet" badge is dropped when the deployer's share equals the top wallet's share: same wallet, one badge.
+
+## Round-trip wash (2026-10-21)
+
+On 2026-10-16 and 17 an unlisted family of eleven zero-fee hooks on Robinhood chain moved $1.39B through 388 swaps in 9
+transactions and sat at the top of the feed by 7-day volume, unflagged. One transaction was 80 swaps of 5M USDG back and
+forth in a USDG/USDG pool; the second "USDG" copies the real token's first and last four hex digits. The real USDG moved,
+so every swap was priced, and nothing was wrong with the figure as a sum of swaps: it was wash volume that cost nothing.
+
+- **Why no rule fired.** The few-wallet rules need corroboration (volume over 50x a known TVL, no liquidity, or symmetric
+  top wallets) so private and RFQ hooks are not flagged. GeckoTerminal valued the lookalike side at $210M of TVL, so
+  volume over TVL read 2.4x; Robinhood has no top-wallet data; and 21 swaps per pool is more than the 10 that prove
+  concentration by count. The lookalike rule did not see the pool because USDG was not in the chain's canonical list.
+- **Rule now: `roundtrip`.** The indexer groups each page's swaps by (pool, transaction) and, when a group of at least two
+  swaps nets to under 1% of its gross on both tokens, records the group's USD in `pool_daily_onchain.roundtrip_usd`
+  (0021). Score flags a pool when its week is at least half such volume at $1M or more, with the usual half-of-project
+  share. No wallet count or TVL is needed: nothing was bought or sold, so the round trips are the finding. A desk whose
+  transactions do buy or sell is untouched; an arbitrage that touches a pool twice in opposite directions nets to its
+  profit, not to nothing, and in any case rarely makes half a pool's week.
+- **Also:** Robinhood USDG (`0x5fc5…d168`, DefiLlama confidence 0.99) joins the canonical stables, so the lookalike rule
+  sees the USDG/USDG pool and the pool's TVL reads unknown.
+- **Window.** Rows written before 0021 carry 0, so the 10/16-17 volume stays unflagged until it leaves the 7-day window
+  on 10/24; the rule prevents the next one. A repair that re-reads swaps would fill it; none exists yet.

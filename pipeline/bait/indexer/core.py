@@ -88,9 +88,25 @@ class ChainStats:
     error: str | None = None
 
 
+ROUNDTRIP_NET = 0.01        # a transaction's swaps in one pool net to under 1% of their gross on both tokens: round trips
+
+
+def roundtrip_usd(swaps: list[tuple[int, int, float | None]]) -> float:
+    """USD of one transaction's swaps in one pool when they are round trips: at least two swaps whose amounts net to under
+    ROUNDTRIP_NET of their gross on both tokens (what went in came back out, nothing was bought or sold). 0.0 otherwise.
+    swaps: (amount0, amount1, usd or None) per swap; unpriced swaps keep the group a round trip but add no value."""
+    if len(swaps) < 2:
+        return 0.0
+    for i in (0, 1):
+        gross = sum(abs(s[i]) for s in swaps)
+        if gross == 0 or abs(sum(s[i] for s in swaps)) > ROUNDTRIP_NET * gross:
+            return 0.0
+    return float(sum(s[2] or 0.0 for s in swaps))
+
+
 @dataclass
 class SwapAgg:
-    daily: dict = field(default_factory=dict)      # (pool_id, day) -> [swaps, usd, unpriced]
+    daily: dict = field(default_factory=dict)      # (pool_id, day) -> [swaps, usd, unpriced, roundtrip_usd]
     wallets: dict = field(default_factory=dict)    # (pool_id, day, address) -> swaps
     swaps: int = 0
     unpriced: int = 0
@@ -98,7 +114,7 @@ class SwapAgg:
     best: dict = field(default_factory=dict)       # pool_id -> largest priced swap (USD) in the scanned pages
 
     def add(self, pool_id: str, day: date, wallet: str, usd: float | None) -> None:
-        d = self.daily.setdefault((pool_id, day), [0, 0.0, 0])
+        d = self.daily.setdefault((pool_id, day), [0, 0.0, 0, 0.0])
         d[0] += 1
         d[1] += usd or 0.0
         d[2] += usd is None
@@ -109,13 +125,17 @@ class SwapAgg:
         self.swaps += 1
         self.unpriced += usd is None
 
+    def add_roundtrip(self, pool_id: str, day: date, usd: float) -> None:
+        """Volume already added that turned out to be round trips inside one transaction (roundtrip_usd)."""
+        self.daily.setdefault((pool_id, day), [0, 0.0, 0, 0.0])[3] += usd
+
     def fold(self, pool_id: str, into: str) -> tuple[int, float]:
         """Move a pool's swaps and wallets onto another pool id (a hook's aggregate pool) -> (swaps, usd) moved."""
         n, v = 0, 0.0
         for (p, d) in [k for k in self.daily if k[0] == pool_id]:
-            s_, u, x = self.daily.pop((p, d))
-            t = self.daily.setdefault((into, d), [0, 0.0, 0])
-            t[0], t[1], t[2] = t[0] + s_, t[1] + u, t[2] + x
+            s_, u, x, rt = self.daily.pop((p, d))
+            t = self.daily.setdefault((into, d), [0, 0.0, 0, 0.0])
+            t[0], t[1], t[2], t[3] = t[0] + s_, t[1] + u, t[2] + x, t[3] + rt
             n, v = n + s_, v + u
         for (p, d, w) in [k for k in self.wallets if k[0] == pool_id]:
             k = (into, d, w)
@@ -288,7 +308,9 @@ def hooked_pools_from_page(chain_id: int, logs: list[dict], blocks: dict[int, in
 
 def aggregate_swaps(chain: IndexedChain, logs: list[dict], blocks: dict[int, int], txs: dict[str, str],
                     known: dict[str, tuple[str, str]], prices: PriceBook | None, agg: SwapAgg) -> None:
-    """Swaps of known hooked pools -> agg. Wallet = transaction sender (tx.from), falling back to the Swap sender."""
+    """Swaps of known hooked pools -> agg. Wallet = transaction sender (tx.from), falling back to the Swap sender. A
+    transaction's swaps in one pool that net to nothing on both tokens are counted, and also recorded as round trips
+    (roundtrip_usd), the positive sign of wash volume the score step's `roundtrip` rule reads."""
     agg.seen_ts = max([agg.seen_ts, *(t for t in blocks.values() if t)])
     decoded, missing = [], 0
     for lg in logs:
@@ -299,19 +321,28 @@ def aggregate_swaps(chain: IndexedChain, logs: list[dict], blocks: dict[int, int
         if ts is None:
             missing += 1
             continue
-        decoded.append((s, ts, txs.get((lg.get("transaction_hash") or "").lower()) or s["sender"] or "unknown"))
+        tx = (lg.get("transaction_hash") or lg.get("transactionHash") or "").lower()
+        decoded.append((s, ts, txs.get(tx) or s["sender"] or "unknown", tx))
     if missing:  # the cursor would move past swaps we never counted
         raise RuntimeError(f"chain={chain.slug}: {missing} swap logs of hooked pools without a block timestamp; page not committed")
     if not decoded:
         return
     book = {}
     if prices is not None:
-        addrs = {c for s, _, _ in decoded for c in known[s["pool_id"]]}
+        addrs = {c for s, _, _, _ in decoded for c in known[s["pool_id"]]}
         book = prices.get(chain, addrs)
-    for s, ts, wallet in decoded:
+    groups: dict[tuple[str, str, date], list[tuple[int, int, float | None]]] = {}
+    for s, ts, wallet, tx in decoded:
         c0, c1 = known[s["pool_id"]]
         usd = swap_usd(s["amount0"], s["amount1"], book.get(c0), book.get(c1))
-        agg.add(s["pool_id"], datetime.fromtimestamp(ts, tz=timezone.utc).date(), wallet, usd)
+        day = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+        agg.add(s["pool_id"], day, wallet, usd)
+        if tx:
+            groups.setdefault((s["pool_id"], tx, day), []).append((s["amount0"], s["amount1"], usd))
+    for (pool_id, _, day), swaps in groups.items():
+        rt = roundtrip_usd(swaps)
+        if rt:
+            agg.add_roundtrip(pool_id, day, rt)
 
 
 def swap_start_ts(now: datetime) -> tuple[date, int]:

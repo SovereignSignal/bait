@@ -455,7 +455,9 @@ def is_idle_tvl(tvl: float | None, vol_7d: float | None, measured_days: int, cre
 # >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
 # "unverified" is not a rule: a project that only escaped the spam rule by moving >= $1M and has no wallet data at all.
 # "lookalike": the volume runs through a pool with a token posing as USDC, USDT or the wrapped native coin.
-WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified", "lookalike")
+# "roundtrip": the volume came and went inside single transactions (indexer core.roundtrip_usd), nothing was bought or sold.
+WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified", "lookalike",
+                "roundtrip")
 WASH_SHARE = 0.5
 WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
 
@@ -534,6 +536,20 @@ def is_wash_7d_by_swaps(vol_7d: float, swaps: int | None) -> bool:
     """The 7-day rule through the swap bound, on any chain: >= $1M in 7 days carried by <= 10 known swaps proves <= 10
     wallets, and that concentration is its own corroboration (no TVL needed)."""
     return swaps is not None and vol_7d >= WASH_MIN_VOL_7D and swaps <= WASH_MAX_WALLETS_7D
+
+
+# Round trips inside one transaction (indexer core.roundtrip_usd: a transaction's swaps in one pool that net to under 1%
+# of their gross on both tokens). 10/16-17: an unlisted family of eleven zero-fee hooks on Robinhood moved $1.39B in 388
+# swaps and 9 transactions, one of them 80 swaps of 5M USDG back and forth against a USDG lookalike; GeckoTerminal valued
+# the lookalike side at $210M of TVL, so no few-wallet rule was corroborated. Nothing was bought or sold, so the round
+# trips are their own corroboration: a pool whose week is at least half such volume is wash-like.
+WASH_ROUNDTRIP_SHARE = 0.5
+
+
+def is_wash_roundtrip(vol_7d: float, roundtrip_7d: float | None) -> bool:
+    """roundtrip_7d None (no indexer row) never matches."""
+    return (roundtrip_7d is not None and vol_7d >= WASH_MIN_VOL_7D and roundtrip_7d > 0
+            and roundtrip_7d >= WASH_ROUNDTRIP_SHARE * vol_7d)
 
 
 # Volume far above liquidity from few wallets. Launchpads churn many times their liquidity too (Base 0x0f48 family:

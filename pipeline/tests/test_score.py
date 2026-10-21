@@ -49,7 +49,7 @@ def test_score_hand_computed(conn, ctx):
     assert d.is_spam is False
     assert out == {"projects": 1, "with_pools": 1, "new": 0, "trending": 1, "spam": 0, "wash": 0, "wash_24h": 0, "wash_7d": 0,
                    "wash_vol_tvl": 0, "wash_no_liquidity": 0, "wash_symmetric": 0, "wash_uniform": 0, "wash_unverified": 0,
-                   "wash_concentrated": 0, "wash_lookalike": 0, "tvl_untrusted": 0}
+                   "wash_concentrated": 0, "wash_lookalike": 0, "wash_roundtrip": 0, "tvl_untrusted": 0}
 
 
 def test_score_not_new_when_old_or_tiny(conn, ctx):
@@ -120,7 +120,7 @@ def test_wash_rule_reads_persisted_pool_stats(conn, ctx):
     assert d.is_wash and not d.is_spam and d.wash_reason == "24h,vol_tvl" and d.score_trending == 0.0 and out["wash"] == 1
 
 
-def _onchain_project(conn, name, pool, wallets, vol_per_day, tvl=50_000):
+def _onchain_project(conn, name, pool, wallets, vol_per_day, tvl=50_000, roundtrip_per_day=0.0):
     p = insert_project(conn, name, first_seen=NOW - timedelta(days=60))
     insert_hook(conn, f"0x{name}", 10, project_id=p, name=name)
     insert_pool(conn, pool, 10, f"0x{name}", created=NOW - timedelta(days=60))
@@ -128,7 +128,8 @@ def _onchain_project(conn, name, pool, wallets, vol_per_day, tvl=50_000):
            tx={END - timedelta(days=i): 2 for i in range(14)})
     for i in range(7):
         d = END - timedelta(days=i)
-        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id=pool, day=d, swaps=2, wallets=1, volume_usd=vol_per_day))
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=10, pool_id=pool, day=d, swaps=2, wallets=1, volume_usd=vol_per_day,
+                                                            roundtrip_usd=roundtrip_per_day))
         for w in range(wallets):
             conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=10, pool_id=pool, day=d, address=f"0xw{w}", swaps=1))
     return p
@@ -145,6 +146,23 @@ def test_wash_7d_from_indexer_one_wallet_hundreds_of_millions(conn, ctx):
     assert w.is_wash and not w.is_spam and w.wash_reason == "7d,concentrated,vol_tvl" and w.score_trending == 0.0
     assert not daily(conn, busy).is_wash and not daily(conn, small).is_wash
     assert out["wash_7d"] == 1
+
+
+def test_wash_roundtrip_from_indexer_needs_no_tvl_corroboration(conn, ctx):
+    """10/16-17 case: eleven zero-fee hooks on Robinhood, $1.39B in 388 swaps and 9 transactions, one of them 80 swaps of
+    5M USDG back and forth; a USDG lookalike read as $210M of TVL, so no few-wallet rule was corroborated. The week's
+    volume being round trips is the finding; a desk whose transactions buy or sell is untouched."""
+    churn = _onchain_project(conn, "Churn", "0xchurn", wallets=6, vol_per_day=70_000_000, tvl=210_000_000,
+                             roundtrip_per_day=69_000_000)
+    desk = _onchain_project(conn, "Desk2", "0xdesk2", wallets=6, vol_per_day=70_000_000, tvl=210_000_000,
+                            roundtrip_per_day=20_000_000)       # 29% round trips: an occasional arb, not the pool's week
+    tiny = _onchain_project(conn, "TinyRT", "0xtinyrt", wallets=1, vol_per_day=100_000, roundtrip_per_day=100_000)   # < $1M
+    _optimism_ready(conn)
+    out = score.run(conn, ctx)
+    c = daily(conn, churn)
+    assert c.is_wash and c.wash_reason == "roundtrip" and c.score_trending == 0.0 and not c.is_spam
+    assert not daily(conn, desk).is_wash and not daily(conn, tiny).is_wash
+    assert out["wash_roundtrip"] == 1
 
 
 def test_is_wash_7d_thresholds():

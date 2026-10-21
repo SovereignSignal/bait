@@ -285,6 +285,16 @@ def test_fallback_category_reads_words_then_factory_pattern_then_dynamic_fee():
     assert fallback_category([], [], [], False, None) is None
 
 
+def test_wash_roundtrip_thresholds():
+    from bait.rules import is_wash_roundtrip
+    assert is_wash_roundtrip(1_390_000_000.0, 1_380_000_000.0)      # the Robinhood USDG family
+    assert is_wash_roundtrip(1_000_000.0, 500_000.0)                 # exactly half, at the $1M floor
+    assert not is_wash_roundtrip(1_000_000.0, 499_999.0)
+    assert not is_wash_roundtrip(999_999.0, 999_999.0)               # under $1M nothing ranks anyway
+    assert not is_wash_roundtrip(5_000_000.0, None)                  # no indexer row: unknown, never vacuous
+    assert not is_wash_roundtrip(0.0, 0.0)
+
+
 def test_lookalike_pool_catches_address_poisoning_and_same_symbol_pairs():
     from bait.rules import is_lookalike_pool
     usdc = {"id": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "symbol": "USDC"}

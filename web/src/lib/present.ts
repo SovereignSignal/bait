@@ -218,6 +218,7 @@ const WASH_TEXT: Record<string, string> = {
   uniform: "its top wallets each made one trade of the same size, and the pool averages that size per wallet",
   unverified: "$1M+ moved through a pool that looks idle, with no wallet data to check who moved it",
   lookalike: "its main pool trades a token posing as USDC, USDT or the chain's wrapped coin",
+  roundtrip: "most of its volume came and went inside single transactions, with nothing bought or sold",
 };
 
 export function washLine(reason: string | null, historical = false): string {

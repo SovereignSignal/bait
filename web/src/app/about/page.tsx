@@ -105,6 +105,7 @@ export default function AboutPage() {
             <li><b>Uniform</b>: the top wallets each made one trade of the same size, and the pool averages that size per wallet.</li>
             <li><b>Unverified</b>: $1M or more through pools too small to list, with no wallet data to check who moved it.</li>
             <li><b>Lookalike token</b>: the volume runs through a pool with a token posing as USDC, USDT or the chain&apos;s wrapped coin, by copying its symbol or the start and end of its address.</li>
+            <li><b>Round trips</b>: at least half the pool&apos;s week came and went inside single transactions, swaps that net to nothing on both tokens. Nothing was bought or sold, so this needs no wallet or TVL check.</li>
           </ul>
           <p className="muted">
             Wallet counts are lower bounds and unknown TVL is never treated as zero. A private or RFQ hook with few counterparties and real
