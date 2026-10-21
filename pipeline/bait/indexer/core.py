@@ -80,6 +80,7 @@ class ChainStats:
     queued: int = 0                  # ids left uncounted by this loop's swap pages (per page), for the resolver
     backlog: int = 0                 # ids still queued after this loop's settle
     owed: int = 0                    # swaps of queued ids found hooked, re-read and counted this loop
+    keyed: int = 0                   # unknown ids settled from v4_pool_keys this loop (no lookup, nothing queued)
     folded: int = 0                  # swaps of pools past both caps (or dust), kept on the hook's aggregate pool
     swaps: int = 0
     unpriced: int = 0
@@ -422,6 +423,7 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
     with engine.connect() as conn:
         n_pools = store.pool_count(conn, chain.chain_id)
         floor = store.capped_floor(conn, chain.chain_id)   # None: no hook past the cap, every hooked pool is a row
+        keyed = store.keys_complete(conn, chain.chain_id)  # every hooked pool below initialize_block is a row or a key
     if n_pools == 0 and floor is None:
         if swap_from < swap_end:
             with engine.begin() as conn:
@@ -476,6 +478,14 @@ def sync_hypersync(engine: sa.Engine, chain: IndexedChain, hs: HyperSync, prices
             unknown = ids - set(known)
             if floor is not None and unknown:      # some may be hooked pools past the cap: count the ones we hold, owe the rest
                 late = {i: resolver.known(i) for i in unknown if resolver.known(i) is not None}
+                if keyed:                          # v4_pool_keys is complete: a key settles the id, no key means unhooked
+                    rest = unknown - set(late)
+                    with engine.connect() as conn:
+                        found = store.keys_by_id(conn, chain.chain_id, rest)
+                    late.update(found)
+                    resolver.remember(found.values())
+                    resolver.absent.update(rest - set(found))
+                    st.keyed += len(rest)
                 owed = owed_ranges(logs, blocks, unknown - set(late) - resolver.absent, swap_from, nb)
                 known.update({p: (r["currency0"], r["currency1"]) for p, r in late.items()})
                 if owed:

@@ -707,3 +707,26 @@ so every swap was priced, and nothing was wrong with the figure as a sum of swap
   Twice a long-lived web container had every data page stall while Postgres showed the web's trivial queries finished
   and parked in `ClientWrite`; #64 turned that into a 20 s timeout, this makes a stuck connection short-lived and
   visible. If it recurs, capture `pg_stat_activity` for `application_name = 'bait-web'` at that moment.
+## Pool keys: unknown-in-both-tables means unhooked (2026-10-21)
+
+Base stayed `partial` after the 2026-10-14 change: ~80K pool ids owed swaps to `pool_lookup_queue` on 2026-10-20, and the
+resolver settles them at roughly one HyperSync scan per chunk per loop, against a free tier the live indexer already
+uses up. The ids are mostly unhooked pools (not rows by design) and launchpad pools past the per-hook cap (not rows by
+design either); the indexer has seen every one of them at Initialize, it just kept nothing about the second kind and
+had to ask HyperSync again at swap time.
+
+- **Rule now.** `v4_pool_keys` holds the key (pool id, hook, currencies, fee, spacing, block) of every hooked pool that
+  is not a `v4_pools` row. The Initialize phase writes it for the pools it does not store (`store_pools`' unstored
+  rows), and `python -m bait.indexer scan-pool-keys` backfills history from the deploy block in one unfiltered walk,
+  resumable through `indexer_state.keys_block`, marking `keys_complete` when it reaches the Initialize cursor. On a
+  keyed chain a swap page settles an unknown id from the table: a key is a hooked pool (counted as a late row or
+  folded, as before); no key is an unhooked pool. Nothing is queued, nothing is looked up. Rows stay bounded as before
+  (the cap is on rows, not keys; a key is ~550 bytes).
+- **Why the table and not the resolver's memory.** `absent` and `recent` are per process and bounded (1M and 50K); a
+  restart or a floor move forgets them, and Base alone has millions of ids. The queue was the honest version of that
+  forgetting; the table removes the need for it.
+- **Off until the scan completes.** `keys_complete` is per chain and false by default, so a deploy changes nothing until
+  the one-off runs to the end (railway/README.md). Chains without a capped hook never consult the table (every hooked
+  pool is a row there). A later `prune-pools` deletes rows that have no key, so the scan is rerun after a prune.
+- **Not done here.** Deleting `pool_lookup_queue` and the resolver: the queue still drains the ids owed from before the
+  scan, and chains without keys still need the lookups. Once every capped chain is keyed, both can go.

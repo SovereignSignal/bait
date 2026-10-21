@@ -726,6 +726,8 @@ def test_pool_cap_schema_is_additive_on_an_existing_database():
     assert "v4_pools.sampled" in db.add_missing_columns(e)
     with e.connect() as c:
         assert c.execute(sa.text("SELECT sampled FROM v4_pools")).scalar_one() == 0
+    assert {"keys_block", "keys_complete"} <= {c["name"] for c in sa.inspect(e).get_columns("indexer_state")}
+    assert sa.inspect(e).has_table("v4_pool_keys")
     assert {c["name"] for c in sa.inspect(e).get_columns("hook_pool_counts")} == {
         "chain_id", "hook_address", "pools_total", "first_block", "last_block", "last_seen", "sampled_total", "swaps_total",
         "volume_usd_total"}
@@ -827,6 +829,73 @@ def test_capped_pool_from_before_this_process_is_looked_up_by_pool_id(engine):
     # both pages' unknown ids go in one chunk: one scan of [floor 1600, 2400) asks for both, then LAUNCH's swaps are re-read
     assert _lookups(fake) == [[PB, LAUNCH], [PB, LAUNCH]] and PB in resolver.absent and LAUNCH in resolver.recent
     assert not resolver.held and st.lookups == resolver.calls == 3 and _queue(engine) == {}
+
+
+def _keys(engine):
+    with engine.connect() as c:
+        return {r.pool_id: r.hook_address for r in c.execute(sa.select(db.v4_pool_keys))}
+
+
+def test_initialize_phase_keys_the_pools_it_does_not_store(engine):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    pools, _, _, state = _tables(engine)
+    assert {PA, PC} <= set(pools) and _keys(engine) == {LAUNCH: HOOK}         # LAUNCH is past the cap: a key, not a row
+    assert not state.keys_complete                                              # history is not keyed until the scan runs
+
+
+def test_with_keys_complete_a_swap_page_settles_unknown_ids_from_the_table_and_queues_nothing(engine):
+    """Base 2026-10-20: ~80K ids owed to the lookup queue, each a HyperSync scan. With every hooked pool keyed, a page
+    decides from Postgres: a keyed id is counted (late row or folded), an id in neither table is unhooked."""
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    with engine.begin() as c:                                      # as if LAUNCH predates keys: a row-less, keyless capped pool
+        c.execute(sa.delete(db.v4_pools).where(db.v4_pools.c.pool_id == LAUNCH))
+        c.execute(sa.delete(db.v4_pool_keys))
+        c.execute(sa.delete(db.pool_daily_onchain))
+        c.execute(sa.delete(db.pool_wallet_day))
+        store.set_state(c, BASE.chain_id, swap_block=1000, backfilled=False)
+    from bait.indexer import poolkeys
+    out = poolkeys.scan_chain(engine, BASE, _hs(fake), None, lambda: False, dry_run=True)
+    assert (out["hooked"], out["keyed"], out["complete"]) == (3, 0, False) and _keys(engine) == {}
+    out = poolkeys.scan_chain(engine, BASE, _hs(fake), None, lambda: False, dry_run=False)
+    assert out["complete"] and _keys(engine) == {LAUNCH: HOOK}                 # PA and PC are rows: no key needed
+    with engine.connect() as c:
+        assert store.keys_complete(c, BASE.chain_id) and store.get_state(c, BASE.chain_id).keys_block == out["to"]
+    resolver = core.PoolResolver()                                              # a restarted process: nothing in memory
+    keyed = 0
+    for _ in range(50):
+        st = core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW,
+                                 resolver=resolver)
+        keyed += st.keyed
+        if _tables(engine)[3].backfilled:
+            break
+    pools, daily, _, state = _tables(engine)
+    assert state.backfilled and pools[LAUNCH].sampled and daily[(LAUNCH, date(2026, 9, 22))] == (1, 1, 200.0)
+    assert _lookups(fake) == [] and _queue(engine) == {} and keyed == 2          # LAUNCH keyed, PB unhooked: no HyperSync lookup
+    assert PB in resolver.absent and LAUNCH in resolver.recent
+    assert ",keyed=2" in heartbeat(1, "hypersync", {"base": st}) or st.keyed == 0
+
+
+def test_scan_pool_keys_is_resumable_and_stops_between_pages(engine):
+    fake = _launchpad_fake()
+    core.sync_hypersync(engine, BASE, _hs(fake), FakePrices(), core.Settings(max_pages=32, pools_per_hook=1), now=NOW)
+    with engine.begin() as c:
+        c.execute(sa.delete(db.v4_pool_keys))
+    from bait.indexer import poolkeys
+    first = poolkeys.scan_chain(engine, BASE, _hs(fake), 1, lambda: False, dry_run=False)        # one page of 700 blocks
+    assert first["pages"] == 1 and not first["complete"] and first["to"] == first["from"] + 700
+    with engine.connect() as c:
+        assert store.get_state(c, BASE.chain_id).keys_block == first["to"] and not store.keys_complete(c, BASE.chain_id)
+    calls = {"n": 0}
+    def stop():
+        calls["n"] += 1
+        return calls["n"] > 2
+    cut = poolkeys.scan_chain(engine, BASE, _hs(fake), None, stop, dry_run=False)                 # SIGTERM between pages
+    assert cut["from"] == first["to"] and not cut["complete"]
+    rest = poolkeys.scan_chain(engine, BASE, _hs(fake), None, lambda: False, dry_run=False)
+    assert rest["complete"] and _keys(engine) == {LAUNCH: HOOK}
+    assert poolkeys.main(["--dry-run", "--chains", "base", "--database-url", str(engine.url)]) in (0, 2)   # the CLI parses and runs
 
 
 def _queue(engine):

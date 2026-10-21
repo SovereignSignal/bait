@@ -292,6 +292,23 @@ v4_pools = sa.Table(
     sa.Index("v4_pools_hook_idx", "chain_id", "hook_address"),
 )
 
+# Every hooked pool's key (0022), stored or not: a pool past its hook's cap (not a v4_pools row) still gets a key row, so a
+# swap of an id that is in neither table is a swap of an unhooked pool, with no HyperSync lookup. Written by the
+# Initialize phase for pools it does not store; `python -m bait.indexer scan-pool-keys` backfills the ones initialized
+# before 0022 (and pruned rows), then sets indexer_state.keys_complete. ~550 bytes a row on Postgres; Base ~9M rows.
+v4_pool_keys = sa.Table(
+    "v4_pool_keys", metadata,
+    sa.Column("chain_id", sa.Integer, primary_key=True),
+    sa.Column("pool_id", sa.Text, primary_key=True),
+    sa.Column("hook_address", sa.Text, nullable=False),
+    sa.Column("currency0", sa.Text, nullable=False),
+    sa.Column("currency1", sa.Text, nullable=False),
+    sa.Column("fee", sa.Integer),
+    sa.Column("tick_spacing", sa.Integer),
+    sa.Column("block_number", sa.BigInteger),
+    sa.Column("block_time", TS),
+)
+
 pool_daily_onchain = sa.Table(
     "pool_daily_onchain", metadata,
     sa.Column("chain_id", sa.Integer, primary_key=True),
@@ -354,6 +371,9 @@ indexer_state = sa.Table(
     sa.Column("swap_block_time", TS),          # block time the swap cursor reached (lower bound)
     sa.Column("backfilled", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column("updated_at", TS),
+    # v4_pool_keys (0022): the one-off scan's cursor, and whether every hooked pool below initialize_block has a key or a row
+    sa.Column("keys_block", sa.BigInteger),
+    sa.Column("keys_complete", sa.Boolean, nullable=False, server_default=sa.false()),
 )
 
 # Nightly onchain step's copy watermark (0010). Owned by the pipeline, not the indexer, so the step's long transaction never
@@ -459,6 +479,8 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("indexer_state", "swap_block_time", "timestamptz"),
     ("pool_daily_onchain", "unpriced_swaps", "integer NOT NULL DEFAULT 0"),
     ("pool_daily_onchain", "roundtrip_usd", "double precision NOT NULL DEFAULT 0"),
+    ("indexer_state", "keys_block", "bigint"),
+    ("indexer_state", "keys_complete", "boolean NOT NULL DEFAULT false"),
     ("pool_stats", "vol_source", "text"),
     ("pool_snapshots", "volume_usd_day", "double precision"),
     ("pool_snapshots", "tx_count_day", "bigint"),
