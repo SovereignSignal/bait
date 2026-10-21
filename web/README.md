@@ -71,7 +71,7 @@ docker build -t bait-web .
 docker run -p 3000:3000 -e DATABASE_URL=postgres://... bait-web
 ```
 
-Multi-stage, `node:20-alpine`, `output: 'standalone'`.
+Multi-stage, `node:22-alpine`, `output: 'standalone'`.
 
 ## Env
 
