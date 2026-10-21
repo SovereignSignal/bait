@@ -6,6 +6,13 @@ import { TRENDING_MIN_VOL, trendingOrder } from "./feed";
 import { toRow } from "./present";
 import { isCategory, type Category, type ChainId, type HookView, type PoolView, type ProjectDetail, type ProjectSummary, type ReceiptView, type WalletView } from "./types";
 
+/** A 308 to another API path. The Location is relative on purpose: behind Railway's proxy `req.url` carries the
+ *  container's own host (`https://0.0.0.0:8080`), so an absolute URL built from it sent clients somewhere unreachable
+ *  (2026-10-21, retired slugs). Page redirects were already relative. */
+export function apiRedirect(path: string): Response {
+  return new Response(null, { status: 308, headers: { Location: path, "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*", "X-Bait-Api-Version": API_VERSION } });
+}
+
 export const API_VERSION = "1";
 export const LIST_LIMIT_DEFAULT = 100;
 export const LIST_LIMIT_MAX = 500;
