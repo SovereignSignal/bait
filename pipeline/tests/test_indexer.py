@@ -311,6 +311,50 @@ def test_apply_swaps_increments_and_recounts_unique_wallets(engine):
         assert store.prune_wallets(c, d.replace(month=11, day=5)) == 2
 
 
+def test_roundtrip_usd_is_the_value_of_swaps_that_net_to_nothing_in_one_transaction():
+    usdg = 10 ** 6
+    there, back = (-5_000_000 * usdg, 4_999_976 * usdg, 5e6), (4_999_999 * usdg, -4_999_976 * usdg, 5e6)
+    assert core.roundtrip_usd([there, back] * 40) == pytest.approx(80 * 5e6)         # the 80-swap transaction
+    assert core.roundtrip_usd([there, back, (-100 * usdg, 99 * usdg, None)]) == pytest.approx(2 * 5e6)   # unpriced leg adds $0
+    assert core.roundtrip_usd([there]) == 0.0                                          # one swap is a trade
+    assert core.roundtrip_usd([there, there]) == 0.0                                   # two buys: a position
+    assert core.roundtrip_usd([there, (4_000_000 * usdg, -3_999_000 * usdg, 4e6)]) == 0.0   # 20% net: a partial unwind
+    assert core.roundtrip_usd([(0, 0, None), (0, 0, None)]) == 0.0
+
+
+def test_aggregate_swaps_records_round_trips_per_transaction_and_apply_swaps_stores_them(engine):
+    chain = CHAIN_BY_ID[1]
+    usdc = 10 ** 6
+    def lg(tx, a0, a1, block=100):
+        data = "0x" + format(a0 % 2 ** 256, "064x") + format(a1 % 2 ** 256, "064x") + "0" * 64 * 4
+        return {"topics": [SWAP_TOPIC, PA, "0x" + W1[2:].rjust(64, "0")], "data": data, "block_number": block, "transaction_hash": tx}
+    logs = [lg("0xaa", -1000 * usdc, 999 * usdc), lg("0xaa", 999 * usdc, -999 * usdc),     # round trip: $1,000 + $999
+            lg("0xbb", -500 * usdc, 499 * usdc)]                                           # one swap: a trade
+    agg = core.SwapAgg()
+    core.aggregate_swaps(chain, logs, {100: 1_700_000_000}, {}, {PA: ("0xc0", "0xc1")}, _StubBook({"0xc0": (1.0, 6)}), agg)
+    d = datetime.fromtimestamp(1_700_000_000, tz=timezone.utc).date()
+    swaps, usd, unpriced, rt = agg.daily[(PA, d)]
+    assert (swaps, unpriced) == (3, 0) and usd == pytest.approx(2499.0) and rt == pytest.approx(1999.0)
+    with engine.begin() as c:
+        store.apply_swaps(c, 1, agg.daily, agg.wallets)
+        store.apply_swaps(c, 1, {(PA, d): [1, 10.0, 0]}, {(PA, d, W2): 1})            # the old three-field shape still adds
+    with engine.connect() as c:
+        r = c.execute(sa.select(db.pool_daily_onchain)).one()
+    assert (r.swaps, r.volume_usd, r.roundtrip_usd) == (4, pytest.approx(2509.0), pytest.approx(1999.0))
+    folded = core.SwapAgg()
+    folded.daily[(PA, d)] = [2, 100.0, 0, 100.0]
+    folded.fold(PA, PB)
+    assert folded.daily == {(PB, d): [2, 100.0, 0, 100.0]}
+
+
+class _StubBook:
+    def __init__(self, prices):
+        self.prices = prices
+
+    def get(self, chain, addrs):
+        return {a: self.prices[a] for a in addrs if a in self.prices}
+
+
 def test_swap_usd_side_selection():
     eth, usdc = (2000.0, 18), (1.0, 6)
     assert swap_usd(-10 ** 18, 2000 * 10 ** 6, eth, usdc) == 2000.0

@@ -30,7 +30,7 @@ from ..db import (HOOK_POOL_PREFIX, as_utc, historical_swap_evidence, hooks, ind
                   project_daily, projects, upsert)
 from ..rules import (SHARED_DEPLOYERS, SPAM_EXEMPT_VOL, WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
-                     is_wash_no_liquidity, is_wash_vol_tvl, score_trending, wallets_lower_bound, is_idle_tvl,
+                     is_wash_no_liquidity, is_wash_roundtrip, is_wash_vol_tvl, score_trending, wallets_lower_bound, is_idle_tvl,
                      is_lookalike_pool)
 from . import RunContext, log
 from .onchain import owed_before, ready_chains
@@ -561,7 +561,7 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
                                     pool_top_wallets.c.buys, pool_top_wallets.c.sells).where(pool_top_wallets.c.day == day)):
         top.setdefault((r.pool_id, r.chain_id), []).append((r.volume_usd or 0.0, r.buys or 0, r.sells or 0))
     sym = {k: is_symmetric(top.get(k, []), r.vol_24h_rolling) for k, r in stats.items()}
-    vol_on, wallets_7d = _onchain_7d(conn, end, ready)
+    vol_on, wallets_7d, roundtrip_on = _onchain_7d(conn, end, ready)
     distinct7 = {k: wallets_7d.get(k) for k in vol7}
     distinct7.update(_distinct_week(conn, {k: vol_days.get(k, []) for k, v in vol7.items()
                                            if k not in wallets_7d and v >= WASH_MIN_VOL_7D}))
@@ -600,6 +600,8 @@ def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unkn
                     for k, r in stats.items()},
         # a token posing as USDC, USDT or the wrapped native coin: no wallet count needed, the pool itself is the finding
         "lookalike": {k: (v, k in lookalike) for k, v in vol7.items()},
+        # the indexer's own measure on ready chains: the week's volume that came and went inside single transactions
+        "roundtrip": {k: (v, is_wash_roundtrip(v, roundtrip_on.get(k))) for k, v in vol_on.items()},
     }
     reasons: dict[int, list[str]] = {}
     for reason in (r for r in WASH_REASONS if r in judged):
@@ -668,18 +670,22 @@ def _distinct_week(conn, pools_days: dict[tuple, list[date]]) -> dict[tuple, int
     return out
 
 
-def _onchain_7d(conn, end: date, chains: list[int]) -> tuple[dict, dict]:
-    """Per pool on ready chains (onchain.ready_chains: a stuck swap cursor would judge partial volume): on-chain volume and
-    distinct wallets over end-6 .. end."""
+def _onchain_7d(conn, end: date, chains: list[int]) -> tuple[dict, dict, dict]:
+    """Per pool on ready chains (onchain.ready_chains: a stuck swap cursor would judge partial volume): on-chain volume,
+    distinct wallets and round-trip volume (rules.is_wash_roundtrip) over end-6 .. end."""
     if not chains:
-        return {}, {}
+        return {}, {}, {}
     start = end - 6 * _D
-    vol = {(r.pool_id, r.chain_id): r.v or 0.0 for r in conn.execute(
-        sa.select(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id, sa.func.sum(pool_daily_onchain.c.volume_usd).label("v"))
-        .where(pool_daily_onchain.c.day >= start, pool_daily_onchain.c.day <= end, pool_daily_onchain.c.chain_id.in_(chains))
-        .group_by(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id))}
+    vol, roundtrip = {}, {}
+    for r in conn.execute(
+            sa.select(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id, sa.func.sum(pool_daily_onchain.c.volume_usd).label("v"),
+                      sa.func.sum(pool_daily_onchain.c.roundtrip_usd).label("rt"))
+            .where(pool_daily_onchain.c.day >= start, pool_daily_onchain.c.day <= end, pool_daily_onchain.c.chain_id.in_(chains))
+            .group_by(pool_daily_onchain.c.pool_id, pool_daily_onchain.c.chain_id)):
+        vol[(r.pool_id, r.chain_id)] = r.v or 0.0
+        roundtrip[(r.pool_id, r.chain_id)] = r.rt or 0.0
     wallets = {(r.pool_id, r.chain_id): r.n for r in conn.execute(
         sa.select(pool_wallet_day.c.pool_id, pool_wallet_day.c.chain_id, sa.func.count(sa.distinct(pool_wallet_day.c.address)).label("n"))
         .where(pool_wallet_day.c.day >= start, pool_wallet_day.c.day <= end, pool_wallet_day.c.chain_id.in_(chains))
         .group_by(pool_wallet_day.c.pool_id, pool_wallet_day.c.chain_id))}
-    return vol, wallets
+    return vol, wallets, roundtrip

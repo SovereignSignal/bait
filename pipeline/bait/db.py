@@ -301,6 +301,8 @@ pool_daily_onchain = sa.Table(
     sa.Column("wallets", sa.Integer, nullable=False, server_default="0"),
     sa.Column("volume_usd", sa.Float, nullable=False, server_default="0"),
     sa.Column("unpriced_swaps", sa.Integer, nullable=False, server_default="0"),
+    # volume of swaps that came and went inside one transaction (indexer core.roundtrip_usd); 0 on rows written before 0021
+    sa.Column("roundtrip_usd", sa.Float, nullable=False, server_default="0"),
     sa.Index("pool_daily_onchain_day_idx", "day"),
 )
 
@@ -456,6 +458,7 @@ ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("hooks", "proxy_kind", "text"),
     ("indexer_state", "swap_block_time", "timestamptz"),
     ("pool_daily_onchain", "unpriced_swaps", "integer NOT NULL DEFAULT 0"),
+    ("pool_daily_onchain", "roundtrip_usd", "double precision NOT NULL DEFAULT 0"),
     ("pool_stats", "vol_source", "text"),
     ("pool_snapshots", "volume_usd_day", "double precision"),
     ("pool_snapshots", "tx_count_day", "bigint"),

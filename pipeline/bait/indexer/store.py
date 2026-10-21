@@ -239,7 +239,7 @@ def reset_swaps_from(conn: sa.Connection, chain_id: int, day: date) -> None:
 
 
 def apply_swaps(conn: sa.Connection, chain_id: int, daily: dict[tuple[str, date], list], wallets: dict[tuple[str, date, str], int]) -> None:
-    """daily: (pool_id, day) -> [swaps, volume_usd, unpriced_swaps]; wallets: (pool_id, day, address) -> swaps. Adds to existing rows,
+    """daily: (pool_id, day) -> [swaps, volume_usd, unpriced_swaps, roundtrip_usd (optional)]; wallets: (pool_id, day, address) -> swaps. Adds to existing rows,
     then recounts pool_daily_onchain.wallets for the touched (pool, day) keys from pool_wallet_day."""
     ins = _ins(conn)
     wrows = [{"chain_id": chain_id, "pool_id": p, "day": d, "address": a, "swaps": n} for (p, d, a), n in wallets.items()]
@@ -248,14 +248,16 @@ def apply_swaps(conn: sa.Connection, chain_id: int, daily: dict[tuple[str, date]
         stmt = stmt.on_conflict_do_update(index_elements=["chain_id", "pool_id", "day", "address"],
                                           set_={"swaps": pool_wallet_day.c.swaps + stmt.excluded.swaps})
         conn.execute(stmt)
-    drows = [{"chain_id": chain_id, "pool_id": p, "day": d, "swaps": s, "wallets": 0, "volume_usd": v, "unpriced_swaps": u}
-             for (p, d), (s, v, u) in daily.items()]
+    drows = [{"chain_id": chain_id, "pool_id": p, "day": d, "swaps": s, "wallets": 0, "volume_usd": v, "unpriced_swaps": u,
+              "roundtrip_usd": float(rest[0]) if rest else 0.0}
+             for (p, d), (s, v, u, *rest) in daily.items()]
     for i in range(0, len(drows), CHUNK):
         stmt = ins(pool_daily_onchain).values(drows[i:i + CHUNK])
         stmt = stmt.on_conflict_do_update(index_elements=["chain_id", "pool_id", "day"], set_={
             "swaps": pool_daily_onchain.c.swaps + stmt.excluded.swaps,
             "volume_usd": pool_daily_onchain.c.volume_usd + stmt.excluded.volume_usd,
-            "unpriced_swaps": pool_daily_onchain.c.unpriced_swaps + stmt.excluded.unpriced_swaps})
+            "unpriced_swaps": pool_daily_onchain.c.unpriced_swaps + stmt.excluded.unpriced_swaps,
+            "roundtrip_usd": pool_daily_onchain.c.roundtrip_usd + stmt.excluded.roundtrip_usd})
         conn.execute(stmt)
     by_day: dict[date, list[str]] = {}
     for p, d in daily:

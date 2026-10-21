@@ -415,12 +415,12 @@ def _token(t) -> tuple[str, str]:
 
 
 def is_lookalike_pool(chain_id: int, token0, token1) -> bool:
-    """A pool with a token posing as a canonical one: an address that copies a canonical token's first and last four hex
-    digits (address poisoning; a chance collision is about 1 in 4 billion), or a same-symbol pair such as USDC/USDC where
-    exactly one side is the canonical token."""
+    """A pool with a token posing as another: an address that copies a canonical token's first and last four hex digits
+    (address poisoning; a chance collision is about 1 in 4 billion), or a same-symbol pair such as USDC/USDC with two
+    different addresses. The symbol rule needs no canonical list: a real token has one address on a chain, so two
+    "USDG" in one pool means one of them is not USDG (Robinhood 2026-10-17, before USDG was canonical there). Bridged
+    variants carry their own symbols (USDC.e, USDbC), so they do not collide."""
     canon = canonical_tokens(chain_id)
-    if not canon:
-        return False
     toks = [_token(token0), _token(token1)]
     for addr, _ in toks:
         if len(addr) != 42 or addr in canon or addr == _ZERO_ADDRESS:
@@ -428,7 +428,7 @@ def is_lookalike_pool(chain_id: int, token0, token1) -> bool:
         if any(c != _ZERO_ADDRESS and addr[2:6] == c[2:6] and addr[-4:] == c[-4:] for c in canon):
             return True
     (a0, s0), (a1, s1) = toks
-    return bool(s0) and s0 == s1 and a0 != a1 and (a0 in canon) != (a1 in canon)
+    return bool(s0) and s0 == s1 and len(a0) == 42 and len(a1) == 42 and a0 != a1
 
 
 SELF_PRICED_SHARE = 0.5            # the pool holds at least half the token's supply (GeckoTerminal fdv_usd of its base)
@@ -455,7 +455,9 @@ def is_idle_tvl(tvl: float | None, vol_7d: float | None, measured_days: int, cre
 # >= WASH_SHARE of its volume in that rule's window; reasons are stored in WASH_REASONS order. ------------------------
 # "unverified" is not a rule: a project that only escaped the spam rule by moving >= $1M and has no wallet data at all.
 # "lookalike": the volume runs through a pool with a token posing as USDC, USDT or the wrapped native coin.
-WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified", "lookalike")
+# "roundtrip": the volume came and went inside single transactions (indexer core.roundtrip_usd), nothing was bought or sold.
+WASH_REASONS = ("24h", "7d", "concentrated", "vol_tvl", "no_liquidity", "symmetric", "uniform", "unverified", "lookalike",
+                "roundtrip")
 WASH_SHARE = 0.5
 WASH_SIGNAL_MIN_VOL = 10_000        # below this nothing ranks anywhere (Trending needs $10K in 7 days)
 
@@ -534,6 +536,20 @@ def is_wash_7d_by_swaps(vol_7d: float, swaps: int | None) -> bool:
     """The 7-day rule through the swap bound, on any chain: >= $1M in 7 days carried by <= 10 known swaps proves <= 10
     wallets, and that concentration is its own corroboration (no TVL needed)."""
     return swaps is not None and vol_7d >= WASH_MIN_VOL_7D and swaps <= WASH_MAX_WALLETS_7D
+
+
+# Round trips inside one transaction (indexer core.roundtrip_usd: a transaction's swaps in one pool that net to under 1%
+# of their gross on both tokens). 10/16-17: an unlisted family of eleven zero-fee hooks on Robinhood moved $1.39B in 388
+# swaps and 9 transactions, one of them 80 swaps of 5M USDG back and forth against a USDG lookalike; GeckoTerminal valued
+# the lookalike side at $210M of TVL, so no few-wallet rule was corroborated. Nothing was bought or sold, so the round
+# trips are their own corroboration: a pool whose week is at least half such volume is wash-like.
+WASH_ROUNDTRIP_SHARE = 0.5
+
+
+def is_wash_roundtrip(vol_7d: float, roundtrip_7d: float | None) -> bool:
+    """roundtrip_7d None (no indexer row) never matches."""
+    return (roundtrip_7d is not None and vol_7d >= WASH_MIN_VOL_7D and roundtrip_7d > 0
+            and roundtrip_7d >= WASH_ROUNDTRIP_SHARE * vol_7d)
 
 
 # Volume far above liquidity from few wallets. Launchpads churn many times their liquidity too (Base 0x0f48 family:

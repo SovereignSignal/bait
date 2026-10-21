@@ -73,7 +73,9 @@ slugs redirect.
   most $1K of known TVL and fewer than 50 wallets); `symmetric` (top wallets buy and sell equally and carry most of
   the pool); `uniform` (top wallets' volumes within 3% of each other, each near the pool's per-wallet average);
   `unverified` ($1M or more through pools too small to list, with no wallet data); `lookalike` (a token in the pool
-  copies USDC, USDT or the wrapped native coin by symbol or by the first and last four hex digits of its address). A
+  copies USDC, USDT or the wrapped native coin by symbol or by the first and last four hex digits of its address);
+  `roundtrip` (on indexed chains, at least half the pool's week is swaps that came and went inside single
+  transactions, netting to under 1% of their gross on both tokens; `pool_daily_onchain.roundtrip_usd`). A
   finding is remembered through quiet or unknown nights for 14 days after it was last measured, then forgotten unless
   measured again.
 - **TVL trust** (`rules.is_lookalike_pool`, `rules.is_idle_tvl`): GeckoTerminal's `reserve_in_usd` values every side at

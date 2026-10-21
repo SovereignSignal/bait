@@ -30,7 +30,9 @@ MISMATCH = 20.0                 # sides disagree by more than 20x: trust the sma
 # Fallback when DefiLlama has no reliable quote (new chain keys, low confidence): the wrapped native coin (priced as the
 # chain's native coin id) and major stablecoins ($1). OP-stack chains share the WETH predeploy. Unichain, World, Soneium,
 # Ink, Celo, Robinhood and MegaETH entries were checked on each chain's Blockscout token page 2026-10-09; the rest are the
-# canonical deployments. Monad, Zora and Robinhood/MegaETH stables stay out until checked the same way.
+# canonical deployments. Robinhood USDG (0x5fc5…d168) checked 2026-10-21 against DefiLlama (robinhood:0x5fc5…d168 = USDG,
+# confidence 0.99, the Ethereum USDG price) and two aggregators' pool pages; its Blockscout sits behind a Cloudflare
+# challenge. Monad, Zora and MegaETH stables stay out until checked the same way.
 OP_WETH = "0x4200000000000000000000000000000000000006"
 WRAPPED_NATIVE: dict[int, str] = {
     1: "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2", 10: OP_WETH, 56: "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",
@@ -49,6 +51,7 @@ STABLES: dict[int, dict[str, int]] = {
           "0xc2132d05d31c914a87c6611c10748aeb04b58e8f": 6},
     480: {"0x79a02482a880bce3f13e09da970dc34db4cd24d1": 6},
     1868: {"0xba9986d2381edf1da03b0b9c1f8b00dc4aacc369": 6},
+    4663: {"0x5fc5360d0400a0fd4f2af552add042d716f1d168": 6},
     8453: {"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": 6},
     42161: {"0xaf88d065e77c8cc2239327c5edb3a432268e5831": 6, "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": 6},
     42220: {"0xceba9300f2b948710d2653dd7b07f33a8b32118c": 6},
