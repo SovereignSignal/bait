@@ -125,6 +125,25 @@ dump and restore. The deletes write WAL as they go; it is recycled at checkpoint
 volume during the run rather than expecting it to fall. Rerunnable: a second `--yes` right away finds nothing to delete. Later, it can delete a few rows the first run kept: the
 newest-N window per hook moves as sampled rows arrive. SIGTERM (a redeploy) stops it between batches.
 
+## One-off: key every hooked pool on Base (0022)
+
+Base reports `partial` while ~80K pool ids owe swaps to `pool_lookup_queue`: each unknown id on a swap page costs a
+HyperSync scan, and on the free tier the queue never drains. `v4_pool_keys` ends that: once every hooked pool below the
+Initialize cursor has a key or a row, a swap page decides from Postgres and queues nothing. The live Initialize phase
+keys new pools itself; history needs one walk of Base's Initialize logs (~9M hooked pools, 1 to 2 GB of rows):
+
+1. Get a second Envio token for the scan and set `HYPERSYNC_API_TOKEN_SCAN` on the `indexer` service (the live indexer
+   keeps `HYPERSYNC_API_TOKEN`; the free tier is ~20 queries a minute and the indexer needs all of it).
+2. Deploy a release with 0022 first; the indexer creates the table and columns on start.
+3. Add a temporary service from the same image (or reuse `pipeline` outside 05:00 to 08:00 UTC) with start command
+   `python -m bait.indexer scan-pool-keys --chains base --dry-run`, read the log line (pages, hooked pools seen), then
+   switch to `--yes --stop-at 04:30`. It is resumable (`indexer_state.keys_block`); redeploy as often as needed.
+4. When the log says `complete=True`, remove the temporary service or start command. The next heartbeat shows
+   `keyed=N` for Base and the queue stops growing; `pool_lookup_queue` rows settle as before and `backfilled` flips once
+   none owe swaps. Delete `HYPERSYNC_API_TOKEN_SCAN` afterwards.
+
+If Base's `v4_pools` is pruned again later (`prune-pools`), rerun the scan: a pruned row has no key.
+
 ## One-off repairs (package 9)
 
 Repairs run inside the `pipeline` service (Postgres has no public endpoint): set its start command to the repair

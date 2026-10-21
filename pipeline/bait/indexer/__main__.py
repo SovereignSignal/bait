@@ -1,5 +1,6 @@
 """python -m bait.indexer: loop every INDEXER_INTERVAL seconds (default 60) over all chains.
 `python -m bait.indexer prune-pools --dry-run|--yes [--keep N]`: one-time trim of v4_pools, see indexer/prune.py.
+`python -m bait.indexer scan-pool-keys --dry-run|--yes [--chains ...]`: one-time backfill of v4_pool_keys, see indexer/poolkeys.py.
 
 Env: DATABASE_URL, HYPERSYNC_API_TOKEN (without it: RPC fallback, Initialize only, new blocks only, 10 chains),
 INDEXER_INTERVAL, INDEXER_CHAINS (comma slugs or ids), INDEXER_MAX_PAGES, INDEXER_TOPIC_FILTER_MAX,
@@ -132,7 +133,7 @@ def heartbeat(loop: int, mode: str, stats: dict[str, ChainStats], schema_locked:
         extra = f",swaps={s.swaps}" + (f",unpriced={s.unpriced}" if s.unpriced else "") if s.swaps else ""
         cap = "".join(f",{k}={v}" for k, v in (("capped", s.capped), ("late", s.late), ("folded", s.folded), ("lookups", s.lookups),
                                                           ("unknown", s.unknown), ("chunk_calls", s.chunk_calls), ("queued", s.queued),
-                                                          ("owed", s.owed), ("backlog", s.backlog)) if v)
+                                                          ("owed", s.owed), ("backlog", s.backlog), ("keyed", s.keyed)) if v)
         parts.append(f"{slug}:lag={lag},new={s.new_pools}{cap}{extra}")
     total_new = sum(s.new_pools for s in stats.values())
     locked = f"schema_locked={schema_locked} " if schema_locked else ""
@@ -145,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["prune-pools"]:
         from .prune import main as prune_main
         return prune_main(argv[1:])
+    if argv[:1] == ["scan-pool-keys"]:
+        from .poolkeys import main as keys_main
+        return keys_main(argv[1:])
     ap = argparse.ArgumentParser(prog="bait.indexer")
     ap.add_argument("--once", action="store_true", help="one loop, then exit")
     ap.add_argument("--chains", default=os.environ.get("INDEXER_CHAINS"), help="comma slugs or chain ids (default all)")

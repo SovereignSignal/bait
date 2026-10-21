@@ -7,7 +7,7 @@ from datetime import date, timedelta
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql, sqlite
 
-from ..db import (HOOK_POOL_PREFIX, as_utc, hook_pool_counts, indexer_state, pool_daily_onchain, pool_lookup_queue, pool_wallet_day,
+from ..db import (v4_pool_keys, HOOK_POOL_PREFIX, as_utc, hook_pool_counts, indexer_state, pool_daily_onchain, pool_lookup_queue, pool_wallet_day,
                   upsert, utcnow, v4_pools)
 
 CHUNK = 500
@@ -59,6 +59,35 @@ def insert_late_pools(conn: sa.Connection, rows: list[dict]) -> int:
     return len(rows)
 
 
+KEY_FIELDS = ("chain_id", "pool_id", "hook_address", "currency0", "currency1", "fee", "tick_spacing", "block_number",
+              "block_time")
+
+
+def upsert_pool_keys(conn: sa.Connection, rows: list[dict]) -> int:
+    """Keys of hooked pools that are not v4_pools rows (past the cap, pruned, or found by scan-pool-keys). Insert only: a key
+    never changes, and a page seen twice writes nothing."""
+    ins = _ins(conn)
+    keys = [{k: r.get(k) for k in KEY_FIELDS} for r in rows]
+    for i in range(0, len(keys), CHUNK):
+        conn.execute(ins(v4_pool_keys).values(keys[i:i + CHUNK]).on_conflict_do_nothing(index_elements=["chain_id", "pool_id"]))
+    return len(keys)
+
+
+def keys_by_id(conn: sa.Connection, chain_id: int, pool_ids) -> dict[str, dict]:
+    """Which of these ids have a key row -> the key as a v4_pools-shaped dict (what the resolver's `found` returns)."""
+    ids = sorted(set(pool_ids))
+    out = {}
+    for i in range(0, len(ids), CHUNK):
+        for r in conn.execute(sa.select(v4_pool_keys).where(v4_pool_keys.c.chain_id == chain_id, v4_pool_keys.c.pool_id.in_(ids[i:i + CHUNK]))):
+            out[r.pool_id] = {**r._mapping, "sqrt_price_x96": None, "tick": None, "tx_hash": None}
+    return out
+
+
+def keys_complete(conn: sa.Connection, chain_id: int) -> bool:
+    s = get_state(conn, chain_id)
+    return bool(s is not None and getattr(s, "keys_complete", False))
+
+
 def store_pools(conn: sa.Connection, chain_id: int, rows: list[dict], cap: int) -> tuple[list[dict], list[dict]]:
     """One page's hooked pools under the per-hook cap -> (stored, unstored). A hook keeps at most `cap` v4_pools rows, the
     first to arrive; past that its pools only add to hook_pool_counts.pools_total (every pool of the hook, stored or
@@ -108,6 +137,7 @@ def store_pools(conn: sa.Connection, chain_id: int, rows: list[dict], cap: int) 
             counts.append(_counted(chain_id, h, n + len(new) - len(over), None, last, seen_at, over))
     upsert(conn, hook_pool_counts, counts, keys=["chain_id", "hook_address"])
     upsert_pools(conn, stored)
+    upsert_pool_keys(conn, unstored)                # a pool past the cap keeps its key: the swap page settles it from here
     return stored, unstored
 
 
