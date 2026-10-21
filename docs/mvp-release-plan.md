@@ -1,5 +1,9 @@
 # Bait: MVP release plan (2026-10-15)
 
+> **Status 2026-10-21.** Tracks A, C and D shipped (#32 to #36, #45 to #52); B1's retry rule, B3, B6 and B7 shipped (#47,
+> #51, #54, #56); B2 has the fallback (#53). Still open: B1's one-night top-300 enrichment run, B4 (Base pool-key
+> scan), and Track E (the private share). The table below is the 2026-10-15 snapshot, kept as written.
+
 Goal: a version of Bait that can be shared with strangers and open-sourced without anyone being misled by a number
 on a card, and that a reviewer or builder can self-host from the README.
 

@@ -95,9 +95,9 @@ Monitoring: `/api/health` reports the last run's receipt and each chain's indexe
 
 ## Status
 
-Beta. Figures can lag or be wrong when a source stalls; wash and spam rules are deliberately conservative; a hook's
-deployer and the share of volume from its own wallets are not shown yet. The release plan and known gaps are in
-[`docs/mvp-release-plan.md`](docs/mvp-release-plan.md). To get a hook listed, open a pull request on the
+Beta. Figures can lag or be wrong when a source stalls; wash and spam rules are deliberately conservative; Base is
+still marked partial while its pool backfill settles; many smaller projects have no description yet. The release plan
+and what is left of it are in [`docs/mvp-release-plan.md`](docs/mvp-release-plan.md). To get a hook listed, open a pull request on the
 [Uniswap hooklist](https://github.com/Uniswap/hooklist); Bait picks it up the next night.
 
 ## License
