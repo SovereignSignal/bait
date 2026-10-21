@@ -698,3 +698,12 @@ so every swap was priced, and nothing was wrong with the figure as a sum of swap
   variants carry their own symbols (USDC.e, USDbC), so the rule does not collide with them.
 - **Window.** Rows written before 0021 carry 0, so the 10/16-17 volume stays unflagged until it leaves the 7-day window
   on 10/24; the rule prevents the next one. A repair that re-reads swaps would fill it; none exists yet.
+## Web fixes from the 2026-10-21 handoff
+
+- **API redirects were absolute and wrong.** `GET /api/v1/projects/<retired slug>` answered 308 with
+  `Location: https://0.0.0.0:8080/...`: the route built `new URL(path, req.url)`, and behind Railway's proxy `req.url`
+  is the container's own address. `apiRedirect` now sends a relative Location; page redirects already did.
+- **Database connections are recycled** (`max_lifetime` 10 minutes) and closes are logged as `[db] connection N closed`.
+  Twice a long-lived web container had every data page stall while Postgres showed the web's trivial queries finished
+  and parked in `ClientWrite`; #64 turned that into a 20 s timeout, this makes a stuck connection short-lived and
+  visible. If it recurs, capture `pg_stat_activity` for `application_name = 'bait-web'` at that moment.

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { findByHook, isHexAddress, listProjects, parseListQuery, projectSummaryV1, projectV1 } from "./api-v1";
+import { apiRedirect, findByHook, isHexAddress, listProjects, parseListQuery, projectSummaryV1, projectV1 } from "./api-v1";
 import { SAMPLE_PROJECTS } from "../fixtures/sample";
 
 const SITE = "https://example.test";
@@ -47,4 +47,12 @@ test("hook lookup: by address regardless of case, optionally one chain; unknown 
   assert.deepEqual(findByHook(SAMPLE_PROJECTS, "0x0000000000000000000000000000000000000000"), []);
   assert.equal(isHexAddress("0xabc"), false);
   assert.equal(isHexAddress(h.address), true);
+});
+
+test("a retired slug redirects with a relative Location, never the container's own host", () => {
+  const r = apiRedirect("/api/v1/projects/launchhook-robinhood");
+  assert.equal(r.status, 308);
+  assert.equal(r.headers.get("Location"), "/api/v1/projects/launchhook-robinhood");
+  assert.equal(r.headers.get("Cache-Control"), "no-store");
+  assert.equal(r.headers.get("Access-Control-Allow-Origin"), "*");
 });
