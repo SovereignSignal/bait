@@ -1,12 +1,18 @@
 name: CI web
-# Unit tests, typecheck and a production build. Runs only when web/ or a shared fixture changes; a newer push to the
-# same PR cancels the run in progress.
+# Unit tests, typecheck and a production build, and alongside them both Playwright suites (smoke on the October 8
+# sample, representative on the dated replay fixture). Runs only when web/ or a shared fixture changes; a newer push
+# to the same PR cancels the run in progress. The browser suites run on pushes to main and on pull requests that are
+# ready for review, not on drafts; mark a PR ready (or push to it once ready) to run them. One Next build serves both
+# suites: a fresh copy of .next is restored between them so no ISR page from the sample dataset is reused.
 on:
   push:
     branches: [main]
     paths: ["web/**", "fixtures/**", ".github/workflows/ci-web.yml"]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths: ["web/**", "fixtures/**", ".github/workflows/ci-web.yml"]
+# Jobs that build and test PR code get a read-only token; automerge asks for write itself.
+permissions: { contents: read }
 concurrency:
   group: ci-web-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -23,3 +29,46 @@ jobs:
       - run: cd web && npx tsc --noEmit
       - run: cd web && npm run build
         env: { NEXT_TELEMETRY_DISABLED: "1" }
+  e2e:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 22, cache: npm, cache-dependency-path: web/package-lock.json }
+      - run: cd web && npm ci
+      # The browser download (~150 MB) is keyed on the lockfile, which pins the Playwright version; the OS packages
+      # are installed each time (seconds) and `playwright install` is a no-op when the browser is already present.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+      - run: cd web && npx playwright install --with-deps chromium
+      - run: cd web && npm run build && cp -a .next .next-fresh
+        env: { NEXT_TELEMETRY_DISABLED: "1" }
+      - run: cd web && npm run e2e
+        env: { CI: "true", NEXT_TELEMETRY_DISABLED: "1" }
+      - run: cd web && rm -rf .next && mv .next-fresh .next && npm run e2e
+        env: { CI: "true", NEXT_TELEMETRY_DISABLED: "1", BAIT_E2E_REPRESENTATIVE: "1" }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with: { name: playwright-results, path: web/test-results, if-no-files-found: ignore }
+  # Dependabot's web-minor group merges itself once every job above passes; majors stay manual. Only when Dependabot
+  # pushed the commit itself (a human push to its branch waits for a human), and --match-head-commit merges only the
+  # commit these jobs tested. A merge made with GITHUB_TOKEN starts no push-to-main runs; Railway
+  # deploys from its own GitHub hook as usual.
+  automerge:
+    needs: [web, e2e]
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]' &&
+      startsWith(github.head_ref, 'dependabot/npm_and_yarn/web/web-minor-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: write, pull-requests: write }
+    steps:
+      - run: gh pr merge "$PR" --squash --match-head-commit "$SHA" --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
