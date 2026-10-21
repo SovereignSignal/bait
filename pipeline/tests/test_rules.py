@@ -307,8 +307,17 @@ def test_lookalike_pool_catches_address_poisoning_and_same_symbol_pairs():
     assert not is_lookalike_pool(8453, usdc, weth)
     assert not is_lookalike_pool(8453, meme, weth)
     assert not is_lookalike_pool(8453, {"id": "0x" + "0" * 40, "symbol": "ETH"}, usdc)
-    assert not is_lookalike_pool(999_999, usdc, spoof)                            # no canonical list for the chain
+    assert is_lookalike_pool(999_999, usdc, spoof)                                # same symbol, two addresses: no canonical list needed
+    assert not is_lookalike_pool(999_999, usdc, {"id": spoof["id"], "symbol": "USDC.e"})   # a bridged variant has its own symbol
     assert not is_lookalike_pool(8453, None, None)
+    # Robinhood 2026-10-17: the real USDG and two spoofs sharing its first and last four hex digits (DESIGN.md "Round-trip wash")
+    usdg = {"id": "0x5fc5360d0400a0fd4f2af552add042d716f1d168", "symbol": "USDG"}
+    spoof1 = {"id": "0x5fc5910f80a6c1275fcfde8fe95056d7d536d168", "symbol": "USDG"}
+    spoof2 = {"id": "0x5fc5a1f152a98ae93eb71cccf76ac0dc5f1ad168", "symbol": "USDG"}
+    pons = {"id": "0xf9dbea39c0f7caf5028adb723573b2648acc4571", "symbol": "PONS"}
+    assert is_lookalike_pool(4663, usdg, spoof1) and is_lookalike_pool(4663, usdg, spoof2)
+    assert is_lookalike_pool(4663, spoof1, pons) and is_lookalike_pool(4663, pons, spoof2)   # the spoof's address alone gives it away
+    assert not is_lookalike_pool(4663, usdg, pons)
 
 
 def test_idle_tvl_needs_a_full_measured_week():

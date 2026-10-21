@@ -415,12 +415,12 @@ def _token(t) -> tuple[str, str]:
 
 
 def is_lookalike_pool(chain_id: int, token0, token1) -> bool:
-    """A pool with a token posing as a canonical one: an address that copies a canonical token's first and last four hex
-    digits (address poisoning; a chance collision is about 1 in 4 billion), or a same-symbol pair such as USDC/USDC where
-    exactly one side is the canonical token."""
+    """A pool with a token posing as another: an address that copies a canonical token's first and last four hex digits
+    (address poisoning; a chance collision is about 1 in 4 billion), or a same-symbol pair such as USDC/USDC with two
+    different addresses. The symbol rule needs no canonical list: a real token has one address on a chain, so two
+    "USDG" in one pool means one of them is not USDG (Robinhood 2026-10-17, before USDG was canonical there). Bridged
+    variants carry their own symbols (USDC.e, USDbC), so they do not collide."""
     canon = canonical_tokens(chain_id)
-    if not canon:
-        return False
     toks = [_token(token0), _token(token1)]
     for addr, _ in toks:
         if len(addr) != 42 or addr in canon or addr == _ZERO_ADDRESS:
@@ -428,7 +428,7 @@ def is_lookalike_pool(chain_id: int, token0, token1) -> bool:
         if any(c != _ZERO_ADDRESS and addr[2:6] == c[2:6] and addr[-4:] == c[-4:] for c in canon):
             return True
     (a0, s0), (a1, s1) = toks
-    return bool(s0) and s0 == s1 and a0 != a1 and (a0 in canon) != (a1 in canon)
+    return bool(s0) and s0 == s1 and len(a0) == 42 and len(a1) == 42 and a0 != a1
 
 
 SELF_PRICED_SHARE = 0.5            # the pool holds at least half the token's supply (GeckoTerminal fdv_usd of its base)

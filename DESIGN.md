@@ -692,6 +692,9 @@ so every swap was priced, and nothing was wrong with the figure as a sum of swap
   transactions do buy or sell is untouched; an arbitrage that touches a pool twice in opposite directions nets to its
   profit, not to nothing, and in any case rarely makes half a pool's week.
 - **Also:** Robinhood USDG (`0x5fc5…d168`, DefiLlama confidence 0.99) joins the canonical stables, so the lookalike rule
-  sees the USDG/USDG pool and the pool's TVL reads unknown.
+  sees the USDG/USDG pool and the pool's TVL reads unknown; the two spoofs (`0x5fc5910f…d168`, `0x5fc5a1f1…d168`) are
+  caught by address in every pool they sit in, PONS and CASHCAT included. And the same-symbol half of the lookalike
+  rule no longer needs a canonical list: two "USDG" with two addresses in one pool is a lookalike on any chain. Bridged
+  variants carry their own symbols (USDC.e, USDbC), so the rule does not collide with them.
 - **Window.** Rows written before 0021 carry 0, so the 10/16-17 volume stays unflagged until it leaves the 7-day window
   on 10/24; the rule prevents the next one. A repair that re-reads swaps would fill it; none exists yet.
