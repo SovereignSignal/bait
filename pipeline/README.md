@@ -68,7 +68,7 @@ returns `None` and the step logs `client=<name> skipped: no key in env` and does
 
 ### Activity (step 3)
 Trades come from GeckoTerminal through the same `keyless.Http` the snapshot uses (one client per run,
-`KEYLESS_SPACING` / `KEYLESS_CACHE_DIR`), one call per selected pool. Per wallet (`tx_from_address`,
+`KEYLESS_SPACING` / `KEYLESS_CACHE_DIR`; keyed by `COINGECKO_API_KEY` when set), one call per selected pool. Per wallet (`tx_from_address`,
 lowercased): USD volume, trades, buys, sells, last trade; the top 20 per pool are written for the day
 (the day's rows for a pool are replaced on re-run). Rows older than 14 days are deleted.
 
@@ -315,6 +315,14 @@ candidates fetched as well, for the symmetric-trader check; default 10),
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP` (pools past it get yesterday's volume from the rolling 24h,
 marked `estimated`).
 
+`COINGECKO_API_KEY` (optional, a CoinGecko paid-plan key): every GeckoTerminal call (snapshot, OHLCV, activity trades,
+the onchain step's candle refresh, repair) goes to the same path under `https://pro-api.coingecko.com/api/v3/onchain`
+with the key in the `x-cg-pro-api-key` header, `60 / COINGECKO_CALLS_PER_MIN` seconds apart (default 500, the Analyst
+plan's limit: 0.12 s) instead of `KEYLESS_SPACING`. Same requests and caps, so a keyed night writes what a keyless one
+would, faster. A refused key (401/403), or a call still answering 429 on its third try over a minute apart, turns the
+rest of the run keyless at `KEYLESS_SPACING`, with a warning. Unset or blank: unchanged. `KEYLESS=0` still disables
+GeckoTerminal, key or not. The web's live trades proxy does not read it.
+
 Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs),
 `HYPERSYNC_API_TOKEN_SCAN` (optional, read only by the one-off `scan-pool-keys`, which falls back to `HYPERSYNC_API_TOKEN`;
 see `../railway/README.md`), `INDEXER_INTERVAL`
@@ -348,9 +356,9 @@ command.
 | command | what it does | cost |
 |---|---|---|
 | `repair all --since 14 --dry-run` | prints the plan: pools and minutes to backfill, days to re-score, verify calls, prose counts and worst-case USD with the two budget options | free, writes nothing |
-| `repair backfill-days --since 14 [--pools N]` | GeckoTerminal daily candles (one call per pool, `KEYLESS_SPACING` apart, busiest first) into `pool_snapshots.volume_usd_day` for the closed days `today-since-14 .. today-1`: rows written before 0012 and closed-day estimates only; stops between pools at `--stop-at` (05:30 UTC); a rerun resumes | free, about 10 s a pool |
+| `repair backfill-days --since 14 [--pools N]` | GeckoTerminal daily candles (one call per pool, `KEYLESS_SPACING` apart or the plan's pace with `COINGECKO_API_KEY`, busiest first) into `pool_snapshots.volume_usd_day` for the closed days `today-since-14 .. today-1`: rows written before 0012 and closed-day estimates only; stops between pools at `--stop-at` (05:30 UTC); a rerun resumes | free, about 10 s a pool (with `COINGECKO_API_KEY`: one plan call credit and ~0.12 s a pool) |
 | `repair rescore --since 14` | `score.run` for every stored run day in `today-since .. today`, oldest first, after copying each day once into `project_daily_p9_backup`; prints counts, wash reasons and the Trending top-10 change; `--restore [--day D]` puts back every day the copy holds | free, seconds a day |
-| `repair verify --sample 5` | Bait's 24h / 7d / prev 7d against GeckoTerminal candle sums for the same pools and closed days, as a markdown table | free, up to 15 calls |
+| `repair verify --sample 5` | Bait's 24h / 7d / prev 7d against GeckoTerminal candle sums for the same pools and closed days, as a markdown table | free (plan call credits with `COINGECKO_API_KEY`), up to 15 calls |
 | `repair prose --what-lines --blurbs --dry-run\|--yes --max-usd X [--limit N]` | Claude rewrites from stored facts: what-lines cut mid-word at 200 chars; blurbs of the current signals targets written before package 8 | paid, Meter-checked |
 
 GeckoTerminal candles carry no trade counts, so backfilled days keep `tx_count_day` NULL and those projects' `swaps_7d`

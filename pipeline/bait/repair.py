@@ -217,7 +217,7 @@ def backfill_plan(conn, today: date, since: int, max_pools: int | None, spacing:
                      f"(chain ids {', '.join(sorted(info['no_network']))})")
     left = len(targets) - calls
     lines.append(f"  GeckoTerminal calls: {calls}{f' (--pools {max_pools}; {left} left for a rerun)' if left else ''}, "
-                 f"{spacing:g} s apart: about {minutes:.0f} min, free")
+                 f"{spacing:g} s apart: about {minutes:.0f} min, {K.gt_cost(calls)}")
     if not p8_rows_present(conn, today):
         lines.append("  WARNING: no per-day snapshot rows from the last day. Run this after a package 8 nightly; before "
                      "it, every on-chain pool still looks unfilled and the call count above is inflated.")
@@ -722,7 +722,7 @@ def _waiting_for_nightly(engine, now: datetime) -> bool:
 
 
 def _spacing() -> float:
-    return float(os.environ.get("KEYLESS_SPACING", "10"))
+    return K.gt_spacing(K.coingecko_key())  # the pace keyless_http runs at: KEYLESS_SPACING, or the plan's with a key
 
 
 def _step(engine, name: str, fn) -> tuple[int, dict]:
@@ -894,7 +894,7 @@ def _dry_run(cmd: str, args, engine, now: datetime) -> int:
         if cmd == "all":
             sample = args.sample
             lines.append(f"verify: up to {sample * 3} GeckoTerminal calls ({sample} projects x 3 pools), about "
-                         f"{sample * 3 * _spacing() / 60:.0f} min, free")
+                         f"{sample * 3 * _spacing() / 60:.0f} min, {K.gt_cost(sample * 3)}")
     if cmd in ("prose", "all"):
         meter = CappedMeter(engine, None)
         what, blurbs = (True, True) if cmd == "all" else (args.what_lines, args.blurbs)

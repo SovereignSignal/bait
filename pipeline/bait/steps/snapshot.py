@@ -199,13 +199,13 @@ def _rolling_swaps(conn, swaps: dict[tuple[str, int], int], end: date, before: d
 
 
 def keyless_http(ctx: RunContext):
-    """One GeckoTerminal client per run (shared by snapshot and activity) so call spacing stays in one place.
+    """One GeckoTerminal client per run (shared by snapshot and activity) so call spacing stays in one place; keyed by
+    COINGECKO_API_KEY when it is set (keyless.http_from_env).
     Tests inject a fake via ctx.extras["keyless_http"]."""
     from .. import keyless as K
     http = ctx.extras.get("keyless_http")
     if http is None:
-        http = K.Http(gt_spacing=float(os.environ.get("KEYLESS_SPACING", "10")),
-                      cache_dir=os.environ.get("KEYLESS_CACHE_DIR") or None)
+        http = K.http_from_env(cache_dir=os.environ.get("KEYLESS_CACHE_DIR") or None)
         ctx.extras["keyless_http"] = http
     return http
 
