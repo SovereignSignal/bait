@@ -73,7 +73,6 @@ const FLAG: Record<string, keyof HookFlags> = {
 };
 
 const COLORS = ["#5b2fff", "#ff007a", "#1b8a5a", "#ff6a00", "#2563eb", "#0ea5e9", "#c2410c", "#7c3aed", "#0f766e", "#b45309"];
-const LABELS = [["Smart Trader"], ["Fund"], ["DEX Trader", "High Balance"], ["Arbitrage Bot"], ["Token Millionaire"], [], ["Smart LP"], []];
 
 function hash(s: string): number {
   let x = 0;
@@ -108,7 +107,7 @@ function addr(seed: string): string {
   return "0x" + out.slice(0, 40);
 }
 
-/** Sample top wallets for the project's busiest pool: volume tapers, labels rotate. */
+/** Sample top wallets for the project's busiest pool: volume tapers. */
 function wallets(raw: Raw, chainId: ChainId, h: number): WalletView[] {
   const n = Math.min(8, Math.max(2, Math.round(Math.log10(raw.wallets + 10) * 2.5)));
   const out: WalletView[] = [];
@@ -118,8 +117,6 @@ function wallets(raw: Raw, chainId: ChainId, h: number): WalletView[] {
     left -= v;
     const trades = 3 + ((h >> i) % 40);
     const buys = Math.round(trades * (0.35 + ((h >> (i + 2)) % 50) / 100));
-    // stands in for the frozen Nansen labels, which reach only the read API's top_wallets (the pages no longer show them)
-    const labels = LABELS[(h + i) % LABELS.length];
     out.push({
       address: addr(`${raw.name}:${i}`),
       chainId,
@@ -128,8 +125,6 @@ function wallets(raw: Raw, chainId: ChainId, h: number): WalletView[] {
       buys,
       sells: trades - buys,
       lastTradeAt: new Date(NOW - (i * 37 + (h % 30)) * 60_000).toISOString(),
-      labels,
-      smartMoney: labels.some((l) => /smart|fund/i.test(l)),
     });
   }
   return out;

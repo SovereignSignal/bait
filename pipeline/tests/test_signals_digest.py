@@ -80,7 +80,8 @@ def test_signals_without_keys_still_writes_alive(conn, ctx):
     seed_daily(conn, p, new=True)
     out = signals.run(conn, ctx)
     assert out["projects"] == 1 and out["github"] == 0 and out["blurbs"] == 0
-    assert conn.execute(sa.select(db.signals.c.value).where(db.signals.c.project_id == p)).scalar_one() == {"alive": False}
+    # no GitHub reading: alive is unknown (null), never false
+    assert conn.execute(sa.select(db.signals.c.value).where(db.signals.c.project_id == p)).scalar_one() == {"alive": None}
 
 
 def test_digest_only_on_monday_or_forced(conn, ctx):
@@ -121,9 +122,46 @@ def test_frozen_exa_and_nansen_signals_stay_out_of_alive_and_the_blurb(conn, ctx
     out = signals.run(conn, ctx)
     assert out == {"projects": 1, "github": 0, "blurbs": 1, "errors": 0}
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == p))}
-    assert sig["alive"] == {"alive": False} and sig["exa"]["hits_30d"] == 3          # stored row left as it was
-    assert set(seen[0]["signals"]) == {"alive"} and [r["title"] for r in seen[0]["receipts"]] == ["Hot hook ships"]
+    assert sig["alive"] == {"alive": None} and sig["exa"]["hits_30d"] == 3           # stored row left as it was
+    assert seen[0]["signals"] == {} and [r["title"] for r in seen[0]["receipts"]] == ["Hot hook ships"]
     assert "enrichment" not in seen[0]                                                # stored Parallel facts: never prompt
+
+
+def test_alive_is_unknown_without_a_github_reading_and_never_reaches_the_blurb_as_false(conn, ctx):
+    # GitHub is alive's only input since 2026-10-24, and new projects no longer get a GitHub link (that came from
+    # Parallel). With no GitHub reading there is no evidence either way: the row says null and the blurb prompt leaves it
+    # out. Sent as false it read as a fact: a live blurb said "the alive signal reads false, so treat the activity as
+    # unverified" of a project with no GitHub link. A repo whose last commit is older than 30 days is a real false.
+    ids = {}
+    for i, (name, gh) in enumerate((("Linkless", None), ("Stale", "https://github.com/x/stale"), ("Busy", "https://github.com/x/busy"))):
+        pid = insert_project(conn, name, NOW - timedelta(days=40), slug=name.lower())
+        insert_hook(conn, f"0x{pid}", 1, project_id=pid)
+        seed_daily(conn, pid, score=30.0 - i, tvl=1e6)
+        conn.execute(sa.update(db.projects).values(github=gh).where(db.projects.c.id == pid))
+        ids[name] = pid
+    # written before 2026-10-24, when no Exa hit and no GitHub link made it false
+    conn.execute(sa.insert(db.signals).values(project_id=ids["Linkless"], kind="alive", value={"alive": False},
+                                              as_of=NOW - timedelta(days=3)))
+
+    class GitHub:
+        def activity(self, url, days=30, now=None):
+            ago = 45 if url.endswith("/stale") else 2
+            return {"repo": url.removeprefix("https://github.com/"), "stars": 1,
+                    "last_commit_at": (NOW - timedelta(days=ago)).isoformat(), "commits_30d": ago <= 30}
+    seen = {}
+
+    class Capture(FakeClaude):
+        def why_blurb(self, c):
+            seen[c["name"]] = c
+            return super().why_blurb(c)
+    ctx.clients.update(exa=NoExa(), github=GitHub(), claude=Capture())
+    out = signals.run(conn, ctx)
+    assert out == {"projects": 3, "github": 2, "blurbs": 3, "errors": 0}
+    alive = {n: conn.execute(sa.select(db.signals.c.value).where(db.signals.c.project_id == pid, db.signals.c.kind == "alive"))
+             .scalar_one() for n, pid in ids.items()}
+    assert alive == {"Linkless": {"alive": None}, "Stale": {"alive": False}, "Busy": {"alive": True}}
+    assert "alive" not in seen["Linkless"]["signals"]
+    assert seen["Stale"]["signals"]["alive"] == {"alive": False} and seen["Busy"]["signals"]["alive"] == {"alive": True}
 
 
 def test_blurb_context_names_its_windows_and_never_a_made_up_swap_count(conn, ctx):

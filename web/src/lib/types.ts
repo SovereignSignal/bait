@@ -134,14 +134,6 @@ export interface WalletView {
   buys: number | null;
   sells: number | null;
   lastTradeAt: string | null; // ISO
-  /** frozen Nansen labels (collected in early October 2026): the read API only, never rendered */
-  labels: string[];
-  smartMoney: boolean;
-}
-
-export interface WalletLabel {
-  labels: string[];
-  smartMoney: boolean;
 }
 
 /** One trade from /api/trades/[chain]/[pool]. */

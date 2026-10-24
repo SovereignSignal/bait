@@ -756,3 +756,16 @@ The owner dropped three external sources. What changed and what stays:
   API's undocumented `top_wallets[].labels` / `smart_money` still read it.
 - **Env.** `BLOCKWORKS_API_KEY` was never read and is gone from the examples. `HYPERSYNC_API_TOKEN_SCAN` is read by
   `scan-pool-keys` (falling back to `HYPERSYNC_API_TOKEN`) and is now listed. `GRAPH_API_KEY` stays.
+
+## 2026-10-24: Providers pruned, review follow-up
+
+- **Nansen is out of the read API too.** `top_wallets[]` is now `{address, chain_id, volume_usd, trades, buys, sells,
+  last_trade_at}`: `labels` and `smart_money` are removed like `metrics.smart_wallets_24h` (`api_version` stays 1;
+  docs/api.md lists the three under "Removed fields"). Nothing reads `wallet_labels` any more; the table and its rows
+  stay until a migration drops them. This replaces the last sentence of the Nansen bullet above.
+- **`alive` is unknown without a GitHub reading.** With Exa gone, a GitHub commit date is its only input, and new
+  projects no longer get a GitHub link. A project with no `github` signal now gets `{"alive": null}` instead of false,
+  and the blurb prompt leaves an unknown `alive` out. As false it read as a fact: a live blurb said "the alive signal
+  reads false, so treat the activity as unverified" of a project with no GitHub link. A repo with no commit in 30 days
+  is still false. On the first nightly every signals target without a GitHub reading changes value once, so up to the
+  signals cap (50) blurbs are rewritten that night, inside the cost preview's existing why_blurb upper bound.

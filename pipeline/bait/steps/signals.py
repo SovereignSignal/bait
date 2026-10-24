@@ -3,7 +3,8 @@ signals changed since blurb_at.
 
 The per-project Exa receipts search was removed on 2026-10-24 (Exa now serves only the radar step). The receipts table
 and the "exa" / "nansen" signal rows written before then stay stored; they no longer change, so they are left out of
-the blurb's signals and out of `alive`."""
+the blurb's signals and out of `alive`. `alive` is null (unknown) without a GitHub reading, and then left out of the
+blurb's signals too."""
 from __future__ import annotations
 
 import re
@@ -83,10 +84,14 @@ def _set_signal(conn, pid: int, kind: str, value: dict, now: datetime) -> bool:
     return True
 
 
-def _alive(conn, pid: int, now: datetime) -> bool:
-    """A GitHub commit in the last 30 days (the Exa half went with the receipts search on 2026-10-24)."""
+def _alive(conn, pid: int, now: datetime) -> bool | None:
+    """A GitHub commit in the last 30 days; None (unknown) when Bait has no GitHub reading for the project. GitHub is the
+    only input since the Exa half went with the receipts search on 2026-10-24, so no reading is no evidence either way,
+    never "not alive" (as false it reached the blurb: "the alive signal reads false" of a project with no GitHub link)."""
     gh = conn.execute(sa.select(signals.c.value).where(signals.c.project_id == pid, signals.c.kind == "github")).scalar_one_or_none()
-    return is_alive(_dt((gh or {}).get("last_commit_at")), now)
+    if not gh:
+        return None
+    return is_alive(_dt(gh.get("last_commit_at")), now)
 
 
 def _dt(s):
@@ -114,6 +119,8 @@ def _needs_blurb(conn, p, daily=None) -> bool:
 def _blurb_ctx(conn, p, daily) -> dict:
     sig = {r.kind: r.value for r in conn.execute(sa.select(signals.c.kind, signals.c.value).where(signals.c.project_id == p.id))
            if r.kind not in FROZEN_KINDS}
+    if (sig.get("alive") or {}).get("alive") is None:
+        sig.pop("alive", None)              # unknown (no GitHub reading): left out, so it cannot be read as "not alive"
     rec = conn.execute(sa.select(receipts.c.title, receipts.c.source, receipts.c.published_at)
                        .where(receipts.c.project_id == p.id).order_by(receipts.c.published_at.desc()).limit(5)).all()
     return {

@@ -55,7 +55,7 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
 | 5 | enrich | projects with enriched_at null | what_line, category, enrichment (verified source); stored website/github/x_handle re-validated | ANTHROPIC_API_KEY; optional Blockscout |
 | 6 | score | pool_snapshots (window_end-13..window_end), pool_stats(day), pool_top_wallets(day), pool_daily_onchain / pool_wallet_day (ready chains) | project_daily(day) incl. window_end, vol_24h, swaps, wallets, is_wash / wash_reason | nothing |
-| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | signals (github, alive), why_blurb | optional GITHUB_TOKEN, ANTHROPIC_API_KEY |
+| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | signals (github, alive: null without a GitHub reading), why_blurb | optional GITHUB_TOKEN, ANTHROPIC_API_KEY |
 | 8 | radar | Uniswap/hooklist issues + PRs (30d), GitHub repo/code search (30d), Exa (60d) classified by Claude Haiku | radar_items (one row per URL, 90 days kept) | optional GITHUB_TOKEN (else anonymous unless KEYLESS=0), EXA_API_KEY + ANTHROPIC_API_KEY |
 | 9 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
 
@@ -72,8 +72,8 @@ Trades come from GeckoTerminal through the same `keyless.Http` the snapshot uses
 lowercased): USD volume, trades, buys, sells, last trade; the top 20 per pool are written for the day
 (the day's rows for a pool are replaced on re-run). Rows older than 14 days are deleted.
 
-Wallet labels (`wallet_labels`) are a frozen cache from the retired Nansen lane; nothing writes them, the site no longer
-shows them, and only the read API's `top_wallets[].labels` still reads them.
+Wallet labels (`wallet_labels`) are a frozen cache from the retired Nansen lane; since 2026-10-24 nothing writes or reads
+them (the site and the read API dropped them), and the table stays until a migration drops it.
 With `KEYLESS=0` and no keys the step only prunes.
 
 ### On-chain indexer + step `onchain` (step 3b)

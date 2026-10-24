@@ -53,6 +53,15 @@ test("retired Nansen figures are gone from the summary", () => {
   assert.equal("smart_wallets_24h" in m, false);
 });
 
+test("top_wallets[] lists only the documented fields: the frozen Nansen labels and smart_money are gone", () => {
+  const p = SAMPLE_PROJECTS[0];
+  const w = { address: "0x" + "ab".repeat(20), chainId: p.chains[0], volumeUsd: 1200, trades: 3, buys: 2, sells: 1, lastTradeAt: null };
+  const stale = { ...w, labels: ["Smart Trader"], smartMoney: true };   // the shape a wallet carried before 2026-10-24
+  const d = projectV1({ ...p, topWallets: [stale] }, SITE);
+  assert.deepEqual(Object.keys(d.top_wallets[0]).sort(), ["address", "buys", "chain_id", "last_trade_at", "sells", "trades", "volume_usd"]);
+  assert.equal(JSON.stringify(d).includes("smart_money"), false);
+});
+
 test("hook lookup: by address regardless of case, optionally one chain; unknown addresses are empty", () => {
   const p = SAMPLE_PROJECTS.find((x) => x.hooks.length > 0)!;
   const h = p.hooks[0];

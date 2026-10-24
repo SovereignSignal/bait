@@ -179,7 +179,7 @@ function poolV1(x: PoolView) {
 }
 
 function walletV1(w: WalletView) {
-  return { address: w.address, chain_id: w.chainId, volume_usd: w.volumeUsd, trades: w.trades, buys: w.buys, sells: w.sells, last_trade_at: w.lastTradeAt, labels: w.labels, smart_money: w.smartMoney };
+  return { address: w.address, chain_id: w.chainId, volume_usd: w.volumeUsd, trades: w.trades, buys: w.buys, sells: w.sells, last_trade_at: w.lastTradeAt };
 }
 
 function receiptV1(r: ReceiptView) {

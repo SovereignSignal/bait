@@ -138,8 +138,7 @@ pool_top_wallets = sa.Table(
 )
 
 # Wallet labels from the retired Nansen lane (credits exhausted 2026-10-08). Frozen: the pipeline no longer writes here,
-# and since 2026-10-24 the site shows none of it; only the read API's top_wallets[].labels / smart_money still read
-# existing rows. Delete the table when that stops.
+# and since 2026-10-24 nothing reads it (site and read API). The rows stay until a migration drops the table.
 wallet_labels = sa.Table(
     "wallet_labels", metadata,
     sa.Column("address", sa.Text, primary_key=True),

@@ -4,7 +4,7 @@
 // the same derivation (routable, flag labels) and the same tab rules (lib/feed.ts).
 //
 // Every read goes through safe(): a missing table or a bad query renders empty, never 500.
-// The activity tables (pool_stats, pool_top_wallets, wallet_labels) are newer than the rest
+// The activity tables (pool_stats, pool_top_wallets) are newer than the rest
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
 import { researchProject } from "@/lib/research";
 import { receiptRelevant } from "@/lib/relevance";
@@ -39,13 +39,8 @@ import type {
   ReceiptView,
   RowView,
   Usage,
-  WalletLabel,
   WalletView,
 } from "@/lib/types";
-
-// The retired Nansen client's smart-money markers. wallet_labels is frozen (early October 2026) and feeds only the read
-// API's top_wallets[].labels / smart_money; the site shows none of it.
-const SMART_MONEY_MARKERS = ["smart money", "fund", "smart trader", "smart lp", "smart dex"];
 
 const KNOWN_CHAINS = sql.raw(`array[${Object.keys(CHAINS).join(",")}]::int[]`);
 
@@ -387,16 +382,6 @@ function shiftDay(day: string, delta: number): string {
 const COLORS = ["#5b2fff", "#ff007a", "#1b8a5a", "#ff6a00", "#2563eb", "#0ea5e9", "#c2410c", "#7c3aed", "#0f766e", "#b45309"];
 function colorFor(id: number): string {
   return COLORS[id % COLORS.length];
-}
-
-function isSmartMoney(labels: unknown): boolean {
-  if (!Array.isArray(labels)) return false;
-  return labels.some((l) => typeof l === "string" && SMART_MONEY_MARKERS.some((m) => l.toLowerCase().includes(m)));
-}
-
-function toLabel(labels: unknown, smart: boolean | null): WalletLabel {
-  const list = Array.isArray(labels) ? labels.filter((l): l is string => typeof l === "string") : [];
-  return { labels: list, smartMoney: smart ?? isSmartMoney(list) };
 }
 
 /** float8 / int come back as numbers, bigint / numeric as strings; null stays null. */
@@ -800,7 +785,8 @@ async function loadSeries(db: Db, projectId: number, latest: string | null): Pro
 
 type TopWalletRow = { address: string; chain_id: number; volume: unknown; trades: unknown; buys: unknown; sells: unknown; last_trade_at: string | Date | null };
 
-/** Top wallets across the project's pools on the latest pool_top_wallets day, labels joined in a second (optional) read. */
+/** Top wallets across the project's pools on the latest pool_top_wallets day. The frozen Nansen wallet_labels are not
+ *  read (removed from the read API on 2026-10-24). */
 async function loadTopWallets(db: Db, projectId: number, n = 10): Promise<WalletView[]> {
   const rows = rowsOf<TopWalletRow>(
     await db.execute<TopWalletRow>(sql`
@@ -818,31 +804,15 @@ async function loadTopWallets(db: Db, projectId: number, n = 10): Promise<Wallet
       order by volume desc nulls last
       limit ${n}`),
   ).filter((r) => knownChain(Number(r.chain_id)));
-  if (!rows.length) return [];
-  const labels = await safe(
-    "topWallets:labels",
-    () =>
-      db
-        .select({ address: t.walletLabels.address, chainId: t.walletLabels.chainId, labels: t.walletLabels.labels, smartMoney: t.walletLabels.smartMoney })
-        .from(t.walletLabels)
-        .where(inArray(t.walletLabels.address, [...new Set(rows.map((r) => r.address))])),
-    [],
-  );
-  const labelBy = new Map(labels.map((l) => [`${l.chainId}:${l.address}`, toLabel(l.labels, l.smartMoney)]));
-  return rows.map((r) => {
-    const l = labelBy.get(`${r.chain_id}:${r.address}`);
-    return {
-      address: r.address,
-      chainId: Number(r.chain_id) as ChainId,
-      volumeUsd: num(r.volume) ?? 0,
-      trades: num(r.trades) ?? 0,
-      buys: num(r.buys),
-      sells: num(r.sells),
-      lastTradeAt: r.last_trade_at ? new Date(r.last_trade_at).toISOString() : null,
-      labels: l?.labels ?? [],
-      smartMoney: l?.smartMoney ?? false,
-    };
-  });
+  return rows.map((r) => ({
+    address: r.address,
+    chainId: Number(r.chain_id) as ChainId,
+    volumeUsd: num(r.volume) ?? 0,
+    trades: num(r.trades) ?? 0,
+    buys: num(r.buys),
+    sells: num(r.sells),
+    lastTradeAt: r.last_trade_at ? new Date(r.last_trade_at).toISOString() : null,
+  }));
 }
 
 /** postgres.js returns a RowList (array-like); drizzle types it loosely. */
