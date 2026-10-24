@@ -856,3 +856,31 @@ verified contract names (LaunchHook, SynthHookV2, ZeroTraceTaxHook, ...) matched
   independently confirmed." is written by the web (`researchProject`) over whatever line is stored, for an unidentified
   project (an `unlisted-hook` slug or a "… hook · 0x…" name). The pipeline never writes it, so the enrich retry (empty
   lines only, `ENRICH_RETRY_DAYS`) needs no change.
+
+## 2026-10-24: Wallets 7d coverage
+
+On the 10/23 feed, 15 of the 181 projects at $10K+ 7-day volume had `wallets_7d` and `top_wallet_share_7d` NULL,
+including the two busiest (StablePair, Angstrom). Swaps were indexed; the eligibility test in `score._wallets_7d` was
+wrong twice. It took a project's chains from every `hooks` row and required each to be ready.
+
+- **Registry hooks on chains Bait does not index.** The hooklist lists hooks on 21 chains; the indexer covers 16. StablePair
+  has an X Layer (196) entry and PonsV2 an Arc (5042) entry. Those chains have no `indexer_state`, so they were never
+  ready and the figure was void forever. Bait stores no pool, swap or volume there and the web already drops those hooks
+  (`knownChain`), so the figure now covers the same chains as the rest of the card. A hook there with a stored pool would
+  still void it.
+- **Base is never "ready" while the lookup queue owes swaps, but most hooks there owe none.** A pool id is queued only
+  when it is neither a `v4_pools` row nor a known key: an unhooked pool or a pool of a hook past the per-hook cap. Every
+  pool of a hook under the cap is a row from its Initialize on (the invariant that already lets a chain with no capped
+  hook skip the queue), and swaps are never counted past the Initialize cursor, so once the swap cursor is past the
+  window's end the indexer has that hook's whole week. A hook is now covered when its
+  chain's indexed history reaches the window and either the chain is ready, or its swap cursor is past the window and the
+  hook has no `hook_pool_counts` row. A capped hook on such a chain stays unknown.
+- **The 24h zero.** "Covered for the week, no wallet that day" was a measured 0 because `_wallets` reads
+  `pool_wallet_day` on ready chains. It does not on Base, so that fallback now needs every hook on a ready chain, or a
+  week with no wallet at all.
+- **Not done: a "≤" figure for the rest.** A count from partial coverage is a lower bound, not an upper bound. The owed
+  ids have no known hook, so nothing bounds the missing wallets from above. Projects with a capped Base hook stay "—"
+  until Base is ready: clanker-static-fee-hook and decaymulticurveinitializerhook (about a million pools each) for sure,
+  launchhook if one of its Base hooks is past the cap.
+- **Expected effect:** 12 of the 15 (13 if launchhook's Base hooks are all under the cap) get a figure on the next
+  nightly score; past days are not rewritten.

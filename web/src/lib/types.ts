@@ -117,7 +117,7 @@ export interface Usage {
   /** distinct across the project's pools when walletsExact, else an upper bound (pools added, buyers + sellers) */
   wallets24h: number | null;
   walletsExact: boolean | null;
-  /** distinct wallets across the project's pools over the 7 closed days, from the indexer; null unless every chain is caught up */
+  /** distinct wallets across the project's pools over the 7 closed days, from the indexer; null unless it has every swap of them */
   wallets7d: number | null;
   /** the busiest wallet's share of the window's swaps (0..1); of swaps, not volume; null when wallets7d is null or zero */
   topWalletShare7d: number | null;

@@ -47,7 +47,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
       v: walletsText(u.wallets24h, u.walletsExact),
       title: u.walletsExact === false ? "Upper bound: buyers + sellers per pool, so a wallet that bought and sold counts twice." : win.note,
     },
-    { k: "Wallets 7d", v: int(u.wallets7d), title: "Distinct wallets across the project's pools over the seven closed days, from the indexer. Unknown unless every chain the project is on has caught up through the week." },
+    { k: "Wallets 7d", v: int(u.wallets7d), title: "Distinct wallets across the project's pools over the seven closed days, from the indexer. Unknown unless the indexer has every swap of the project's pools for the week: on a chain still catching up, a hook past the indexer's per-hook pool cap leaves it unknown." },
     { k: "Top wallet", v: topWalletText(u.topWalletShare7d), title: "Share of the week's swaps made by the single busiest wallet. Of swaps, not volume. Shown at any size; the wash rules only act past $250K a day." },
     { k: "Deployer's swaps", v: deployerShareText(u.deployerSwapShare7d), title: "Share of the week's swaps made by the wallets that deployed this project's hooks: registry-supplied, or the sender of the hook's creation transaction from Sourcify or the explorer. A shared CREATE2 deployment proxy is never counted as a deployer. Unknown when no deployer is known or coverage is incomplete. A team's own trades are not outside demand." },
     // the closed UTC day, from score; when a day is missing, the rolling buys + sells the trade card shows, marked "≈"
