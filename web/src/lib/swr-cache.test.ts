@@ -46,6 +46,31 @@ test("hard cap evicts the oldest entry; invalidate clears by prefix", async () =
   assert.equal(c.size(), 0);
 });
 
+test("expire serves the old value while one refresh runs, and discards a refresh that began before it", async () => {
+  let t = 0;
+  const c = createSwrCache<string>({ ttlMs: 1000, max: 10, now: () => t });
+  assert.equal(await c.get("k", async () => "day1"), "day1");
+  assert.equal(await c.get("other", async () => "o1"), "o1");
+  t = 1500;                                          // past the ttl: a refresh starts and is still loading day 1
+  let finishOld!: (v: string) => void;
+  assert.equal(await c.get("k", () => new Promise<string>((r) => { finishOld = r; })), "day1");
+  c.expire("k");                                     // a new day was scored
+  let calls = 0;
+  const load = async () => (++calls, "day2");
+  const a = c.get("k", load);
+  const b = c.get("k", load);
+  assert.equal(await a, "day1");                     // no wait: the old value answers while the reload runs
+  assert.equal(await b, "day1");
+  await tick();
+  assert.equal(calls, 1);                            // one reload for both callers
+  finishOld("day1");                                 // the refresh from before the change lands late
+  await tick();
+  assert.equal(await c.get("k", load), "day2");      // and is discarded: the post-change load stays current
+  assert.equal(calls, 1);
+  assert.equal(await c.get("other", async () => "o2"), "o1");  // other keys untouched
+  assert.equal(c.size(), 2);
+});
+
 test("a per-call ttl shortens one entry's lifetime, by number or by value", async () => {
   let t = 0;
   const c = createSwrCache<number>({ ttlMs: 1000, max: 10, now: () => t });

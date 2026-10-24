@@ -49,8 +49,8 @@ one-off repairs do (`railway/README.md`, "One-off repairs"):
 3. Apply: the same command with `--apply`. It takes the pipeline run lock and commits only new ledger rows. Preview
    again: `would_insert=0, unchanged=20`. Keep the JSON result and the manifest digest with the change record.
 4. Wait for the nightly. After 06:00 UTC, check `/p/bunnihook` (listed, "unknown" status, not in New or Trending) and
-   `/api/health`. The web's in-process cache drops within a minute of the new day; a redeploy of the web service clears
-   it immediately if needed.
+   `/api/health`. The web's in-process cache reloads within a minute of the new day (the previous day is served for the few
+   seconds the reload takes); a redeploy of the web service clears it immediately if needed.
 5. Only if the nightly cannot be waited for: a targeted rescore of the existing `project_daily(project_id=1505,
    day=<latest day>)` row, under the run lock, after exporting that row:
 

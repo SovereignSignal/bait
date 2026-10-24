@@ -56,6 +56,14 @@ export function createSwrCache<T>(opts: { ttlMs: number; max: number; maxStaleMs
       if (!prefix) return map.clear();
       for (const k of [...map.keys()]) if (k.startsWith(prefix)) map.delete(k);
     },
+    /**
+     * Marks entries stale without dropping them: the next get starts one refresh and is answered with the old value
+     * meanwhile (unlike invalidate, where it waits for a full load). A refresh already running is discarded, so a load
+     * that began before the change cannot land as fresh.
+     */
+    expire(prefix?: string) {
+      for (const [k, e] of map) if (!prefix || k.startsWith(prefix)) map.set(k, { at: e.at, value: e.value, refreshing: null, ttl: 0 });
+    },
     size: () => map.size,
   };
 }

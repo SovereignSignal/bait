@@ -100,7 +100,8 @@ factory pattern and name words (`projects.category_source` = `rules`).
 
 Server-rendered from Postgres only. `/` ships the first 100 rows and the client fetches the full packed set from
 `/api/rows` for search, watchlist and filtering. Project and week pages are ISR (1 hour); the other pages sit behind a
-1-hour stale-while-revalidate in-process cache that drops within a minute of the pipeline scoring a new day.
+1-hour stale-while-revalidate in-process cache, one per server process and shared with the route handlers, that starts
+loading when the server boots and reloads in the background within a minute of the pipeline scoring a new day.
 `/api/ready` is the healthcheck (503 until the schema the build reads exists); `/api/health` is data freshness. The
 routing-eligibility and receipt-relevance rules are implemented twice (Python and TypeScript) and both assert the
 shared fixtures in `fixtures/` (no step writes receipts any more; the web still filters the stored ones).
