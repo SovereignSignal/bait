@@ -957,3 +957,35 @@ Audit items open for the MVP, checked against the live API on 2026-10-24 (data d
   not known; their intro says how many are listed ("4 new projects listed") instead of a count it cannot back.
 - **Still open.** A project page's daily volume bars (and the API's `daily_volume_usd`) still draw $0 for a day with no
   rows on a chain that is not ready: Base projects whose week reads a dash can show a row of $0 days.
+
+## Prose accuracy (2026-10-24)
+
+A fact-check of the 30 busiest projects with a written line (by 7-day volume, data day 2026-10-23) held every claim in
+`what_line` and `why_blurb` to the verified source (Sourcify), the hooklist registry, the project's own repo and the
+figures beside the text: 63 of about 235 claims were wrong, on 19 of the 30 projects. By pattern: stale figures from the
+Oct 8 blurbs (24), trend words opposite to the weekly volumes (9), size words or TVL that do not fit the metric (10),
+mechanics the evidence does not show (7: a fixed 1% fee where the source allows 1 to 3%, and a line copied from a
+different project's GitHub repo), a hooklisted or verified hook called "unlisted", "purpose unknown" or "unverified"
+(6), internal words such as "in the input" or "the alive signal is false" (4), press cited with no receipts (2), and an
+audit named with no audit link (1). No line or blurb in the top 200 named a chain the project is not on.
+
+- **Rule now: prose is checked before it is stored.** `prose_checks.py` runs inside `Claude.what_line` and
+  `Claude.why_blurb`, so enrich, signals and repair all get it. A clause (line) or sentence (blurb) is dropped when it
+  names a chain not in `chains`; names an audit without an audit link (read as the web's audit badge reads it, so "no
+  audit is listed" passes); cites press with no receipts; calls a hook unlisted while it has a hooklist description,
+  its purpose unknown while a description or source snippet documents it, or unverified when nothing passed in says
+  so; quotes a dollar amount, count or percentage that matches no metric within rounding; uses a size word ("a few
+  hundred wallets", "three pools") that does not fit the metric; says growing or fading against `vol_7d` and
+  `vol_7d_prev` ("sharply", "clearly" and "well above" need more than 10%), "nothing last week" when there was volume,
+  or calls a known TVL none or an unknown one zero; or leaks internal words. "In the input" is cut in place. What is
+  left is stored; an empty line is retried after `ENRICH_RETRY_DAYS`, and an empty blurb is not shown.
+- **Prompts state the same rules**, plus the two no pattern can see: describe what the hooks share rather than one
+  hook's parameter, and follow the source and registry over researched facts that may belong to a similarly named
+  project.
+- **A check needs its fact.** The blurb context carries no `chains`, `verified_source` or hook audit links today, so
+  those checks do not run on blurbs (and a blurb's audit mention needs the researched audit link). Adding them to
+  `signals._blurb_ctx`, and `verified_source` / `hooklisted` to `enrich.what_context`, turns them on; both files are in
+  flight in another change, so this one leaves them alone.
+- **Not done here.** Stored text is not rewritten: the PR lists the live slugs to re-enrich. A blurb is still rewritten
+  only when signals change, so it can go stale against moving metrics; `blurb_problems(text, ctx)` is the test a
+  rewrite trigger in `_needs_blurb` could use.
