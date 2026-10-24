@@ -20,6 +20,14 @@ export function LiveTrades({ chainId, chainSlug, poolId, pair, indexer }: { chai
   const box = useRef<HTMLDivElement>(null);
   const onScreen = useRef(true);
   const lastLoad = useRef(0);
+  // Another pool starts from "Loading trades…" rather than the last pool's trades. Reset during render, not in the
+  // effect, so the old pool's trades never paint under the new pair.
+  const pool = `${chainSlug}/${poolId}`;
+  const [seenPool, setSeenPool] = useState(pool);
+  if (pool !== seenPool) {
+    setSeenPool(pool);
+    setFeed(null);
+  }
 
   const load = useCallback(async () => {
     lastLoad.current = Date.now();
@@ -41,7 +49,7 @@ export function LiveTrades({ chainId, chainSlug, poolId, pair, indexer }: { chai
   }, [chainSlug, poolId]);
 
   useEffect(() => {
-    setFeed(null);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load() is async: it sets state once the fetch settles
     load();
     const visible = () => document.visibilityState === "visible" && onScreen.current;
     const tick = setInterval(() => {

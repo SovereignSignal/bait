@@ -28,7 +28,9 @@ export default async function BuildingPage({ searchParams }: { searchParams: Pro
   const kind = isRadarKind(raw) ? raw : undefined;
   const [items, launches] = await Promise.all([getRadar(), getLaunches(20)]);
   const sample = usingFixtures();
-  const now = sample ? SAMPLE_NOW : Date.now();
+  // eslint-disable-next-line react-hooks/purity -- a Server Component renders per request or revalidation, never in the browser
+  const clock = Date.now();
+  const now = sample ? SAMPLE_NOW : clock;
   const counts = new Map(RADAR_KINDS.map(([k]) => [k, items.filter((x) => x.kind === k).length]));
 
   return (
@@ -36,7 +38,7 @@ export default async function BuildingPage({ searchParams }: { searchParams: Pro
       <main className={r.app} id="main" tabIndex={-1}>
         <RadarList items={items} kind={kind} now={now} />
         <section className={r.side} id="launches" aria-label="Just launched">
-          <JustLaunched initial={launches} now={Date.now()} />
+          <JustLaunched initial={launches} now={clock} />
           <div className={`panel ${r.about}`}>
             <h2>What is on the radar</h2>
             <p>

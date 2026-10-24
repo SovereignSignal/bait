@@ -33,17 +33,19 @@ export default async function TerminalPage({ searchParams }: { searchParams: Pro
   const first = seed.rows[0];
   const project = first ? await getProject(first.slug) : null;
   const sample = usingFixtures();
+  // eslint-disable-next-line react-hooks/purity -- a Server Component renders per request or revalidation, never in the browser
+  const clock = Date.now();
   return (
     <Terminal
       seed={seed}
       moverRows={movers(rows, 60)}
       project={project}
       view="list"
-      now={sample ? SAMPLE_NOW : Date.now()}
+      now={sample ? SAMPLE_NOW : clock}
       sample={sample}
       emptyText={rows.length ? "Pick a project from the list to see its pools, wallets and live trades." : "Nothing indexed yet. The first pipeline run fills this in."}
       launches={launches}
-      launchesNow={Date.now()}
+      launchesNow={clock}
       fresh={fresh}
     />
   );

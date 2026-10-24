@@ -37,6 +37,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ slug: 
     notFound();
   }
   const sample = usingFixtures();
+  // eslint-disable-next-line react-hooks/purity -- a Server Component renders per request or revalidation, never in the browser
+  const now = sample ? SAMPLE_NOW : Date.now();
   // Static: no URL query here, so the list seeds the default tab and the client re-filters from the URL.
-  return <Terminal seed={feedSeed(rows, { tab: "trending" }, version)} moverRows={movers(rows, 60)} project={p} view="detail" now={sample ? SAMPLE_NOW : Date.now()} sample={sample} fresh={fresh} />;
+  return <Terminal seed={feedSeed(rows, { tab: "trending" }, version)} moverRows={movers(rows, 60)} project={p} view="detail" now={now} sample={sample} fresh={fresh} />;
 }
