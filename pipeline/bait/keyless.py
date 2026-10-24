@@ -7,6 +7,9 @@ hooklist registry and grouped with the same rules as the nightly pipeline.
 
 Covers Robinhood chain and Ink, which have no public v4 subgraph.
 
+With COINGECKO_API_KEY (a CoinGecko paid plan) the same GeckoTerminal paths are called on CoinGecko's pro /onchain
+endpoints at the plan's pace instead (see http_from_env); unset, nothing changes.
+
 Usage:
     python -m bait.keyless --out snapshot.json [--pages 10] [--ohlcv-cap 160]
 """
@@ -29,6 +32,12 @@ from .rules import (code_hash as canonical_code_hash, code_shape, flags_from_add
                     score_trending, slugify, wallets_lower_bound)
 
 GT = "https://api.geckoterminal.com/api/v2"
+# The same GeckoTerminal data on a CoinGecko paid plan: every path under GT exists under GT_PRO, and the key travels in a
+# header, never in the URL (docs.coingecko.com/reference/authentication). Analyst plan: 500 calls/min and 500K call
+# credits a month (coingecko.com/en/api/pricing, checked 2026-10-24); COINGECKO_CALLS_PER_MIN overrides for another plan.
+GT_PRO = "https://pro-api.coingecko.com/api/v3/onchain"
+PRO_KEY_HEADER = "x-cg-pro-api-key"
+PRO_CALLS_PER_MIN = 500
 HOOKLIST = "https://raw.githubusercontent.com/Uniswap/hooklist/main/hooklist.json"
 POOL_KEYS = "0x86b6be7d"  # poolKeys(bytes25)
 ZERO = "0x" + "0" * 40
@@ -92,9 +101,50 @@ def warn(msg: str) -> None:
     _log.warning("[keyless] %s", msg)
 
 
+def coingecko_key() -> str | None:
+    """COINGECKO_API_KEY, or None when unset or blank: every GeckoTerminal call is then keyless, exactly as before."""
+    return os.environ.get("COINGECKO_API_KEY", "").strip() or None
+
+
+def keyless_spacing() -> float:
+    """Seconds between keyless GeckoTerminal calls: KEYLESS_SPACING, default 10."""
+    return float(os.environ.get("KEYLESS_SPACING", "10"))
+
+
+def keyed_spacing() -> float:
+    """Seconds between GeckoTerminal calls with a key: 60 / COINGECKO_CALLS_PER_MIN, default the Analyst plan's 500."""
+    raw = os.environ.get("COINGECKO_CALLS_PER_MIN", "").strip()
+    rate = float(PRO_CALLS_PER_MIN)
+    if raw:
+        try:
+            rate = float(raw)
+        except ValueError:
+            rate = math.nan
+        if not math.isfinite(rate) or rate <= 0:
+            warn(f"COINGECKO_CALLS_PER_MIN={raw!r} is not a positive number; using {PRO_CALLS_PER_MIN}")
+            rate = float(PRO_CALLS_PER_MIN)
+    return 60.0 / rate
+
+
+def gt_spacing(key: str | None) -> float:
+    """The pace of a client holding this key (None: keyless)."""
+    return keyless_spacing() if key is None else keyed_spacing()
+
+
+def gt_cost(calls: int) -> str:
+    """What `calls` GeckoTerminal calls cost, for plan lines: keyless calls are free, keyed ones spend plan call credits."""
+    return "free" if coingecko_key() is None else f"{calls} CoinGecko call credits"
+
+
 class Http:
-    def __init__(self, gt_spacing: float = 6.5, cache_dir: str | None = None):
+    def __init__(self, gt_spacing: float = 6.5, cache_dir: str | None = None, api_key: str | None = None,
+                 fallback_spacing: float = 10.0):
+        """api_key: a CoinGecko paid-plan key. GeckoTerminal calls then go to GT_PRO with the key header, `gt_spacing`
+        apart, until the key is refused (401/403) or a call is still rate limited on its third try, over a minute after
+        the first; the rest of the run is keyless, `fallback_spacing` apart. None: keyless, as before."""
         self.gt_spacing = gt_spacing
+        self.api_key = api_key or None
+        self.fallback_spacing = fallback_spacing
         self._last_gt = 0.0
         self.gt_calls = 0
         self.cache_dir = cache_dir
@@ -106,9 +156,9 @@ class Http:
             return None
         return os.path.join(self.cache_dir, hashlib.sha1(path.encode()).hexdigest() + ".json")
 
-    def _open(self, url: str, data: bytes | None = None) -> object:
+    def _open(self, url: str, data: bytes | None = None, headers: dict[str, str] | None = None) -> object:
         req = urllib.request.Request(url, data=data, headers={
-            "Accept": "application/json", "User-Agent": "bait/0.1", "Content-Type": "application/json"})
+            "Accept": "application/json", "User-Agent": "bait/0.1", "Content-Type": "application/json", **(headers or {})})
         with urllib.request.urlopen(req, timeout=40) as r:
             return json.load(r)
 
@@ -131,8 +181,13 @@ class Http:
             self._last_gt = time.time()
             self.gt_calls += 1
             try:
-                return self._open(GT + path)
+                if self.api_key is None:
+                    return self._open(GT + path)
+                return self._open(GT_PRO + path, headers={PRO_KEY_HEADER: self.api_key})
             except urllib.error.HTTPError as e:
+                if self.api_key is not None and (e.code in (401, 403) or (e.code == 429 and attempt >= 2)):
+                    self._go_keyless(e.code)
+                    return self._gt_live(path)
                 if e.code == 429:
                     warn(f"GT 429 {path}: retry {attempt + 1}/6 in {20 * (attempt + 1)}s")
                     time.sleep(20 * (attempt + 1))
@@ -146,6 +201,14 @@ class Http:
                 time.sleep(5)
         warn(f"GT gave up after 6 attempts {path}")
         return None
+
+    def _go_keyless(self, code: int) -> None:
+        """A key that cannot serve the run must not empty it: the rest of the run is keyless, at the keyless pace."""
+        why = (f"refused the key (HTTP {code})" if code in (401, 403)
+               else "still answered 429 on a third try over a minute apart (plan limit or monthly credits spent)")
+        warn(f"CoinGecko API {why}; GeckoTerminal calls go keyless for the rest of this run, {self.fallback_spacing:g} s apart")
+        self.api_key = None
+        self.gt_spacing = self.fallback_spacing
 
     def rpc_batch(self, url: str, calls: list[dict]) -> list[dict]:
         out: list[dict] = []
@@ -165,6 +228,20 @@ class Http:
                     warn(f"RPC {url} error {e!r}")
                     time.sleep(2)
         return out
+
+
+def http_from_env(cache_dir: str | None = None, keyless: float | None = None) -> Http:
+    """The run's GeckoTerminal client. Keyless (`keyless` seconds apart, default KEYLESS_SPACING) unless COINGECKO_API_KEY
+    is set: then CoinGecko's pro /onchain endpoints, 60 / COINGECKO_CALLS_PER_MIN seconds apart, back to keyless if the
+    key cannot serve the run. Same paths and parameters either way, so a keyed run asks the same questions, faster."""
+    key = coingecko_key()
+    slow = keyless_spacing() if keyless is None else keyless
+    if key is None:
+        return Http(gt_spacing=slow, cache_dir=cache_dir)
+    http = Http(gt_spacing=keyed_spacing(), cache_dir=cache_dir, api_key=key, fallback_spacing=slow)
+    log(f"GeckoTerminal through the CoinGecko API (COINGECKO_API_KEY set): {60 / http.gt_spacing:g} calls/min, "
+        f"{http.gt_spacing:g} s apart")
+    return http
 
 
 def decode_pool_key(result: str | None) -> dict | None:
@@ -622,11 +699,12 @@ def main(argv=None) -> int:
     ap.add_argument("--new-pages", type=int, default=2)
     ap.add_argument("--hooklist-file")
     ap.add_argument("--cache-dir", help="cache GeckoTerminal responses here; reruns are instant")
-    ap.add_argument("--spacing", type=float, default=6.5, help="seconds between GeckoTerminal calls")
+    ap.add_argument("--spacing", type=float, default=6.5,
+                    help="seconds between keyless GeckoTerminal calls (with COINGECKO_API_KEY: the plan's pace)")
     args = ap.parse_args(argv)
     configure()
     now = datetime.now(timezone.utc)
-    http = Http(gt_spacing=args.spacing, cache_dir=args.cache_dir)
+    http = http_from_env(cache_dir=args.cache_dir, keyless=args.spacing)
     if args.hooklist_file:
         hooklist = json.load(open(args.hooklist_file))
     else:

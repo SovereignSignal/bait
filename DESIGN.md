@@ -884,3 +884,35 @@ wrong twice. It took a project's chains from every `hooks` row and required each
   launchhook if one of its Base hooks is past the cap.
 - **Expected effect:** 12 of the 15 (13 if launchhook's Base hooks are all under the cap) get a figure on the next
   nightly score; past days are not rewritten.
+
+## CoinGecko API key for GeckoTerminal (2026-10-24)
+
+The owner has a CoinGecko Analyst plan. GeckoTerminal's public API documents "approximately 10 calls/minute"
+(api.geckoterminal.com/docs, Rate Limit), which is why the nightly spaces its calls 10 s apart and caps pages, OHLCV
+series and trade fetches.
+
+- **Rule now.** With `COINGECKO_API_KEY` set, every pipeline GeckoTerminal call (snapshot pools and candles, activity
+  trades, the onchain step's candle refresh, repair backfill and verify) goes to the same path and parameters under
+  `https://pro-api.coingecko.com/api/v3/onchain`, key in the `x-cg-pro-api-key` header and never in a URL or a log line
+  (docs.coingecko.com/reference/authentication). Unset or blank: unchanged, byte for byte (same URL, headers, pace,
+  retries and log lines).
+- **Pace.** Analyst is 500 calls/min and 500K call credits a month, one credit per call (coingecko.com/en/api/pricing,
+  checked 2026-10-24). Keyed calls start `60 / COINGECKO_CALLS_PER_MIN` seconds apart (default 500: 0.12 s), so no
+  minute holds more than the plan allows; `KEYLESS_SPACING` paces keyless calls only. Under today's caps a night makes
+  at most ~240 GeckoTerminal calls (up to 12 per chain for pools, 70 candles, 40 trade lists, 10 candle refreshes):
+  about 7.2K credits a month, under 2% of the plan, and well under a minute of pacing instead of ~40.
+- **Same questions, faster.** The coverage caps (`KEYLESS_PAGES` 4, `KEYLESS_NEW_PAGES` 2, `KEYLESS_OHLCV_CAP` 70,
+  `ACTIVITY_POOLS` 30, `ONCHAIN_CANDLE_REFRESH_CAP` 10) keep their defaults, so a keyed night writes what a keyless
+  night would. Raising them (more pools with closed-day candles instead of rolling estimates) is a separate change; the
+  credits allow it.
+- **A key that cannot serve the run never empties it.** 401/403 (bad key, endpoint not in the plan), or a call still
+  answering 429 on its third try, over a minute after the first (the per-minute window has passed by then, so likely the
+  monthly credits), turns the rest of the run keyless at `KEYLESS_SPACING` with a warning. The worst case is today's run.
+- **The web stays keyless.** `/api/trades/[chain]/[pool]` keeps calling api.geckoterminal.com: the limit and the credits
+  are per account, and the live proxy's 20 calls/min bucket could spend 864K calls in a month at worst, over the plan's
+  500K, and compete with the nightly for the same minute.
+- **Not changed: pricing.** Swaps stay valued at DefiLlama's current price when indexed (`indexer/prices.py`).
+  Follow-up: the plan serves history (pool OHLCV takes `before_timestamp`,
+  docs.coingecko.com/reference/pool-ohlcv-contract-address; `/onchain/simple/networks/{network}/token_price/{addresses}`
+  prices up to 100 tokens a call), so a swap could be priced at its own time rather than at index time. That moves
+  figures on cards, so it gets its own note (which side, confidence, what stays a dash) before any code.
