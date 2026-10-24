@@ -44,9 +44,12 @@ Exa, Claude ─────────────────┘        │
 - `db/migrations/`: the schema. The pipeline also creates and extends tables on start, but a release that adds columns
   the web reads is applied as a migration first (`db/README.md`).
 
-## Run it in three commands
+## Run it locally
 
-No keys, no database, no network calls:
+You need Python 3.12, Node 20 or later and git. Installing packages needs the network; nothing below needs a key or
+makes a paid call. Run the commands from the repository root.
+
+**On sample data, in three commands** (no database):
 
 ```sh
 cd pipeline && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m pytest -q
@@ -54,14 +57,36 @@ cd ../web && npm ci && npm test
 BAIT_FIXTURES=1 npm run dev        # http://localhost:3000 on sample data
 ```
 
-For a real run against a Postgres of your own:
+The footer then says "Sample figures (BAIT_FIXTURES)": 16 projects from the 8 October 2026 snapshot, not live figures.
+`/api/health` and `/api/ready` answer 503 `no DATABASE_URL` in this mode; that is expected. With neither
+`BAIT_FIXTURES=1` nor `DATABASE_URL` set, every page renders empty.
+
+**On your own data**, which needs a Postgres (15 or later; CI runs 17) and `psql`. The site reads Postgres only: the
+pipeline's SQLite mode ([`pipeline/README.md`](pipeline/README.md)) is for working on the pipeline, and the site
+cannot show it. With Docker, `docker run -d -e POSTGRES_PASSWORD=bait -e POSTGRES_DB=bait -p 5432:5432 postgres:17`
+gives `DATABASE_URL=postgres://postgres:bait@localhost:5432/bait`.
 
 ```sh
-cp .env.example .env               # every variable has a comment; leave keys empty to skip that source
+cp .env.example .env               # set DATABASE_URL=postgres://user:password@localhost:5432/bait; leave the keys empty
 scripts/apply-migrations.sh        # idempotent, records each file in schema_migrations
-scripts/run-pipeline-local.sh --steps ingest,snapshot --day 2026-10-06    # fixture registry, keyless sources
-cd web && npm run dev              # DATABASE_URL from .env
+scripts/run-pipeline-local.sh      # every step for today (UTC) on the fixture registry, free sources only
+cd web && ln -s ../.env .env && npm run dev    # Next.js reads web/.env, not the one in the repository root
 ```
+
+- Without keys the snapshot pages GeckoTerminal's free tier, about 5 calls a minute, so a full run takes about an
+  hour and `GT 429 ... retry` lines in the log are normal. `--chains arbitrum` limits it to one chain (most fixture
+  hooks are on Arbitrum) and takes 10 to 15 minutes.
+- The feed then lists the projects whose hooks sit in GeckoTerminal's busiest v4 pools: fixture hooks, plus
+  `unlisted-hook-...` projects for hooks the registry sample does not list. Without `ANTHROPIC_API_KEY` the
+  "what it does" line is the registry's description or a placeholder.
+- `KEYLESS=0 scripts/run-pipeline-local.sh` skips GeckoTerminal and the public RPCs and finishes in under a minute,
+  but with no pool data every project is held back as spam and the feed is empty: it only proves the wiring.
+- `/api/health` keeps answering 503 until the always-on indexer has reported; the pages do not need it. Start it with
+  `cd pipeline && .venv/bin/python -m bait.indexer` (see `pipeline/README.md`); without `HYPERSYNC_API_TOKEN` it only
+  follows new pools over public RPCs. Run directly like this, the pipeline loads the first `.env` it finds from
+  `pipeline/` upward, so a `pipeline/.env` hides the root one; `scripts/run-pipeline-local.sh` loads the root one.
+- Set `NEXT_PUBLIC_SITE_URL` to the origin you serve (`http://localhost:3000` locally): RSS links and page metadata
+  use it, and without it the read API's `url` fields point at the reference deployment.
 
 Per-service details: [`pipeline/README.md`](pipeline/README.md), [`web/README.md`](web/README.md),
 [`db/README.md`](db/README.md). Contributing and the test rules: [`CONTRIBUTING.md`](CONTRIBUTING.md).

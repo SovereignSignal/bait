@@ -3,8 +3,14 @@
 SQL migrations for bait Postgres. Plain files, applied in order.
 
 ```sh
-psql "$DATABASE_URL" -f db/migrations/0001_init.sql
+scripts/apply-migrations.sh    # from the repository root: every file in order, each recorded in schema_migrations
 ```
+
+It needs `psql` and `DATABASE_URL` (exported, or read from the root `.env`) in the form
+`postgres://user:password@host:5432/db`. The `postgresql+psycopg://` form that `pipeline/scripts/pg-test-cluster.sh`
+prints is for SQLAlchemy; `psql` cannot connect with it. One file by hand is
+`psql "$DATABASE_URL" -f db/migrations/0001_init.sql`. On a fresh database,
+`NOTICE: relation "project_daily_p9_backup" does not exist, skipping` is expected.
 
 Each migration is idempotent (`IF NOT EXISTS`) so re-applying is safe. New changes go in a new
 `000N_*.sql`; never edit an applied file.

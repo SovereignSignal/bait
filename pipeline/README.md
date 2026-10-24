@@ -10,17 +10,24 @@ signals, scan the dev radar (registry submissions, repos, audits, launches), wri
 ```sh
 cd pipeline
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env            # fill in keys; never commit .env
+cp .env.example .env            # optional; every key may stay empty (that source is skipped). Never commit .env
 
-# Postgres: apply ../db/migrations/0001_init.sql first (see ../db/README.md)
-.venv/bin/python -m bait run --day 2026-10-06
-
-# SQLite dev run with the fixture, no keys (tables are created automatically on sqlite):
-.venv/bin/python -m bait run --day 2026-10-06 --hooklist-file fixtures/hooklist.sample.json \
+# SQLite dev run on the fixture registry, no keys; creates ./bait.sqlite and its tables. The free keyless sources
+# (GeckoTerminal at about 5 calls a minute, public RPCs) make it take about an hour; prefix KEYLESS=0 to skip them.
+.venv/bin/python -m bait run --hooklist-file fixtures/hooklist.sample.json \
     --database-url sqlite:///./bait.sqlite --force-digest
+
+# Postgres, which is what the web reads: apply every migration first (../scripts/apply-migrations.sh, ../db/README.md),
+# then with DATABASE_URL set here or in .env (live hooklist from GitHub, today UTC):
+.venv/bin/python -m bait run
 
 .venv/bin/python -m pytest -q -p no:cacheprovider   # SQLite in memory, HTTP mocked, KEYLESS=0; Postgres-only tests need TEST_DATABASE_URL (scripts/pg-test-cluster.sh)
 ```
+
+The web cannot read SQLite: to see a run in the site, run it against Postgres (`../README.md`, "On your own data").
+A keyless run with no `--chains` covers the ten chains in `bait/config.py`; `--chains arbitrum` is the quick one for
+the fixture, whose hooks are mostly on Arbitrum. With `KEYLESS=0` there is no pool data, so every project is held back
+as spam: that run proves the wiring, not the figures.
 
 Direct dependencies in `requirements.txt` are pinned; to refresh, bump in a venv, run the suite, and copy the versions from `pip freeze`.
 
