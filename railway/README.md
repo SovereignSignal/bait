@@ -31,13 +31,15 @@ Gotchas found on the first deploy:
 - There is no Dockerfile builder enum; Railway uses the Dockerfile in the root directory automatically.
 
 No API keys are required. Chains without `GRAPH_API_KEY` use the keyless source (GeckoTerminal + public RPC), about
-35 minutes per run because of the GeckoTerminal free-tier limit. Tables are created on first run. With
+an hour for all ten chains because of the GeckoTerminal free-tier limit. Tables are created on first run. With
 `COINGECKO_API_KEY` the GeckoTerminal calls run at the CoinGecko plan's pace and that part of the run takes minutes; the
 public-RPC lookups are unchanged.
 
 Optional keys, each one switches on a layer: `GRAPH_API_KEY` (subgraph usage, faster nightly run), `ANTHROPIC_API_KEY`
 (what-it-does and why-it-matters blurbs), `EXA_API_KEY` (the radar's web results on the Building tab), `GITHUB_TOKEN`
-(GitHub activity, radar repo search), `COINGECKO_API_KEY` (a CoinGecko paid plan: GeckoTerminal calls go to its pro
+(GitHub activity, radar repo search), `BLOCKSCOUT_API_KEY` (some Blockscout instances bot-challenge anonymous requests:
+code hashes, contract names and deployers in group, verified source in enrich), `COINGECKO_API_KEY`
+(a CoinGecko paid plan: GeckoTerminal calls go to its pro
 `/onchain` endpoints, 500 calls/min on Analyst, `COINGECKO_CALLS_PER_MIN` for another plan; a refused key falls back to
 keyless for the run; set it on `pipeline` only, the web's live trades stay keyless). `PARALLEL_API_KEY` is no longer
 read (Parallel was removed on 2026-10-24); delete it from the service. Tuning: `KEYLESS_PAGES` (4),

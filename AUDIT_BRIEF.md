@@ -23,7 +23,7 @@ with the classic Uniswap swap widget.
   Exa + Claude), digest (Mondays).
 - `pipeline/bait/indexer/`: always-on HyperSync indexer, 16 chains, every hooked v4 pool plus a 14-day swap window.
 - `pipeline/bait/costs.py`: spend ledger and budgets ($3/day, $40/30 days) checked before every paid call.
-- `web/` (Next.js 16, Drizzle, Postgres): server-rendered, ISR 1h, in-process caches.
+- `web/` (Next.js 16, Drizzle, Postgres): server-rendered, ISR 10 min on project and week pages, in-process caches.
 - `db/migrations/`: schema. The pipeline also creates and extends tables itself.
 
 ## Run it locally

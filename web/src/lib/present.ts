@@ -116,13 +116,6 @@ export function auditDocument(url: string): boolean {
   return AUDIT_PATH.test(path.join("/"));
 }
 
-/**
- * A project's audit links, the only source of the "Audit linked" badge: web URLs published on its hooks (hooklist), plus
- * the one Parallel found (stored before Parallel was removed on 2026-10-24; none are added now), but only when Parallel
- * identified a team and the project has a name to research. An unnamed hook is just an address, so an audit "found" for
- * it belongs to someone else. A link to code (auditDocument) is not an audit, and a link the pipeline found gone (404
- * or 410: signals "audit_links", pipeline/bait/audit_links.py) is not shown. Count = links.length; badge = links[0].
- */
 /** The generated text names an audit the registry and team details do not link: the badge must say so, not "No audit". */
 const AUDIT_WORD = /\baudit(?:ed|s|or|ors|ing)?\b/gi;
 const NEGATION = /\b(no|not|never|without|lacks?|lacking|missing|none|nor)\b/i;
@@ -139,6 +132,13 @@ export function auditMention(...texts: Array<string | null | undefined>): boolea
   return false;
 }
 
+/**
+ * A project's audit links, the only source of the "Audit linked" badge: web URLs published on its hooks (hooklist), plus
+ * the one Parallel found (stored before Parallel was removed on 2026-10-24; none are added now), but only when Parallel
+ * identified a team and the project has a name to research. An unnamed hook is just an address, so an audit "found" for
+ * it belongs to someone else. A link to code (auditDocument) is not an audit, and a link the pipeline found gone (404
+ * or 410: signals "audit_links", pipeline/bait/audit_links.py) is not shown. Count = links.length; badge = links[0].
+ */
 export function auditLinks(
   hookUrls: Iterable<unknown>,
   parallel: { audit_url?: unknown; team?: unknown } | null | undefined,

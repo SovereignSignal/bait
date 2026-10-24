@@ -9,7 +9,7 @@ import time
 
 import sqlalchemy as sa
 
-from ..db import HOOK_POOL_PREFIX, backfill_address_flags, hooks, project_aliases, projects, utcnow, pools
+from ..db import HOOK_POOL_PREFIX, backfill_address_flags, hooks, project_aliases, projects, pools
 from ..rules import (SHARED_DEPLOYERS, audit_key, code_evidence, deployment_words, merge_evidence, name_stem, normalize_name,
                      proxy_flag, shape_evidence, slugify, stem_root, team_links, team_name, useful_name, fallback_category)
 from . import RunContext, log
