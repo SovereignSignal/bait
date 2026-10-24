@@ -800,6 +800,60 @@ def test_a_week_counted_on_a_settling_chain_never_reads_an_unread_last_day_as_ze
     assert (q.wallets_7d, q.wallets_24h, q.wallets_exact) == (0, 0, True)
 
 
+def test_wallets_7d_on_a_settling_chain_needs_indexed_history_from_the_start_of_the_window(conn, ctx):
+    """A swap cursor past the window's end says nothing about its start. A chain whose indexed history begins inside the
+    week (re-scoring a day whose week starts before the chain's swap history does) holds a partial count, which would read
+    as a small project."""
+    pid = insert_project(conn, "Late", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xlate", 8453, project_id=pid, name="Late")
+    _indexed_week(conn, 8453, "0xlate", "0xltp", {"0xa": 1, "0xb": 1})
+    _chain_state(conn, 8453, backfilled=False)
+    score.run(conn, ctx)
+    assert daily(conn, pid).wallets_7d == 2
+    for t in (db.pool_daily_onchain, db.pool_wallet_day):            # history now starts on the window's second day
+        conn.execute(sa.delete(t).where(t.c.chain_id == 8453, t.c.day == END - timedelta(days=6)))
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert (d.wallets_7d, d.top_wallet_share_7d, d.deployer_swap_share_7d, d.wallets_24h) == (None, None, None, None)
+
+
+def test_deployer_swaps_on_a_settling_chain_count_toward_the_deployer_share(conn, ctx):
+    """The deployer query reads the same chains as the wallet count: Base swaps in the total but not in the deployer's part
+    would understate a team trading its own Base pool."""
+    pid = insert_project(conn, "Team", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xteam1", 1, project_id=pid, name="Team")
+    insert_hook(conn, "0xteam8453", 8453, project_id=pid, name="Team")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xteam8453").values(deployer="0xdep", deployer_source="explorer"))
+    _indexed_week(conn, 1, "0xteam1", "0xtp1", {"0xa": 2, "0xb": 1})               # 21 swaps
+    _indexed_week(conn, 8453, "0xteam8453", "0xtp2", {"0xdep": 1, "0xc": 1})       # 14 swaps, 7 of them the deployer's
+    _chain_state(conn, 1)
+    _chain_state(conn, 8453, backfilled=False)
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert (d.wallets_7d, d.top_wallet_share_7d, d.deployer_swap_share_7d) == (4, 0.4, 0.2)
+
+
+def test_a_quiet_last_day_on_the_ready_chain_is_not_a_zero_while_the_settling_chain_traded(conn, ctx):
+    """Every hook has to be on a ready chain for "covered, no wallet that day" to be a measured 0, whichever order the hooks
+    come in. Here Ethereum (ready) had no wallet on the last day but the Base hook did: the 24h figure is unknown."""
+    pids = []
+    for name, chains in (("BaseFirst", (8453, 1)), ("EthFirst", (1, 8453))):
+        pid = insert_project(conn, name, first_seen=NOW - timedelta(days=60))
+        for i, c in enumerate(chains):               # address order = insertion order, so the scan order is the same either way
+            insert_hook(conn, f"0x{name.lower()}{i}", c, project_id=pid, name=name)
+            _indexed_week(conn, c, f"0x{name.lower()}{i}", f"0x{name.lower()}p{c}", {f"0x{name.lower()}w{c}": 1})
+            if c == 1:                               # no swap on Ethereum on the last day
+                for t in (db.pool_daily_onchain, db.pool_wallet_day):
+                    conn.execute(sa.delete(t).where(t.c.pool_id == f"0x{name.lower()}p1", t.c.day == END))
+        pids.append(pid)
+    _chain_state(conn, 1)
+    _chain_state(conn, 8453, backfilled=False)
+    score.run(conn, ctx)
+    for pid in pids:
+        d = daily(conn, pid)
+        assert (d.wallets_7d, d.wallets_24h, d.wallets_exact) == (2, None, None)
+
+
 def test_deployer_share_of_swaps_from_known_deployer_wallets(conn, ctx):
     """The grant-review question: how much of a hook's activity is its own team. Factories never count as a deployer."""
     lop = _onchain_project(conn, "Lop", "0xlp", wallets=2, vol_per_day=1_000)

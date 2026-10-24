@@ -54,7 +54,7 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 | 3b | onchain | v4_pools, pool_daily_onchain, indexer_state (from `python -m bait.indexer`) | hooks (unlisted, capped), pools, pool_snapshots, pool_stats(day) overriding keyless usage | nothing; no-op when the indexer tables are empty |
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
 | 5 | enrich | projects with enriched_at null | what_line, category, enrichment (verified source); stored website/github/x_handle re-validated | ANTHROPIC_API_KEY; optional Blockscout |
-| 6 | score | pool_snapshots (window_end-13..window_end), pool_stats(day), pool_top_wallets(day), pool_daily_onchain / pool_wallet_day (ready chains) | project_daily(day) incl. window_end, vol_24h, swaps, wallets, is_wash / wash_reason | nothing |
+| 6 | score | pool_snapshots (window_end-13..window_end), pool_stats(day), pool_top_wallets(day), pool_daily_onchain / pool_wallet_day (ready chains; for the 7-day wallet figures also a chain whose swap cursor is past the window, hooks under the per-hook cap) | project_daily(day) incl. window_end, vol_24h, swaps, wallets, is_wash / wash_reason | nothing |
 | 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | signals (github, alive: null without a GitHub reading), why_blurb | optional GITHUB_TOKEN, ANTHROPIC_API_KEY |
 | 8 | radar | Uniswap/hooklist issues + PRs (30d), GitHub repo/code search (30d), Exa (60d) classified by Claude Haiku | radar_items (one row per URL, 90 days kept) | optional GITHUB_TOKEN (else anonymous unless KEYLESS=0), EXA_API_KEY + ANTHROPIC_API_KEY |
 | 9 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
