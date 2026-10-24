@@ -56,7 +56,7 @@ def test_signals_targets_github_alive_and_blurb_only_on_change(conn, ctx):
     gh, claude = FakeGitHub(), FakeClaude()
     ctx.clients.update(exa=NoExa(), github=gh, claude=claude)
     out = signals.run(conn, ctx)
-    assert out == {"projects": 2, "github": 1, "blurbs": 2, "errors": 0}
+    assert out == {"projects": 2, "github": 1, "blurbs": 2, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     assert conn.execute(sa.select(sa.func.count()).select_from(db.receipts)).scalar_one() == 0
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == hot))}
     assert sig["alive"] == {"alive": True} and sig["github"]["stars"] == 12 and "exa" not in sig
@@ -120,7 +120,7 @@ def test_frozen_exa_and_nansen_signals_stay_out_of_alive_and_the_blurb(conn, ctx
             return super().why_blurb(c)
     ctx.clients.update(exa=NoExa(), github=None, claude=Capture())
     out = signals.run(conn, ctx)
-    assert out == {"projects": 1, "github": 0, "blurbs": 1, "errors": 0}
+    assert out == {"projects": 1, "github": 0, "blurbs": 1, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == p))}
     assert sig["alive"] == {"alive": None} and sig["exa"]["hits_30d"] == 3           # stored row left as it was
     assert seen[0]["signals"] == {} and [r["title"] for r in seen[0]["receipts"]] == ["Hot hook ships"]
@@ -156,7 +156,7 @@ def test_alive_is_unknown_without_a_github_reading_and_never_reaches_the_blurb_a
             return super().why_blurb(c)
     ctx.clients.update(exa=NoExa(), github=GitHub(), claude=Capture())
     out = signals.run(conn, ctx)
-    assert out == {"projects": 3, "github": 2, "blurbs": 3, "errors": 0}
+    assert out == {"projects": 3, "github": 2, "blurbs": 3, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     alive = {n: conn.execute(sa.select(db.signals.c.value).where(db.signals.c.project_id == pid, db.signals.c.kind == "alive"))
              .scalar_one() for n, pid in ids.items()}
     assert alive == {"Linkless": {"alive": None}, "Stale": {"alive": False}, "Busy": {"alive": True}}

@@ -84,11 +84,44 @@ export function firstWebUrl(urls: Iterable<unknown>): string | null {
 // Uniswap's own v4 core/periphery audits cover the PoolManager, not anyone's hook: a search that found nothing returns them.
 const CORE_AUDIT = /^https?:\/\/(www\.)?github\.com\/uniswap\/v4-(core|periphery)\b/i;
 
+// On GitHub a link's path says what it is. 2026-10-24: the registry's "audit" links for Upeg were its repository and its
+// upegs_hook code folder (counted as two audits); others were a .sol file or a pull request. A GitHub link is an audit
+// when the path under the repository names an audit, review, report or security file or folder, or the repository
+// itself is an audit repository. Other hosts are taken as published: their paths say nothing reliable.
+const AUDIT_PATH = /audit|review|report|security/i;
+const SOURCE_FILE = /\.(sol|vy|rs|ts|js|py|go|move|cairo)$/i;
+
+/** False for a GitHub link to code (a repository, a code folder or source file, a pull request), not to an audit. */
+export function auditDocument(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  if (host !== "github.com" && host !== "raw.githubusercontent.com") return true;
+  const parts = u.pathname.split("/").filter(Boolean).map((x) => {
+    try {
+      return decodeURIComponent(x);
+    } catch {
+      return x;
+    }
+  });
+  // github.com/<owner>/<repo>/(blob|tree|raw|blame)/<ref>/<path>, or /<owner>/<repo>/<pull|releases|…>/…;
+  // raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
+  const path = host === "raw.githubusercontent.com" ? parts.slice(3) : ["blob", "tree", "raw", "blame"].includes(parts[2]) ? parts.slice(4) : parts.slice(2);
+  if (path.length === 0) return AUDIT_PATH.test(parts[1] ?? "");
+  if (SOURCE_FILE.test(path[path.length - 1])) return false;
+  return AUDIT_PATH.test(path.join("/"));
+}
+
 /**
  * A project's audit links, the only source of the "Audit linked" badge: web URLs published on its hooks (hooklist), plus
  * the one Parallel found (stored before Parallel was removed on 2026-10-24; none are added now), but only when Parallel
  * identified a team and the project has a name to research. An unnamed hook is just an address, so an audit "found" for
- * it belongs to someone else. Count = links.length; badge = links[0].
+ * it belongs to someone else. A link to code (auditDocument) is not an audit, and a link the pipeline found gone (404
+ * or 410: signals "audit_links", pipeline/bait/audit_links.py) is not shown. Count = links.length; badge = links[0].
  */
 /** The generated text names an audit the registry and team details do not link: the badge must say so, not "No audit". */
 const AUDIT_WORD = /\baudit(?:ed|s|or|ors|ing)?\b/gi;
@@ -110,15 +143,18 @@ export function auditLinks(
   hookUrls: Iterable<unknown>,
   parallel: { audit_url?: unknown; team?: unknown } | null | undefined,
   unnamed: boolean,
+  dead: unknown = [],
 ): string[] {
+  const gone = new Set(Array.isArray(dead) ? dead.filter((u): u is string => typeof u === "string") : []);
+  const usable = (url: string | null): url is string => url != null && auditDocument(url) && !gone.has(url);
   const out = new Set<string>();
   for (const u of hookUrls) {
     const url = firstWebUrl([u]);
-    if (url) out.add(url);
+    if (usable(url)) out.add(url);
   }
   const par = firstWebUrl([parallel?.audit_url]);
   const team = typeof parallel?.team === "string" && parallel.team.trim() !== "";
-  if (par && team && !unnamed && !CORE_AUDIT.test(par)) out.add(par);
+  if (usable(par) && team && !unnamed && !CORE_AUDIT.test(par)) out.add(par);
   return [...out];
 }
 

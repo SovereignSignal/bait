@@ -550,7 +550,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
     const enrichment = (p.enrichment ?? {}) as Enrichment;
     const top = topBy.get(p.id);
     const recs = (receiptsBy.get(p.id) ?? []).filter((r) => receiptRelevant(p.name, r.title ?? "", r.source ?? "")).map(toReceipt);
-    const audits = auditLinks(hs.map((h) => h.auditUrl), enrichment.parallel, isUnlisted(p.name));
+    const audits = auditLinks(hs.map((h) => h.auditUrl), enrichment.parallel, isUnlisted(p.name), (sigBy.get(`${p.id}:audit_links`) as { dead?: unknown } | undefined)?.dead);
     const su = statsBy?.get(p.id);
 
     let pools: PoolView[] = [];

@@ -1,5 +1,5 @@
 """Step 7 (signals): for New ∪ Trending (top N): GitHub activity and the alive signal, then Claude why_blurb when
-signals changed since blurb_at.
+signals changed since blurb_at. First, for every project, published audit links that are gone (audit_links.py).
 
 The per-project Exa receipts search was removed on 2026-10-24 (Exa now serves only the radar step). The receipts table
 and the "exa" / "nansen" signal rows written before then stay stored; they no longer change, so they are left out of
@@ -24,6 +24,9 @@ FROZEN_KINDS = ("exa", "nansen")
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"projects": 0, "github": 0, "blurbs": 0, "errors": 0}
+    links = _audit_links(conn, ctx)
+    out["errors"] += links.pop("failed", 0)            # a soft error in the run receipt
+    out.update(links)
     targets = select_targets(conn, ctx)
     out["projects"] = len(targets)
     if not targets:
@@ -82,6 +85,18 @@ def _set_signal(conn, pid: int, kind: str, value: dict, now: datetime) -> bool:
         return False
     upsert(conn, signals, [{"project_id": pid, "kind": kind, "value": value, "as_of": now}], keys=["project_id", "kind"])
     return True
+
+
+def _audit_links(conn, ctx: RunContext) -> dict:
+    """Every published audit link, not only tonight's targets: a dead one leaves the "Audit linked" badge (audit_links.py).
+    Free; a failure is logged and never stops the step."""
+    from .. import audit_links
+    try:
+        with savepoint(conn):
+            return audit_links.check(conn, ctx.now, _set_signal, ctx.extras.get("audit_probe"))
+    except Exception as e:
+        log.warning("signals audit links failed: %s", e)
+        return {"failed": 1}
 
 
 def _alive(conn, pid: int, now: datetime) -> bool | None:

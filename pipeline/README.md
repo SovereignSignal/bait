@@ -380,6 +380,7 @@ written on its own connection so it survives a rolled-back step), and hard budge
 | `SPEND_DAILY_USD_<PROVIDER>` / `SPEND_MONTHLY_USD_<PROVIDER>` | unset | Optional per provider (`ANTHROPIC`, `EXA`). |
 | `ENRICH_MAX` | 20 | Projects enriched (Sonnet what_line) per run; live-pool projects only. |
 | `SHAPE_MAX` | 3000 | Hooks whose bytecode template (`code_shape`) the group step fetches per run, free public RPC: unassigned first, then same-team (rule 4) candidates, then the newest. |
+| `AUDIT_LINKS` / `AUDIT_LINKS_MAX` / `AUDIT_LINKS_BUDGET_S` | 1 / 300 / 180 | Free: the signals step asks every published audit link once a night (status only, public hosts only) and records 404/410 links as dead (`bait/audit_links.py`); `AUDIT_LINKS=0` turns it off. |
 | `GROUP_CLAUDE_MAX` | 100 | Haiku classifications per run; bare-address hooks are never sent. |
 | `RADAR_EXA_QUERIES` / `RADAR_CLASSIFY_MAX` | 6 / 30 | Radar Exa searches and Haiku classifications per run. |
 

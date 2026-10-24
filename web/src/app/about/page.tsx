@@ -138,7 +138,10 @@ export default function AboutPage() {
           <ul>
             <li>Hooks are third-party code in the swap path. Nothing here is audited by us.</li>
             <li>Flags and properties are shown as published in the hooklist registry. We do not verify them against bytecode.</li>
-            <li>&quot;Audit linked&quot; means an audit link is published. It is not a statement about the audit&apos;s scope or findings.</li>
+            <li>
+              &quot;Audit linked&quot; means an audit link is published and was not missing (404) when Bait last checked it, nightly. A link to code (a
+              repository, a folder or a source file) does not count. It is not a statement about the audit&apos;s scope or findings.
+            </li>
             <li>Figures come from Bait&apos;s indexer and public APIs and can lag or be wrong when a source stalls; a project page says which day its figures run through. Metrics are USD estimates.</li>
             <li>Bait is a personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</li>
           </ul>
