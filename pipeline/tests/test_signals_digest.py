@@ -127,6 +127,34 @@ def test_frozen_exa_and_nansen_signals_stay_out_of_alive_and_the_blurb(conn, ctx
     assert "enrichment" not in seen[0]                                                # stored Parallel facts: never prompt
 
 
+def test_a_changed_audit_link_verdict_alone_never_marks_the_blurb_stale_or_reaches_the_prompt(conn, ctx):
+    # audit_links (audit_links.py) changes whenever a published audit link dies or comes back. It is for the badge: on
+    # its own it must not make the why_blurb stale (a paid Claude call), and its dead links never reach the prompt.
+    url = "https://github.com/spearbit/portfolio/blob/master/pdfs/Sorella-Spearbit-Security-Review-October-2024.pdf"
+    p = insert_project(conn, "Angstrom", NOW - timedelta(days=40), slug="angstrom")
+    insert_hook(conn, f"0x{p}", 1, project_id=p)
+    conn.execute(sa.update(db.hooks).values(audit_url=url).where(db.hooks.c.project_id == p))
+    seed_daily(conn, p, score=30.0, tvl=1e6)
+    claude = FakeClaude()
+    ctx.clients.update(exa=NoExa(), github=None, claude=claude)
+    ctx.extras["audit_probe"] = {url: 200}.get
+    assert signals.run(conn, ctx)["blurbs"] == 1                                # the first blurb; the link answers
+
+    ctx.extras["audit_probe"] = {url: 404}.get                                  # the next night the link is gone
+    ctx.now = NOW + timedelta(days=1)
+    out = signals.run(conn, ctx)
+    assert out["audit_links_dead"] == 1 and out["blurbs"] == 0 and claude.calls == 1
+    row = conn.execute(sa.select(db.signals)
+                       .where(db.signals.c.project_id == p, db.signals.c.kind == "audit_links")).one()
+    blurb_at = conn.execute(sa.select(db.projects.c.blurb_at).where(db.projects.c.id == p)).scalar_one()
+    assert row.value == {"dead": [url]} and db.as_utc(row.as_of) > db.as_utc(blurb_at)   # newer than the blurb, yet
+    target, daily = signals.select_targets(conn, ctx)[0]
+    assert signals._needs_blurb(conn, target, daily) is False
+    assert "audit_links" not in signals._blurb_ctx(conn, target, daily)["signals"]
+    signals._set_signal(conn, p, "github", {"repo": "x/y", "stars": 1}, NOW + timedelta(days=2))
+    assert signals._needs_blurb(conn, target, daily) is True                    # a signal the blurb reads still counts
+
+
 def test_alive_is_unknown_without_a_github_reading_and_never_reaches_the_blurb_as_false(conn, ctx):
     # GitHub is alive's only input since 2026-10-24, and new projects no longer get a GitHub link (that came from
     # Parallel). With no GitHub reading there is no evidence either way: the row says null and the blurb prompt leaves it

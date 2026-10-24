@@ -1,11 +1,13 @@
 """Published audit links that are gone. Nightly, from the signals step (free, no key).
 
-The "Audit linked" badge links what the registry (hooks.audit_url) or the team's details (enrichment.parallel.audit_url)
-publish. A link can die after it is published: on 2026-10-24 Angstrom's hooklist link, a PDF in spearbit/portfolio, was
-a 404 because that repository dropped its pdfs folder. Each night every published link is asked once; a 404 or 410 is a
-dead link and goes in the project's `signals` row of kind "audit_links" ({"dead": [url, ...]}), which the web leaves out
-of the badge and the count. Only a definite answer moves a verdict: a timeout, a bot wall (403, 429) or a 5xx keeps the
-last one, so a flaky host never hides a live audit and a dead link is not revived by an outage.
+The "Audit linked" badge links what the registry publishes (hooks.audit_url) and the audit link stored in
+enrichment.parallel.audit_url. That field stopped updating on 2026-10-24, when the Parallel provider was removed; its
+stored links are still probed because the web still shows them. A link can die after it is published: on 2026-10-24
+Angstrom's hooklist link, a PDF in spearbit/portfolio, was a 404 because that repository dropped its pdfs folder. Each
+night every published link is asked once; a 404 or 410 is a dead link and goes in the project's `signals` row of kind
+"audit_links" ({"dead": [url, ...]}), which the web leaves out of the badge and the count. Only a definite answer moves
+a verdict: a timeout, a bot wall (403, 429) or a 5xx keeps the last one, so a flaky host never hides a live audit and a
+dead link is not revived by an outage.
 
 The fetch reads status lines only (HEAD, or GET without reading the body when a host refuses HEAD) and only from public
 hosts: registry entries are third-party input, so an address literal, a private or link-local address, or an internal

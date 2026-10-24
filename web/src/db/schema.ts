@@ -173,6 +173,7 @@ export const walletLabels = pgTable(
  * One row per (project, kind). Value shapes written by the pipeline:
  *   github {repo, stars, last_commit_at, commits_30d}
  *   alive  {alive: bool | null}     (GitHub only since 2026-10-24; null = no GitHub reading, unknown)
+ *   audit_links {dead: string[]}    (audit_links.py, nightly: published audit links that answered 404 or 410, verbatim)
  * Frozen, no longer written or read by the web: nansen (until 2026-10-08) and exa {hits_30d, latest, top} (until
  * 2026-10-24, when the receipts search was removed).
  */
