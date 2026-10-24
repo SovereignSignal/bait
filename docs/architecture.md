@@ -45,6 +45,8 @@ slugs redirect.
 - Windows are closed UTC days: `vol_24h` is the last closed day, `vol_7d` the last seven, `vol_7d_prev` the seven
   before. A pool with no row on a day adds $0 of volume but an unknown swap count; a pool whose volume the onchain step
   could not measure is left out of every window, and when that is every pool the project's volume is NULL, never $0.
+  A $0 sum is NULL too when it leaves out such a pool, or a pool on a chain that is not ready with no known daily
+  volume in the window (only the pools GeckoTerminal lists have rows there); a positive sum is a partial observed total.
 - The indexer is the source where it has caught up (`indexer_state.backfilled`, fresh, cursor past the window);
   GeckoTerminal's daily figures stand in elsewhere, and for hooks that keep their own accounting (custom accounting
   bit). Raw indexer USD uses current DefiLlama prices.

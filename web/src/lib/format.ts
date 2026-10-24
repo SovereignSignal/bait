@@ -4,9 +4,14 @@ const DAY = 86_400_000;
 export const NONE = "–";
 const trim = (x: number) => x.toFixed(1).replace(/\.0$/, "");
 
-/** Compact USD: $1.2B, $184.2M, $22.8K, $1K, $812. */
+/** Under 50 cents but more than nothing: "<$1", never "$0", which reads as a measured zero (RwagmiHookV2 on Base,
+ * 2026-10-23: $0.01 in a week showed "$0"). */
+const DUST = "<$1";
+
+/** Compact USD: $1.2B, $184.2M, $22.8K, $1K, $812, <$1. */
 export function usd(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return NONE;
+  if (n > 0 && n < 0.5) return DUST;
   const abs = Math.abs(n), sign = n < 0 ? "-" : "";
   if (abs >= 1e9) return `${sign}$${trim(abs / 1e9)}B`;
   if (abs >= 1e6) return `${sign}$${trim(abs / 1e6)}M`;
@@ -17,6 +22,7 @@ export function usd(n: number | null | undefined): string {
 /** Whole dollars under $1M ("$22,126"), compact above: for rows whose values sit close together. */
 export function usdWhole(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return NONE;
+  if (n > 0 && n < 0.5) return DUST;
   const r = Math.round(Math.abs(n));
   return r >= 1e6 ? usd(n) : `${n < 0 && r > 0 ? "-" : ""}$${r.toLocaleString("en-US")}`;
 }
