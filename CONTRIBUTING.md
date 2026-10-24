@@ -13,8 +13,8 @@ details are in `pipeline/README.md`, `web/README.md` and `db/README.md`.
 # pipeline: SQLite in memory, HTTP mocked, no keys, no network
 cd pipeline && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m pytest -q
 
-# web: unit tests, types, build
-cd web && npm ci && npm test && npm run typecheck && npm run build
+# web: unit tests, types, lint, build
+cd web && npm ci && npm test && npm run typecheck && npm run lint && npm run build
 
 # web: browser suites (build first; each starts its own server on sample data)
 cd web && npm run e2e && BAIT_E2E_REPRESENTATIVE=1 npm run e2e
@@ -39,20 +39,20 @@ database. CI runs them against Postgres 17.
 - **Numbers on a card must be defensible.** If a change can show a figure that a block explorer would contradict,
   it needs a test that pins the figure, and the About page copy must still be true.
 - **Style.** Python: `ruff`-clean, type hints, module docstrings that say what the module reads and writes. TypeScript:
-  `tsc --noEmit` clean, no `any` outside the DB boundary. Comments explain why, not what.
+  `tsc --noEmit` and `npm run lint` clean, no `any` outside the DB boundary. Comments explain why, not what.
 
 ## Pull requests
 
-CI must be green: pipeline tests (SQLite and Postgres), web unit tests, typecheck, build, both browser suites. Squash
-merges only. Describe what a visitor would notice, what a self-hoster must do (env, migration), and what you did not
-verify.
+CI must be green: pipeline tests (SQLite and Postgres), web unit tests, typecheck, lint, build, both browser suites.
+Squash merges only. Describe what a visitor would notice, what a self-hoster must do (env, migration), and what you did
+not verify.
 
 ## CI minutes
 
 The repo is public, so GitHub-hosted job minutes are free, but the workflows are still scoped so a change runs only
 the jobs it can affect; work with them rather than around them:
 
-- `ci-pipeline.yml` runs for `pipeline/`, `db/` and `fixtures/` changes; `ci-web.yml` (unit, typecheck, build,
+- `ci-pipeline.yml` runs for `pipeline/`, `db/` and `fixtures/` changes; `ci-web.yml` (unit, typecheck, lint, build,
   then the browser suites) for `web/` and `fixtures/`. A docs-only change runs nothing.
 - The browser suites run on pushes to `main` and on pull requests that are **ready for review**. Open a PR as a
   draft while iterating; mark it ready (or push once it is ready) to get the e2e run. Dependabot's minor/patch groups

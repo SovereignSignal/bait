@@ -34,11 +34,15 @@ export function JustLaunched({
   const [now, setNow] = useState(serverNow);
   const box = useRef<HTMLDivElement>(null);
   const onScreen = useRef(true);
-  const lastLoad = useRef(Date.now());
+  const lastLoad = useRef(0); // set at mount, then by every load
 
-  useEffect(() => {
+  // A new server list (the page re-rendered with fresh launches) replaces the one shown. Adjusted during render, not
+  // in an effect, so the old list never paints first.
+  const [seenInitial, setSeenInitial] = useState(initial);
+  if (initial !== seenInitial) {
+    setSeenInitial(initial);
     if (initial) setLaunches(initial);
-  }, [initial]);
+  }
 
   const load = useCallback(async () => {
     lastLoad.current = Date.now();
@@ -55,7 +59,11 @@ export function JustLaunched({
   const needsLoad = useRef(initial == null);
 
   useEffect(() => {
-    setNow(Date.now());
+    const mounted = Date.now();
+    lastLoad.current = mounted;
+    // The first render used the server's clock so hydration matches; from here on the client's clock drives "ago".
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one post-hydration sync with an external clock
+    setNow(mounted);
     if (needsLoad.current) {
       needsLoad.current = false;
       load();

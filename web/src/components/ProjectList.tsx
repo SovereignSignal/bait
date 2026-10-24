@@ -109,7 +109,11 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
   // Dropped once the URL catches up (not on any URL change: two quick clicks would flash the first) or on Back/Forward.
   const [picked, setPicked] = useState<FeedQuery | null>(null);
   const urlKey = feedQs(urlQuery);
-  useEffect(() => setPicked((p) => (p && feedQs(p) !== urlKey ? p : null)), [urlKey]);
+  const [seenKey, setSeenKey] = useState(urlKey);
+  if (urlKey !== seenKey) {
+    setSeenKey(urlKey);
+    if (picked && feedQs(picked) === urlKey) setPicked(null);
+  }
   useEffect(() => {
     const drop = () => setPicked(null);
     window.addEventListener("popstate", drop);

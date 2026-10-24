@@ -56,9 +56,17 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     fromFeedRef.current = last.current === "/";
     last.current = pathname;
-    if (pathname?.startsWith("/p/")) setSearchOpen(false);
   }, [pathname]);
+  // Opening a project closes the mobile search row. Adjusted during render, not in an effect, so the row never paints
+  // on the project page.
+  const [seenPath, setSeenPath] = useState(pathname);
+  if (pathname !== seenPath) {
+    setSeenPath(pathname);
+    if (pathname?.startsWith("/p/")) setSearchOpen(false);
+  }
   const fromFeed = useCallback(() => fromFeedRef.current, []);
+  // ?w=1 is read after hydration: static pages render without the query, and the first render must match them.
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- one post-hydration read of browser-only state
   useEffect(() => setWatchOnlyState(new URLSearchParams(window.location.search).get("w") === "1"), []);
   const setWatchOnly = useCallback((on: boolean) => {
     setWatchOnlyState(on);
@@ -71,6 +79,8 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   const [watchlist, setWatchlist] = useState<string[]>([]);
 
   useEffect(() => {
+    // localStorage exists only in the browser, and the first render must match the server's empty list.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one post-hydration read of browser-only state
     setWatchlist(readList());
   }, []);
 
