@@ -285,6 +285,112 @@ def test_fallback_category_reads_words_then_factory_pattern_then_dynamic_fee():
     assert fallback_category([], [], [], False, None) is None
 
 
+# Real hooks and pools from the 2026-10-23 feed (public addresses), all "other" before the 2026-10-24 rules.
+ETH = "0x0000000000000000000000000000000000000000"
+INK_WETH = "0x4200000000000000000000000000000000000006"
+RH_WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+RH_SPCX = "0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea"
+
+
+def _guess(names=(), texts=None, flags=(), pools=()):
+    from bait.rules import fallback_category
+    return fallback_category(list(names) if texts is None else texts, [{}], [f for _, _, f in pools if f is not None], False,
+                             len(pools), names=names, flags=flags, pools=pools)
+
+
+def test_launch_in_a_hooks_own_name_is_a_launchpad_but_not_in_a_description():
+    from bait.rules import flags_from_address
+    # LaunchHook (verified contract name) on Robinhood, 0x048f…20cc: its 22 pools pair new coins with several bases, so
+    # only the name says it; before this, "Launch Hook" matched no word rule
+    hook = flags_from_address("0x048f2dc8a71a0321b5e119cd577c56d0190920cc")
+    pools = [(RH_SPCX, "0x5452fcb54894027801cf8852e6acbca2890cb5f7", 0), ("0x7c0495053f47ec52eb4b678c4ad8f572df745bfe", "0x84cab63bc87912e71ad199ff14a0ba45de68fef8", 0),
+             ("0x4a3e1c523efbfbda311d4724487e21aadeb8f7ed", "0xad25ac6c84d497db898fa1e8387bf6af3532a1c4", 0), (RH_SPCX, "0x9353ac4dcf13630169e22188894deb20abf40e3a", 0),
+             ("0xad25ac6c84d497db898fa1e8387bf6af3532a1c4", "0xf36834a6f6453baf1a1be347a00b30071947f2d5", 0)]
+    assert _guess(names=["LaunchHook"], flags=[hook], pools=pools) == "launchpad"
+    assert _guess(names=[None], texts=[None], flags=[hook], pools=pools) is None          # unnamed, the pools alone do not say
+    # OHMVAULT VaultHook's registry description (Ethereum): "launch" there is a fee schedule, not a launchpad
+    desc = "Charges a time-decaying fee (80% at launch, decaying to 5% over 60 seconds) on both swap directions"
+    assert _guess(names=[], texts=[desc]) is None
+    # PairV5LaunchV2NativeFeeHook: an earlier word rule still wins ("TWAP oracle" in its description)
+    assert _guess(names=["PairV5LaunchV2NativeFeeHook"], texts=["PairV5LaunchV2NativeFeeHook", "records tick observations to maintain a 30-minute TWAP oracle"]) == "oracle"
+
+
+def test_launch_pattern_a_pool_creation_gate_over_one_pool_per_coin():
+    from bait.rules import flags_from_address, launch_pattern
+    # ClankInitializationGuardHook, Robinhood: two hooks whose only permission is beforeInitialize; ETH against a new
+    # coin in 6 of its 7 pools
+    gate = [flags_from_address("0x18bff70216af1b93f3552016dec742c5d78ee000"), flags_from_address("0xd405e0dff2d0cc7eaa48b3aec2e3f2456c072000")]
+    assert all(set(k for k, v in f.items() if v) == {"beforeInitialize"} for f in gate)
+    coins = ["0xfa31d04462746aaa24bc7e5626403e09e4b106ec", "0xb90ad88c8ecd9f22a05cd8cb365542614f279ca9", "0xcf5b720f33febdc1c9d4880b8317203b63fdf368",
+             "0x03e6a6881d0813bf6157ac4ee44d3cc73d5465a3", "0x16bfec50d5fe807945d593e56f38c6fb5953bb4e", "0x360462b4d2b48335f86003167a249247edc7061e"]
+    pools = [(ETH, c, 3000) for c in coins] + [("0x0fe97b2d477014d78a61829a3c41866912d469ea", RH_SPCX, 3000)]
+    assert _guess(texts=[None], flags=gate, pools=pools) == "launchpad"
+    assert launch_pattern(gate, pools[:4]) is False                                  # 4 pools is not a platform yet
+    # SettlePermissionHook's pools (the same gate, labelled compliance): no shared base, so no launch pattern
+    settle = [("0x162a789d397193f3c5509b311533fb271aa42dbd", "0x1b0e319c6a659f002271b69db8a7df2f911c153e", 3000),
+              ("0x162a789d397193f3c5509b311533fb271aa42dbd", "0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec", 3000),
+              (RH_WETH, "0x63d7fa99022794f594f724e7c38ff0be3f9e284a", 3000), (RH_WETH, "0x162a789d397193f3c5509b311533fb271aa42dbd", 3000),
+              ("0x162a789d397193f3c5509b311533fb271aa42dbd", RH_SPCX, 3000), (RH_WETH, "0x9fb8ae7eb5889e02802ca403100ba288fb2b9eb2", 3000),
+              ("0x020bfc650a365f8bb26819deaabf3e21291018b4", "0x88f714282bf14723ba670cbca811b4718aa8d333", 3000)]
+    assert launch_pattern(gate, settle) is False
+
+
+def test_launch_pattern_fee_taking_hook_on_zero_fee_launch_pools():
+    from bait.rules import flags_from_address, launch_pattern
+    # SynthHookV2, Robinhood (0x9808…6aec): beforeInitialize, swap deltas, LP fee 0, ETH against a new coin per pool
+    synth = [flags_from_address("0x980879a75e09662d923c99ff74bd119ac29c6aec")]
+    coins = ["0x0baf47946d97e9f35cbf21d76e41af155f0b7e00", "0x83846775da402622940310aadfe7fce8312c2b5c", "0x6d71d2de7a2292eafa882c1875c31613c6527d10",
+             "0x609dc9e984328483d06672e5159d2ec486cc5d83", "0x571672d25bd8647833293c5ed441ff0e8837b20d", "0xd1f3fe2d84abd2832d4dac6fcab2227873a9a6a2"]
+    pools = [(ETH, c, 0) for c in coins]
+    assert _guess(texts=[None], flags=synth, pools=pools) == "launchpad"
+    assert launch_pattern(synth, pools[:-1] + [(ETH, coins[-1], 3000)]) is False    # an LP fee: the hook is not the fee
+    # ChimeraHook404 on Ink (0x2eeb…2dcc): exactly 5 pools, WETH in each
+    chimera = [flags_from_address("0x2eebd90bf253a27961624762f73eee1409c52dcc")]
+    ink = [(INK_WETH, "0xc7d264d906b488ef6660005af5450c979f58006c", 0), (INK_WETH, "0xbff795017ea6f7fbb2cc30cba4a22d123901ef79", 0),
+           (INK_WETH, "0x6e1e9bf1f64522ea3fb25ed4d707b2f865f01678", 0), ("0x00e63bb9534551d2e7eed8cce4320b8ef5368634", INK_WETH, 0),
+           ("0x19bb33e16f9b01524dcbc30557bc13f2c0309505", INK_WETH, 0)]
+    assert launch_pattern(chimera, ink) is True
+    # ERC20THook on Ethereum (0xed9a…e544): its platform token FWA is the base in 6 of 7 pools
+    fwa = "0xa0df17b5ac76ababa36e1450e2cbcd18a620c845"
+    erc20t = [flags_from_address("0xed9a04fa6693e754661a22502524df9b1857e544")]
+    eth_pools = [(fwa, "0xbbe9d1ecbae3d811642f3dffdf8bc5ae8ea4514f", 0), ("0x4dec9296365ec243c2638365273393cff82f37e0", fwa, 0),
+                 (fwa, "0xb0707bc69b3c7a5e8965a95655b17c8c5816e8f0", 0), (fwa, "0xa639fa428738787388a8290bac439b8ffbf9599a", 0),
+                 (fwa, "0xa22aaa38a2f645d6adffe88feb95e147ec6d63f7", 0), (fwa, "0xf86d547990ffb08c4c425eced8e50afe1d270fc3", 0),
+                 (ETH, "0x0802671f2478fb6938535f5a25466cb391e88313", 0)]
+    assert launch_pattern(erc20t, eth_pools) is True
+
+
+def test_launch_pattern_needs_the_creation_gate_and_no_after_initialize():
+    from bait.rules import flags_from_address, launch_pattern
+    usdg = "0xe343167631d89b6ffc58b88d6b7fb0228795491d"
+    # tokenized-stock hooks on Ink (0x26b8…8044): the same pool shape (USDG against one stock each, LP fee 0, a swap
+    # delta) without beforeInitialize: not a launchpad
+    stocks = [flags_from_address("0x26b86c03bd6576b8661d53a48d70faf8c85b8044")]
+    xs = [(usdg, "0xe7e553cd128f0011777323a0b44a7b96ea1cb540", 0), ("0x30987adf0b11dc698438a99ba04ec3a1ab2c7eab", usdg, 0),
+          ("0xc3fdbe3a68ee5de461d30415a8165cf9aefe1171", usdg, 0), ("0x7d87fd6a379714194a797c0bbb8b40c30d250856", usdg, 0),
+          ("0x943bf64d566c32a2bcd41ac92fb63c111cc9de8f", usdg, 0), ("0x4a2df09536f62341c9f946427d16414c04e21342", usdg, 0)]
+    assert launch_pattern(stocks, xs) is False
+    # 0x5afd…90c4 on Robinhood: AI against a new coin, LP fee 0, swap delta, but afterInitialize and no gate
+    ai = "0x2e8c31162b855a2ffa90f6f8634643ad6f111e18"
+    memes = [(ai, c, 0) for c in ("0x812486eaea648819853f8e372dc9f1516c7868bd", "0xd9db30bb0d2b8d2eae3826a1372117e058791e18",
+                                  "0xd6fde6a3fc6ab2d83b2be58383944ca1bade1e18", "0x7dbf38976f6d3b9c529e7d9484a71898b409ee6a",
+                                  "0xaa07a0e9209e16ac99708c3ec70159c6ef3128a3")]
+    assert launch_pattern([flags_from_address("0x5afd41ecfab151bf37107eb68a0dec646dff90c4")], memes) is False
+    # BackGeoOracle on OP Mainnet (0x7923…fac4), an oracle: gate, deltas and zero-fee ETH pools, but afterInitialize
+    geo = [flags_from_address("0x79234983ded8eaa571873fffe94e437e11c7fac4")]
+    assert geo[0]["afterInitialize"] and geo[0]["beforeInitialize"]
+    op = [(ETH, c, 0) for c in ("0x0b2c639c533813f4aa9d7837caf62653d097ff85", "0x4200000000000000000000000000000000000042",
+                                "0x0555e30da8f98308edb960aa94c0db47230d2b9c", "0x03c2868c6d7fd27575426f395ee081498b1120dd",
+                                "0x8f187aa05619a017077f5308904739877ce9ea21")]
+    assert launch_pattern(geo, op) is False
+    # 0x3493…2ac0 on Robinhood (the DualPool permission set): gate plus liquidity and swap marks, LP fees set: not a launchpad
+    dual = [flags_from_address("0x3493b97fbf6917c91cab8e2ba9c871d31aa82ac0")]
+    assert launch_pattern(dual, [(RH_WETH, c, 1000) for c in ("0x98096d17e191b3da1d5f99a6d7b3584351b11e18", RH_SPCX,
+                                                              "0x385f4f8ae47651ce5f58f5265395a669f8281e18", "0x020bfc650a365f8bb26819deaabf3e21291018b4",
+                                                              "0x01e6301bc1118be90cc6bc2d1b5c0c44bb883111")]) is False
+    assert launch_pattern([], []) is False
+
+
 def test_wash_roundtrip_thresholds():
     from bait.rules import is_wash_roundtrip
     assert is_wash_roundtrip(1_390_000_000.0, 1_380_000_000.0)      # the Robinhood USDG family

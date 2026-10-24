@@ -9,7 +9,7 @@ import time
 
 import sqlalchemy as sa
 
-from ..db import backfill_address_flags, hooks, project_aliases, projects, utcnow, pools
+from ..db import HOOK_POOL_PREFIX, backfill_address_flags, hooks, project_aliases, projects, utcnow, pools
 from ..rules import (SHARED_DEPLOYERS, audit_key, code_evidence, deployment_words, merge_evidence, name_stem, normalize_name,
                      proxy_flag, shape_evidence, slugify, stem_root, team_links, team_name, useful_name, fallback_category)
 from . import RunContext, log
@@ -182,7 +182,8 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
 
 def _fallback_categories(conn) -> int:
     """Projects with no category, or "other" (enrichment's answer when its sources named none), get
-    rules.fallback_category from their hooks and pools. A specific category from enrichment is never touched. A guess is
+    rules.fallback_category from their hooks (names, descriptions, properties, permission flags) and stored pools
+    (tokens and fee; a folded "hook:" row is not a pool). A specific category from enrichment is never touched. A guess is
     re-made every night (the inputs change as hooks and pools arrive); when it stops holding, the project goes back to
     what it had: "other" if enrichment ran, else nothing."""
     cands = conn.execute(sa.select(projects.c.id, projects.c.is_factory, projects.c.category, projects.c.category_source,
@@ -192,23 +193,30 @@ def _fallback_categories(conn) -> int:
     if not cands:
         return 0
     ids = [c.id for c in cands]
-    by_project: dict[int, dict] = {c.id: {"texts": [], "props": [], "fees": [], "pools_total": None, "factory": bool(c.is_factory),
+    by_project: dict[int, dict] = {c.id: {"texts": [], "names": [], "props": [], "flags": [], "fees": [], "pools": [],
+                                          "pools_total": None, "factory": bool(c.is_factory),
                                           "current": (c.category, c.category_source), "enriched": c.enriched_at is not None}
                                      for c in cands}
     for h in conn.execute(sa.select(hooks.c.project_id, hooks.c.name, hooks.c.description, hooks.c.contract_name, hooks.c.properties,
-                                    hooks.c.pools_total).where(hooks.c.project_id.in_(ids))):
+                                    hooks.c.flags, hooks.c.pools_total).where(hooks.c.project_id.in_(ids))):
         b = by_project[h.project_id]
         b["texts"] += [h.name, h.description, h.contract_name]
+        b["names"] += [h.name, h.contract_name]
         b["props"].append(h.properties or {})
+        b["flags"].append(h.flags or {})
         if h.pools_total is not None:
             b["pools_total"] = max(b["pools_total"] or 0, h.pools_total)
-    for r in conn.execute(sa.select(hooks.c.project_id, pools.c.fee)
+    for r in conn.execute(sa.select(hooks.c.project_id, pools.c.token0, pools.c.token1, pools.c.fee)
                           .select_from(pools.join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
-                          .where(hooks.c.project_id.in_(ids), pools.c.fee.is_not(None)).distinct()):
-        by_project[r.project_id]["fees"].append(r.fee)
+                          .where(hooks.c.project_id.in_(ids), pools.c.pool_id.not_like(HOOK_POOL_PREFIX + "%"))):
+        b = by_project[r.project_id]
+        if r.fee is not None:
+            b["fees"].append(r.fee)
+        b["pools"].append((_token_id(r.token0), _token_id(r.token1), r.fee))
     n = 0
     for pid, b in by_project.items():
-        cat = fallback_category(b["texts"], b["props"], b["fees"], b["factory"], b["pools_total"])
+        cat = fallback_category(b["texts"], b["props"], b["fees"], b["factory"], b["pools_total"],
+                                names=b["names"], flags=b["flags"], pools=b["pools"])
         if cat:
             new = (cat, "rules")
         elif b["current"][1] == "rules":
@@ -219,6 +227,11 @@ def _fallback_categories(conn) -> int:
             conn.execute(sa.update(projects).values(category=new[0], category_source=new[1]).where(projects.c.id == pid))
             n += 1
     return n
+
+
+def _token_id(t) -> str | None:
+    """A pool's stored token ({"id": address, "symbol": ...}) as its address."""
+    return (t.get("id") if isinstance(t, dict) else t) or None
 
 
 def _unassigned(conn):

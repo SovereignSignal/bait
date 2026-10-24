@@ -497,6 +497,36 @@ def test_group_guesses_a_category_for_unenriched_projects_and_leaves_enriched_on
     assert _fallback_categories(conn) == 1 and conn.execute(sa.select(db.projects.c.category).where(db.projects.c.id == plain)).scalar_one() == "orders"
 
 
+def test_group_reads_permission_flags_and_pool_tokens_for_the_launch_pattern(conn, ctx):
+    from bait.rules import flags_from_address
+    from bait.steps.group import _fallback_categories
+    # ClankInitializationGuardHook on Robinhood (2026-10-23 feed: enrichment had said "other")
+    gate = insert_project(conn, "ClankInitializationGuardHook", first_seen=NOW)
+    addrs = ["0x18bff70216af1b93f3552016dec742c5d78ee000", "0xd405e0dff2d0cc7eaa48b3aec2e3f2456c072000"]
+    for a in addrs:
+        insert_hook(conn, a, 4663, project_id=gate)
+        conn.execute(sa.update(db.hooks).where(db.hooks.c.address == a).values(flags=flags_from_address(a)))
+    conn.execute(sa.update(db.projects).where(db.projects.c.id == gate).values(category="other", category_source="enrich", enriched_at=NOW))
+    eth = {"id": "0x0000000000000000000000000000000000000000", "symbol": "ETH"}
+    coins = ["0xfa31d04462746aaa24bc7e5626403e09e4b106ec", "0xb90ad88c8ecd9f22a05cd8cb365542614f279ca9", "0xcf5b720f33febdc1c9d4880b8317203b63fdf368",
+             "0x03e6a6881d0813bf6157ac4ee44d3cc73d5465a3"]
+    for i, c in enumerate(coins):
+        conn.execute(sa.insert(db.pools).values(pool_id=f"0xp{i}", chain_id=4663, hook_address=addrs[i % 2], token0=eth,
+                                                token1={"id": c, "symbol": None}, fee=3000))
+    conn.execute(sa.insert(db.pools).values(pool_id="hook:" + addrs[0], chain_id=4663, hook_address=addrs[0]))  # folded: not a pool
+    cat = lambda: tuple(conn.execute(sa.select(db.projects.c.category, db.projects.c.category_source).where(db.projects.c.id == gate)).one())
+    assert _fallback_categories(conn) == 0 and cat() == ("other", "enrich")         # 4 pools: not yet
+    conn.execute(sa.insert(db.pools).values(pool_id="0xp4", chain_id=4663, hook_address=addrs[1], token0=eth,
+                                            token1={"id": "0x16bfec50d5fe807945d593e56f38c6fb5953bb4e", "symbol": "VLADCAT"}, fee=3000))
+    assert _fallback_categories(conn) == 1 and cat() == ("launchpad", "rules")
+    # LaunchHook on Robinhood: its verified contract name says it
+    named = insert_project(conn, "LaunchHook (Robinhood)", first_seen=NOW)
+    insert_hook(conn, "0x048f2dc8a71a0321b5e119cd577c56d0190920cc", 4663, project_id=named)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0x048f2dc8a71a0321b5e119cd577c56d0190920cc").values(contract_name="LaunchHook"))
+    assert _fallback_categories(conn) == 1
+    assert conn.execute(sa.select(db.projects.c.category).where(db.projects.c.id == named)).scalar_one() == "launchpad"
+
+
 def test_rules_refine_an_enrichment_other_but_never_a_specific_enrichment_category(conn, ctx):
     from bait.steps.group import _fallback_categories
     other = insert_project(conn, "Fee Router", first_seen=NOW)

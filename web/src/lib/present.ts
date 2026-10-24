@@ -3,20 +3,28 @@ import type { DeployerSource, HookView } from "./types";
 import { CHAINS, knownChain } from "./chains";
 import { weekDelta } from "./feed";
 import { clip, dayLabel, deltaWords, fmtDelta, int, usd } from "./format";
-import { CATEGORY_LABEL, CATEGORY_SHORT, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
+import { CATEGORY_LABEL, CATEGORY_SHORT, isShownCategory, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
   return ids.map((c) => CHAINS[c]?.name ?? `Chain ${c}`).join(sep);
 }
 
+/** "Launchpad · Factory". A project with no established category ("other") shows none, never a label called Other:
+ * the line can be empty, so callers join it with what follows instead of printing a leading separator. */
 export function categoryLine(p: Pick<ProjectSummary, "category" | "secondaryCategories" | "isFactory">): string {
-  const parts = [CATEGORY_LABEL[p.category] ?? "Other", ...p.secondaryCategories.map((c) => CATEGORY_LABEL[c] ?? c)];
+  const parts = [p.category, ...p.secondaryCategories].filter(isShownCategory).map((c) => CATEGORY_LABEL[c]);
   if (p.isFactory) parts.push("Factory");
   return parts.join(" · ");
 }
 
+/** The chip label, or "" for a project with no established category. */
 export function categoryShort(c: RowView["category"]): string {
-  return CATEGORY_SHORT[c] ?? "Other";
+  return isShownCategory(c) ? CATEGORY_SHORT[c] : "";
+}
+
+/** "Launchpad · Base, Ethereum", or just the chains when no category is established. */
+export function categoryAndChains(c: RowView["category"], chains: ChainId[], sep = ", "): string {
+  return [categoryShort(c), chainNames(chains, sep)].filter(Boolean).join(" · ");
 }
 
 export function sourceLine(p: ProjectSummary): string {
@@ -166,7 +174,7 @@ export function pace(vol24h: number | null, vol7d: number | null): number {
 }
 
 export function rowLabel(r: Pick<RowView, "name" | "category" | "chains" | "isNew" | "vol7d" | "vol7dPrev"> & { isWash?: boolean; washHistorical?: boolean; isDormant?: boolean; activityStatus?: RowView["activityStatus"] }, rank: number | undefined, m: { v: number | null; win: Win }): string {
-  const where = r.category !== "other" ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
+  const where = categoryShort(r.category) ? `${categoryShort(r.category)} on ${chainNames(r.chains)}` : chainNames(r.chains);
   const parts = [`${rank ? `#${rank} ` : ""}${r.name}`, where, `${usd(m.v)} ${m.win === "7d" ? "7-day" : "1-day"} volume`];
   const d = weekDelta(r);
   if (r.isWash) parts.push(r.washHistorical ? "historical wash-like volume" : "wash-like volume");

@@ -336,6 +336,14 @@ export const CATEGORY_LABEL: Record<Category, string> = {
 
 export const CATEGORIES = Object.keys(CATEGORY_LABEL) as Category[];
 
+/** The categories the site shows. "other" means no category was established (nothing in the sources or the chain
+ * facts names one), so it is never a chip, a filter or a label: the API still returns it, the pages show nothing. */
+export const SHOWN_CATEGORIES = CATEGORIES.filter((c) => c !== "other");
+
+export function isShownCategory(c: string | null | undefined): c is Category {
+  return !!c && c !== "other" && c in CATEGORY_LABEL;
+}
+
 export function isCategory(s: string | undefined): s is Category {
   return !!s && s in CATEGORY_LABEL;
 }

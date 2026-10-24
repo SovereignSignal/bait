@@ -10,7 +10,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CHAINS } from "@/lib/chains";
 import { emptyCopy, feedHref, feedHrefAt, feedQs, LIST_PAGE, listFor, moversFor, parseFeedQuery, projectHref, sameQuery, type FeedSeed } from "@/lib/feed";
 import { ago, NONE, usd } from "@/lib/format";
-import { categoryShort, chainNames, deltaText, rowLabel, rowMetric } from "@/lib/present";
+import { categoryAndChains, deltaText, rowLabel, rowMetric } from "@/lib/present";
 import { loadRows, peekRows } from "@/lib/rows";
 import { CATEGORY_SHORT, TAB_SHORT, TABS, type FeedQuery, type HookIndex, type LaunchView, type RowView } from "@/lib/types";
 import { ProjectAvatar } from "./Avatar";
@@ -265,7 +265,7 @@ function ProjectListView({ seed, selected, view, now, query: urlQuery, launches,
           <>
             {list.slice(0, limit).map((r, i) => {
               const m = rowMetric(r, tabForRows === "new");
-              const sub = r.whatLine || [r.category !== "other" ? categoryShort(r.category) : "", chainNames(r.chains)].filter(Boolean).join(" · ");
+              const sub = r.whatLine || categoryAndChains(r.category, r.chains);
               return (
                 <Link
                   key={r.slug}

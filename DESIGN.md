@@ -819,3 +819,40 @@ behind them; replaying that shape for 45 nights left 292 of the 500 projects nev
 21st, and a family's later clones get what is left. Replayed, each of the 500 is asked within 10 nights. Tests are now
 held offline by `tests/conftest.py`: a name lookup or connect beyond loopback is refused and fails the test that tried.
 The old guard only set `KEYLESS=0`, which is how the CLI test's explorer and Sourcify calls went unnoticed.
+
+## 2026-10-24: Category coverage
+
+On the 2026-10-23 feed, 56 of the 181 projects with $10K+ of 7-day volume were `other`, all unlisted. None had a
+dynamic-fee pool, none was a factory or reached 100 pools, no hook had a registry name or description, and the 11
+verified contract names (LaunchHook, SynthHookV2, ZeroTraceTaxHook, ...) matched no word rule, so nothing could fire.
+45 of them show the web's placeholder line for an unidentified project.
+
+- **Rule: "launch" in a hook's own name.** The word in a registry or verified contract name ("LaunchHook", "Fair Launch
+  Hook") says launchpad, checked in the launchpad slot of the word rules so an earlier category's words still win. Never
+  in a description: OHMVAULT's "80% at launch, decaying to 5%" is a fee schedule. In the feed, 27 of the 29 projects
+  with the word in their name and a category were launchpads; the other two were categories enrichment wrote (one
+  oracle, one dynamic fee), which a guess never replaces.
+- **Rule: the launch pattern** (`rules.launch_pattern`), last, when nothing else says. Every hook of the project has
+  beforeInitialize (it decides who creates its pools); the stored pools (folded `hook:` rows excluded) number at least 5,
+  80% of them hold one shared token and the other coin is unique in 90% of those (one pool per coin); and either
+  beforeInitialize is each hook's only permission, or each hook returns a swap delta, has no afterInitialize, and every
+  pool's LP fee is 0 (the hook takes the fee). Against the categories in the feed: 3 of 3 gate-only and 51 of 54
+  fee-taking projects were launchpads; the other three lines describe fee hooks on one token's or a launch platform's
+  pools (LiquidGuard, Lumoria, Pangea). Without the beforeInitialize gate the share falls to 77-87%: tokenized-stock and
+  leveraged-token venues on Ink and Robinhood have the same pool shape. afterInitialize is excluded because an oracle
+  seeds its observations there (BackGeoOracle matched everything else).
+- **Not added.** A dynamic fee from swap permissions, or from stable and same-symbol pairs: none of the 56 has a
+  dynamic-fee pool, and a pool's dynamic flag already decides dynamic fee. Hooks with many pools at varied static fees
+  (afterInitialize, afterAddLiquidity, swaps), the six full-liquidity-and-swap hooks on Ethereum's ELEVATE pools, and the
+  single-pool hooks: permissions say what a hook can do, not what it is for.
+- **Effect.** 6 of the 56 become launchpads: two LaunchHook contracts by name, ClankInitializationGuardHook by the gate,
+  SynthHookV2, ChimeraHook404 and ERC20THook by the fee-taking pattern. Of the 926 projects the public API let us check
+  (any volume, hooklisted, or a category), 10 `other` move, all to launchpad; no specific category changes.
+- **Web: no category is shown as none.** `other` is the absence of a category, so it is never a chip, a filter or a
+  label: the feed offers no Other chip (an old `?category=other` link lists everything), and the project page, leaders
+  and share image print no "Other". The API still returns `other`. "Unclassified" was the alternative; a label for none
+  still reads as a category, and the feed rows already omitted it.
+- **The placeholder line is not stored.** "On-chain hook activity. Project identity and purpose have not been
+  independently confirmed." is written by the web (`researchProject`) over whatever line is stored, for an unidentified
+  project (an `unlisted-hook` slug or a "… hook · 0x…" name). The pipeline never writes it, so the enrich retry (empty
+  lines only, `ENRICH_RETRY_DAYS`) needs no change.
