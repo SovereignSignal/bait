@@ -1,7 +1,7 @@
 // One project, one set of figures across pages: names, counts, TVL and audit badges (demo smoke, 2026-10-14).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditLinks, auditMention, topWalletText, deployerShareText, deployersOf, deployerSourceLabel, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
+import { auditLinks, auditMention, topWalletText, deployerShareText, deployersOf, deployerSourceLabel, digestIntro, listedDigestItems, poolTvlNote, tradePool, withCurrentNames } from "./present";
 import type { DigestItem } from "./types";
 
 const item = (slug: string, name: string, kind: DigestItem["kind"] = "trending"): DigestItem => ({ slug, name, kind, line: "", vol7d: 1 });
@@ -15,13 +15,40 @@ test("week page names come from today's list, the same label /leaders and the pr
 
 test("digest intro counts what /leaders counts; an older digest says what its number is", () => {
   assert.equal(
-    digestIntro([item("a", "A", "new")], [], { projects: 2254, traded: 820, tvl_usd: 1_000_000, vol_7d: 5_000_000 }),
+    digestIntro([item("a", "A", "new")], [], { projects: 2254, traded: 820, new: 1, tvl_usd: 1_000_000, vol_7d: 5_000_000 }),
     "1 new project cleared the bar. 820 projects traded this week, $1M TVL, $5M 7d volume.",
   );
   assert.equal(
-    digestIntro([], [], { projects: 2254, tvl_usd: 1_000_000, vol_7d: 5_000_000 }),
-    "No new projects cleared the bar. 2,254 projects tracked (live pools, not wash-like), $1M TVL, $5M 7d volume.",
+    digestIntro([], [], { projects: 2254, traded: 820, new: 0, tvl_usd: 1_000_000, vol_7d: 5_000_000 }).split(". ")[0],
+    "No new projects cleared the bar",
   );
+  // digests before 2026-10-26 kept 20 New by TVL and no count of how many cleared the bar: they say what they list
+  assert.equal(
+    digestIntro([], [], { projects: 2254, tvl_usd: 1_000_000, vol_7d: 5_000_000 }),
+    "No new projects listed. 2,254 projects tracked (live pools, not wash-like), $1M TVL, $5M 7d volume.",
+  );
+});
+
+test("a digest lists, counts and names what the New and Trending tabs would (2026-10-12: '20 new' above a list of 4)", () => {
+  const stored: DigestItem[] = [
+    { ...item("aegis", "Aegis", "new"), vol7d: 5_000 },
+    { ...item("quiet", "Quiet", "new"), vol7d: null },                 // unknown week: listed, as on the New tab
+    { ...item("seeded", "Seeded", "new"), vol7d: 0 },                  // liquidity, nothing traded: not listed
+    item("u1", "Unlisted hook 0x58a6…94c0", "new"),
+    item("u2", "POP/USDT hook · 0xca9d…5800", "new"),
+    item("fam", "LUCKYKEY/WETH hook family · 0x0f48…", "trending"),
+    item("hot", "Hot", "trending"),
+  ];
+  const listed = listedDigestItems(stored);
+  assert.deepEqual(listed.map((i) => i.slug), ["aegis", "quiet", "hot"]);
+  const fresh = listed.filter((i) => i.kind === "new"), hot = listed.filter((i) => i.kind === "trending");
+  assert.equal(
+    digestIntro(fresh, hot, { projects: 10, traded: 5, tvl_usd: 1e6, vol_7d: 5e6 }),
+    "2 new projects listed. Hot led trending. 5 projects traded this week, $1M TVL, $5M 7d volume.",
+  );
+  // newer digests store how many cleared the bar; the list keeps 20 of them
+  assert.equal(digestIntro(fresh, hot, { projects: 10, traded: 5, new: 34, tvl_usd: 1e6, vol_7d: 5e6 }).split(". ")[0], "34 new projects cleared the bar; 2 are listed");
+  assert.equal(digestIntro(fresh, hot, { projects: 10, traded: 5, new: 2, tvl_usd: 1e6, vol_7d: 5e6 }).split(". ")[0], "2 new projects cleared the bar");
 });
 
 test("pool TVL note: unknown pool TVL is not zero or evidence that the total belongs to omitted pools", () => {

@@ -67,7 +67,8 @@ slugs redirect.
   Score `log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)`; tie-break on TVL; top 20 on the home page.
   Folded launchpad volume (a capped hook's aggregate pool) is displayed, never ranked.
 - **New**: first seen within 7 days, and a pool above $1K TVL or at least 10 swaps in the week. Unnamed hooks and
-  wash-flagged projects are excluded.
+  wash-flagged projects are excluded, and the New tab and the weekly digest skip a project whose 7-day volume is a
+  measured $0 (an unknown week stays). The digest's Trending list is named projects only, as on the Trending tab.
 - **Spam** (hidden, 404): no pools, or every pool under $100 TVL with fewer than 10 swaps lifetime, unless the project
   moved $1M or more or has historical usage.
 - **Wash-like** (`WASH_REASONS`, badge in All, out of every ranking): pools carrying at least half the project's volume

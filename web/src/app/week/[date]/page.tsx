@@ -5,7 +5,6 @@ import { Footer } from "@/components/Footer";
 import { getDigest, listDigests } from "@/db/queries";
 import { longDate, usd } from "@/lib/format";
 import s from "../week.module.css";
-import { isUnnamed } from "@/lib/unlisted";
 
 export const revalidate = 600; // demo window: a first visit is at most ten minutes behind the list
 export const dynamicParams = true;
@@ -38,8 +37,8 @@ export default async function WeekPage({ params }: { params: Promise<{ date: str
   const idx = all.findIndex((x) => x.week === d.week);
   const newer = idx > 0 ? all[idx - 1] : null;
   const older = idx >= 0 && idx < all.length - 1 ? all[idx + 1] : null;
-  // as the New tab: skip hooks nobody named and launches with no volume yet (the digest itself keeps them)
-  const fresh = d.items.filter((i) => i.kind === "new" && !isUnnamed(i.name) && i.vol7d !== 0);
+  // already as the New and Trending tabs would list them (listedDigestItems), so the intro counts these rows
+  const fresh = d.items.filter((i) => i.kind === "new");
   const hot = d.items.filter((i) => i.kind === "trending");
 
   return (

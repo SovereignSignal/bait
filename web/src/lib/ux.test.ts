@@ -28,6 +28,10 @@ test("rowMetric: the closed day only when asked for and known", () => {
   assert.deepEqual(rowMetric({ vol24h: null, vol7d: 70 }, true), { v: 70, win: "7d" });
   assert.deepEqual(rowMetric({ vol24h: 5, vol7d: 70 }, false), { v: 70, win: "7d" });
 });
+test("rowMetric: a closed day with no trades shows the week, not $0 1d (New tab, 2026-10-24: ScoreHook $207K 7d read $0)", () => {
+  assert.deepEqual(rowMetric({ vol24h: 0, vol7d: 207_084 }, true), { v: 207_084, win: "7d" });
+  assert.deepEqual(rowMetric({ vol24h: 0, vol7d: null }, true), { v: null, win: "7d" });
+});
 test("unpriced swaps ahead of a copied snapshot do not render zero USD; positive observed weekly volume remains visible", () => {
   assert.deepEqual(poolVolume({ vol24h: null, tx7d: null }), { text: NONE });
   assert.equal(usd(rowMetric({ vol24h: null, vol7d: null }, true).v), NONE);

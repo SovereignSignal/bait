@@ -4,6 +4,7 @@ import { CHAINS, knownChain } from "./chains";
 import { weekDelta } from "./feed";
 import { clip, dayLabel, deltaWords, fmtDelta, int, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, isShownCategory, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
+import { isUnnamed } from "./unlisted";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
   return ids.map((c) => CHAINS[c]?.name ?? `Chain ${c}`).join(sep);
@@ -44,9 +45,11 @@ export function deltaText(r: { vol7d: number | null; vol7dPrev: number | null })
 // is what the Uniswap app's "Past day" shows, and the two differ by up to two days of trading.
 export type Win = "1d" | "7d";
 
-/** The number a row or mover shows and the window it covers. The closed day only when asked for and known. */
+/** The number a row or mover shows and the window it covers. The closed day only when asked for and it traded: a launch
+ * that went quiet on the closed day shows its week, not "$0 1d" (New tab, 2026-10-24: ScoreHook, CabalFeeHook and
+ * ArcadeHook read "$0 1d" beside $12K to $207K weeks). An unknown day shows the week too. */
 export function rowMetric(r: { vol24h: number | null; vol7d: number | null }, use24h: boolean): { v: number | null; win: Win } {
-  return use24h && r.vol24h != null ? { v: r.vol24h, win: "1d" } : { v: r.vol7d, win: "7d" };
+  return use24h && r.vol24h != null && r.vol24h > 0 ? { v: r.vol24h, win: "1d" } : { v: r.vol7d, win: "7d" };
 }
 
 const DAY_MS = 86_400_000;
@@ -279,16 +282,35 @@ export function withCurrentNames(items: DigestItem[], names: ReadonlyMap<string,
   return items.map((i) => ({ ...i, name: names.get(i.slug) ?? i.name }));
 }
 
-/** The digest's one-line summary. `traded` is the /leaders "Projects traded this week" count (non-spam, non-wash, 7-day
- * volume > 0); digests written before it existed stored only every tracked project, and say that instead. */
+/** A digest's items as the feed's tabs would list them (feed.ts applyTab): never a project nobody named, and in New never
+ * a launch whose 7-day volume is a measured $0 (unknown stays). The 2026-10-12 and 10-19 digests stored 20 New each,
+ * mostly such rows, and the week page said "20 new projects" above 4 and 6. Intro, week page and RSS use this one list. */
+export function listedDigestItems(items: DigestItem[]): DigestItem[] {
+  return items.filter((i) => !isUnnamed(i.name) && (i.kind !== "new" || i.vol7d !== 0));
+}
+
+/** The digest's one-line summary, counting the New items it lists (`fresh`, already listedDigestItems). `totals.new`
+ * (digests from 2026-10-26) is every project that cleared the bar, of which the digest lists at most 20. Older digests
+ * kept only the 20 with the most TVL, unnamed and $0 ones included, so how many cleared the bar is not known: they say
+ * how many are listed. `traded` is the /leaders "Projects traded this week" count (non-spam, non-wash, 7-day volume > 0);
+ * digests written before it existed stored only every tracked project, and say that instead. */
 export function digestIntro(
   fresh: DigestItem[],
   hot: DigestItem[],
-  totals: { projects: number; traded?: number; tvl_usd: number; vol_7d: number },
+  totals: { projects: number; traded?: number; new?: number; tvl_usd: number; vol_7d: number },
 ): string {
   const n = (x: number) => x.toLocaleString("en-US");
+  const projects = (x: number) => `${n(x)} new project${x === 1 ? "" : "s"}`;
+  const listed = fresh.length;
+  const cleared = totals.new == null ? null : Math.max(totals.new, listed);
   return [
-    fresh.length === 0 ? "No new projects cleared the bar." : `${fresh.length} new project${fresh.length === 1 ? "" : "s"} cleared the bar.`,
+    cleared == null
+      ? listed === 0 ? "No new projects listed." : `${projects(listed)} listed.`
+      : cleared === 0
+        ? "No new projects cleared the bar."
+        : cleared > listed
+          ? `${projects(cleared)} cleared the bar; ${n(listed)} ${listed === 1 ? "is" : "are"} listed.`
+          : `${projects(cleared)} cleared the bar.`,
     hot.length > 0 ? `${hot[0].name} led trending.` : null,
     totals.traded != null
       ? `${n(totals.traded)} project${totals.traded === 1 ? "" : "s"} traded this week, ${usd(totals.tvl_usd)} TVL, ${usd(totals.vol_7d)} 7d volume.`

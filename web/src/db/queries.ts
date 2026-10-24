@@ -22,7 +22,7 @@ import { routingLists, routingListsEnabled } from "./routing-lists";
 import { CHAINS, knownChain } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate } from "@/lib/format";
-import { auditLinks, digestIntro, digestItem, hookKeys, toRow, withCurrentNames } from "@/lib/present";
+import { auditLinks, digestIntro, digestItem, hookKeys, listedDigestItems, toRow, withCurrentNames } from "@/lib/present";
 import { packRows, rowsVersion, type PackedRows } from "@/lib/rows";
 import type {
   Category,
@@ -377,8 +377,9 @@ function toDigest(row: typeof t.digests.$inferSelect, names: ReadonlyMap<string,
   const week = String(row.weekOf);
   const b = row.body;
   const card = (kind: DigestItem["kind"]) => (c: t.DigestCard): DigestItem => digestItem(c, kind);
-  const fresh = withCurrentNames((b.new ?? []).map(card("new")), names);
-  const hot = withCurrentNames((b.trending ?? []).map(card("trending")), names);
+  // today's names, then the rows the feed would list: the intro counts what the page shows
+  const fresh = listedDigestItems(withCurrentNames((b.new ?? []).map(card("new")), names));
+  const hot = listedDigestItems(withCurrentNames((b.trending ?? []).map(card("trending")), names));
   const intro = digestIntro(fresh, hot, b.totals ?? { projects: 0, tvl_usd: 0, vol_7d: 0 });
   return { week, title: `Week of ${longDate(week)}`, intro, items: [...fresh, ...hot], createdAt: b.generated_at ?? `${week}T06:00:00Z` };
 }
