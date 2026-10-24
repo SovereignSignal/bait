@@ -6,18 +6,21 @@ is where they get made.
 
 ## Setup
 
-Node 20, Python 3.12. A Postgres is optional. See `README.md` for the three-command fixture start; the per-service
-details are in `pipeline/README.md`, `web/README.md` and `db/README.md`.
+Node 20.9 or later (CI runs 22), Python 3.12. A Postgres is optional. See `README.md` for the three-command fixture
+start; the per-service details are in `pipeline/README.md`, `web/README.md` and `db/README.md`.
 
 ```sh
+# from the repository root
 # pipeline: SQLite in memory, HTTP mocked, no keys, no network
 cd pipeline && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m pytest -q
 
 # web: unit tests, types, lint, build
-cd web && npm ci && npm test && npm run typecheck && npm run lint && npm run build
+cd ../web && npm ci && npm test && npm run typecheck && npm run lint && npm run build
 
-# web: browser suites (build first; each starts its own server on sample data)
-cd web && npm run e2e && BAIT_E2E_REPRESENTATIVE=1 npm run e2e
+# web: browser suites, each starting its own server on sample data. Once per machine: npx playwright install chromium
+# (add --with-deps on a bare Linux box). Rebuild before the second suite: the two must not share ISR pages.
+npm run e2e
+npm run build && BAIT_E2E_REPRESENTATIVE=1 npm run e2e
 ```
 
 Postgres-only tests skip unless `TEST_DATABASE_URL` (pipeline) or `BAIT_TEST_DATABASE_URL` (web) points at a disposable

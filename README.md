@@ -46,8 +46,9 @@ Exa, Claude ─────────────────┘        │
 
 ## Run it locally
 
-You need Python 3.12, Node 20 or later and git. Installing packages needs the network; nothing below needs a key or
-makes a paid call. Run the commands from the repository root.
+You need Python 3.12 (if `python3 --version` says otherwise, use `python3.12` below), Node 20.9 or later (CI runs 22)
+and git. Installing packages needs the network; nothing below needs a key or makes a paid call. Run the commands from
+the repository root.
 
 **On sample data, in three commands** (no database):
 
@@ -75,7 +76,7 @@ cd web && ln -s ../.env .env && npm run dev    # Next.js reads web/.env, not the
 
 - Without keys the snapshot pages GeckoTerminal's free tier, about 5 calls a minute, so a full run takes about an
   hour and `GT 429 ... retry` lines in the log are normal. `--chains arbitrum` limits it to one chain (most fixture
-  hooks are on Arbitrum) and takes 10 to 15 minutes.
+  hooks are on Arbitrum) and takes 8 to 15 minutes.
 - The feed then lists the projects whose hooks sit in GeckoTerminal's busiest v4 pools: fixture hooks, plus
   `unlisted-hook-...` projects for hooks the registry sample does not list. Without `ANTHROPIC_API_KEY` the
   "what it does" line is the registry's description or a placeholder.
@@ -97,7 +98,7 @@ Per-service details: [`pipeline/README.md`](pipeline/README.md), [`web/README.md
 |---|---|---|
 | Uniswap hooklist | registry names, flags, audit links | names are candidates; merges need bytecode or deployer evidence |
 | Envio HyperSync | every hooked pool, 14 days of swaps, 16 chains | free tier is about 20 queries a minute; Base pool lookups are the slow part |
-| GeckoTerminal | pool TVL, rolling 24h figures, closed-day candles, recent trades, top wallets | about 5 calls a minute on the free tier; keyless runs take ~35 minutes |
+| GeckoTerminal | pool TVL, rolling 24h figures, closed-day candles, recent trades, top wallets | about 5 calls a minute on the free tier; a keyless run of all ten chains takes about an hour |
 | Public RPC, Blockscout, Sourcify, Routescan | hook resolution, bytecode, contract names, deployers | per-chain quirks listed in `pipeline/README.md` |
 | DefiLlama | prices | current prices, so raw indexer USD is an estimate |
 | Claude | the two text lines, classifying unnamed hooks and radar results | paid; optional and budget-capped |

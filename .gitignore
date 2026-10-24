@@ -19,6 +19,7 @@ venv/
 .pytest_cache/
 *.egg-info/
 *.sqlite
+*.sqlite-journal
 
 # editors / os
 .DS_Store
