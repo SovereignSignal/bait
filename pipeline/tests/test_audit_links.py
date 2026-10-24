@@ -81,6 +81,16 @@ def test_switched_off_without_a_probe(conn, monkeypatch):
     assert audit_links.check(conn, NOW, signals._set_signal) == {"audit_links": 0, "audit_links_dead": 0}
 
 
+def test_empty_caps_read_as_the_defaults(conn, monkeypatch):
+    # A copied .env.example sets both to "": that means 300 links and 180 s, not a ValueError the signals step would log
+    # as a failed check every night. A cap or budget read as 0 would ask nothing, so one link asked shows neither is 0.
+    pid = _audited(conn, "Angstrom", ANGSTROM)
+    monkeypatch.setenv("AUDIT_LINKS_MAX", "")
+    monkeypatch.setenv("AUDIT_LINKS_BUDGET_S", "")
+    assert audit_links.check(conn, NOW, signals._set_signal, {ANGSTROM: 404}.get) == {"audit_links": 1, "audit_links_dead": 1}
+    assert _dead(conn, pid) == [ANGSTROM]
+
+
 def test_only_public_hosts_are_asked():
     public = lambda host: ["140.82.112.3"]                     # noqa: E731
     assert audit_links.public_url("https://github.com/a/b", public)

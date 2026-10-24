@@ -316,9 +316,11 @@ Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_Q
 `RADAR_CLASSIFY_MAX` (30); see "Dev radar" above.
 
 Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30), `ACTIVITY_WASH_POOLS` (24h-wash
-candidates fetched as well, for the symmetric-trader check; default 10),
-`ENRICH_MAX` (projects enriched with Claude per run, busiest first, only projects with live pools; default 20), Keyless source:
-`KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
+candidates fetched as well, for the symmetric-trader check; default 10).
+
+Enrich step: `ENRICH_MAX` (20), `ENRICH_RETRY_DAYS` (7).
+
+Keyless source: `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP` (pools past it get yesterday's volume from the rolling 24h,
 marked `estimated`).
 

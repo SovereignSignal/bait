@@ -133,8 +133,9 @@ def check(conn: sa.Connection, now, set_signal, probe: Probe | None = None) -> d
     if not by_project and not any(prev.values()):
         return out
     urls = sorted(set().union(*by_project.values())) if by_project else []
-    cap = int(os.environ.get("AUDIT_LINKS_MAX", "300"))
-    budget = float(os.environ.get("AUDIT_LINKS_BUDGET_S", "180"))
+    # `or default`: a copied .env.example leaves these set but empty, which means the default, not a crash
+    cap = int(os.environ.get("AUDIT_LINKS_MAX", "") or 300)
+    budget = float(os.environ.get("AUDIT_LINKS_BUDGET_S", "") or 180)
     if len(urls) > cap:
         log.warning("audit links: %d published, asking %d tonight (AUDIT_LINKS_MAX)", len(urls), cap)
         urls = urls[:cap]
