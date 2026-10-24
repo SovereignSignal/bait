@@ -18,10 +18,11 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import re
 import socket
 import time
 from typing import Callable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 import sqlalchemy as sa
 
@@ -42,6 +43,52 @@ def published(value: object) -> str | None:
     """The link exactly as stored when it is a web URL the page would show, else None. The web compares the stored
     string, so the dead list must hold the same string, not a normalized one."""
     return value if isinstance(value, str) and web_url(value) == value else None
+
+
+# The web's auditDocument (web/src/lib/present.ts), which decides what the "Audit linked" badge counts; the prose checks
+# read the same links (enrich.hook_facts), so a line or blurb never claims an audit the badge does not show.
+_AUDIT_PATH = re.compile(r"audit|review|report|security", re.I)
+_SOURCE_FILE = re.compile(r"\.(sol|vy|rs|ts|js|py|go|move|cairo)$", re.I)
+
+
+def audit_document(url: str) -> bool:
+    """False for a GitHub link to code (a repository, a code folder or source file, a pull request), not to an audit: a
+    GitHub link counts when the path under the repository names an audit, review, report or security file or folder, or
+    the repository itself is an audit repository. Other hosts are taken as published."""
+    try:
+        u = urlsplit(url)
+        host = (u.hostname or "").lower()
+    except (TypeError, ValueError):
+        return False
+    if not u.scheme or not host:                       # not a URL (the web's new URL() throws)
+        return False
+    host = host.removeprefix("www.")
+    if host not in ("github.com", "raw.githubusercontent.com"):
+        return True
+    parts = [unquote(x) for x in u.path.split("/") if x]
+    # github.com/<owner>/<repo>/(blob|tree|raw|blame)/<ref>/<path>, or /<owner>/<repo>/<pull|releases|…>/…;
+    # raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
+    if host == "raw.githubusercontent.com":
+        path = parts[3:]
+    elif len(parts) > 2 and parts[2] in ("blob", "tree", "raw", "blame"):
+        path = parts[4:]
+    else:
+        path = parts[2:]
+    if not path:
+        return bool(_AUDIT_PATH.search(parts[1] if len(parts) > 1 else ""))
+    if _SOURCE_FILE.search(path[-1]):
+        return False
+    return bool(_AUDIT_PATH.search("/".join(path)))
+
+
+def dead_links(conn: sa.Connection, project_id: int) -> frozenset[str]:
+    """The project's published links the nightly check found gone (signals kind audit_links), which the web leaves out of
+    the badge; a malformed value counts as none, as on the web."""
+    from .db import signals
+    value = conn.execute(sa.select(signals.c.value).where(signals.c.project_id == project_id, signals.c.kind == KIND)
+                         ).scalar_one_or_none()
+    dead = value.get("dead") if isinstance(value, dict) else None
+    return frozenset(u for u in dead if isinstance(u, str)) if isinstance(dead, list) else frozenset()
 
 
 def public_url(url: str, resolve: Callable[[str], list[str]] | None = None) -> bool:

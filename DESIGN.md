@@ -957,3 +957,90 @@ Audit items open for the MVP, checked against the live API on 2026-10-24 (data d
   not known; their intro says how many are listed ("4 new projects listed") instead of a count it cannot back.
 - **Still open.** A project page's daily volume bars (and the API's `daily_volume_usd`) still draw $0 for a day with no
   rows on a chain that is not ready: Base projects whose week reads a dash can show a row of $0 days.
+
+## Prose accuracy (2026-10-24)
+
+A fact-check of the 30 busiest projects with a written line (by 7-day volume, data day 2026-10-23) held every claim in
+`what_line` and `why_blurb` to the verified source (Sourcify), the hooklist registry, the project's own repo and the
+figures beside the text: 63 of about 235 claims were wrong, on 19 of the 30 projects. By pattern: stale figures from the
+Oct 8 blurbs (24), trend words opposite to the weekly volumes (9), size words or TVL that do not fit the metric (10),
+mechanics the evidence does not show (7: a fixed 1% fee where the source allows 1 to 3%, and a line copied from a
+different project's GitHub repo), a hooklisted or verified hook called "unlisted", "purpose unknown" or "unverified"
+(6), internal words such as "in the input" or "the alive signal is false" (4), press cited with no receipts (2), and an
+audit named with no audit link (1). No line or blurb in the top 200 named a chain the project is not on.
+
+- **Rule now: prose is checked before it is stored.** `prose_checks.py` runs inside `Claude.what_line` and
+  `Claude.why_blurb`, so enrich, signals and repair all get it. A clause (line) or sentence (blurb) is dropped when it
+  names a chain not in `chains`; names an audit without an audit link (read as the web's audit badge reads it, so "no
+  audit is listed" passes); cites press with no receipts; calls a hook unlisted while it has a hooklist description,
+  its purpose unknown while a description or source snippet documents it, or unverified when nothing passed in says
+  so; quotes a dollar amount, count or percentage that matches no metric within rounding; uses a size word ("a few
+  hundred wallets", "three pools") that does not fit the metric; says growing or fading against `vol_7d` and
+  `vol_7d_prev` ("sharply", "clearly" and "well above" need more than 10%), "nothing last week" when there was volume,
+  or calls a known TVL none or an unknown one zero; or leaks internal words. "In the input" is cut in place. What is
+  left is stored; an empty line is retried after `ENRICH_RETRY_DAYS`, and an empty blurb is not shown.
+- **Prompts state the same rules**, plus the two no pattern can see: describe what the hooks share rather than one
+  hook's parameter, and follow the source and registry over researched facts that may belong to a similarly named
+  project.
+- **A check needs its fact.** The blurb context carries no `chains`, `verified_source` or hook audit links today, so
+  those checks do not run on blurbs (and a blurb's audit mention needs the researched audit link). Adding them to
+  `signals._blurb_ctx`, and `verified_source` / `hooklisted` to `enrich.what_context`, turns them on; both files are in
+  flight in another change, so this one leaves them alone.
+- **Not done here.** Stored text is not rewritten: the PR lists the live slugs to re-enrich. A blurb is still rewritten
+  only when signals change, so it can go stale against moving metrics; `blurb_problems(text, ctx)` is the test a
+  rewrite trigger in `_needs_blurb` could use.
+
+## Prose accuracy, follow-up (2026-10-24)
+
+Update to "Prose accuracy (2026-10-24)" above, made before it merged and after #77 and #78 reshaped both context
+builders. Three things there no longer hold: the checks that lacked their facts have them, a blurb's audit mention no
+longer waits for a researched link (none reaches the blurb since Parallel went), and stored text is no longer left for
+a manual re-enrich.
+
+- **Both contexts carry the hook facts** (`enrich.hook_facts`, used by `what_context` and `signals._blurb_ctx`):
+  `hooks_n`, `chains`, `hooklisted`, `verified_source`, up to five `hooklist_descriptions`, and `audit_urls` (the hooks'
+  hooklist links that the web's audit badge shows). The blurb's metrics add `wallets_7d`. `hooklisted` and
+  `verified_source` are true when any hook is, false only when every hook is known not to be, and null otherwise:
+  "unverified" stands only when no hook of the family is verified and none is unknown, and a hook found on chain and
+  never checked is not a no. In `what_context` the enrichment (the verified source, its snippet up to 4,000 characters)
+  now comes last, so the prompt's 12,000-character cut takes the snippet's tail rather than the facts. Nothing from
+  `enrichment["parallel"]` or the frozen `exa` and `nansen` signals is sent. A blurb prompt grows by about 400 to 1,800
+  characters.
+- **The retired paths are out of the checks.** An audit link is a web URL in `audit_urls`, which holds what the badge
+  counts since #84: a report, not code (`audit_links.audit_document` ports the web's `auditDocument`; a test runs the
+  web's cases), and not a link the nightly check found gone (`audit_links.dead_links`). The researched link with a team,
+  the top-level `audit_url` and the v4 core exclusion that applied only to researched links are gone; the stored
+  Parallel link the web still counts under its old guard is not sent, so no line or blurb claims that audit. Coverage
+  reads only the stored `receipts` the blurb lists, never the `exa` signal. A verified source now counts as
+  documentation for "purpose unknown", so the blurb check runs without the snippet (SessionFeeHook's blurb called its
+  fee logic unknown beside a verified SessionFeeHook.sol).
+- **A missing fact skips or drops; "never strips text" was wrong.** Where the text may be true the check skips (chains,
+  "unlisted", "purpose unknown", a number word over an unknown count). Where the claim needs the fact it drops:
+  "unverified" unless `verified_source` is false, an audit without a link, a figure or size phrase over an unknown
+  metric, a weekly trend over an unknown week. The `prose_checks.py` docstring lists every check.
+- **Prompts.** The what_line rules no longer mention researched facts, website, GitHub, team or "the facts under
+  enrichment": only the verified source has been there since 2026-10-24. Both prompts now say "unlisted" needs
+  `hooklisted` false, "unverified" needs `verified_source` false, "purpose unknown" needs no description and no verified
+  source, and an audit needs `audit_urls`.
+- **Stored text that fails is written again by the nightly.** Signals: a target's blurb that is empty or fails
+  `blurb_problems` against tonight's context is rewritten once its `blurb_at` is `ENRICH_RETRY_DAYS` (7) old. Then up to
+  `BLURB_RECHECK_MAX` (20) projects outside the targets whose blurb fails the same way are rewritten, busiest first,
+  with GitHub and alive refreshed first as for a target. Trending multiplies by the week-on-week ratio, so a project
+  whose volume fell leaves the targets while its page keeps the blurb: 8 of the 19 slugs the PR lists lost volume week
+  on week. `blurbs_flagged` counts both. Enrich: after never-enriched projects and empty lines, a busy project whose
+  stored line fails `what_line_problems` against its hooks today is enriched again once `enriched_at` is
+  `ENRICH_RETRY_DAYS` old, inside `ENRICH_MAX` (`lines_flagged`). This replaces the manual re-enrich the PR listed,
+  except where only the prompt can see the error: the launchhook and anchorhook-robinhood lines describe mechanics no
+  pattern checks.
+- **Loop guard: the retry window, no new column.** New text is checked against that night's context before it is
+  stored, so it can fail later only when the facts move (a trend reverses, a count crosses a size word). A rewrite
+  resets `blurb_at` / `enriched_at`, so such text waits a full window: at most one check-driven call per project per
+  window for each of the two texts.
+- **Cost.** The Meter checks each call at its worst case: about $0.008 to $0.009 for a blurb and $0.010 for a line with
+  a full source snippet ($0.006 of either is 600 output tokens); the cost preview prices both at $0.0101. A night is
+  capped at 50 target blurbs (`--signals-limit`, already the preview's upper bound), 20 other blurbs and `ENRICH_MAX`
+  lines (default 20, never-enriched first): 90 calls, about $0.91 at the preview price, under the default
+  `SPEND_DAILY_USD` of $3 (all providers; `SPEND_MONTHLY_USD` $40 over 30 days), and the Meter stops paid calls at the
+  budget either way. The cost preview now counts the failing blurbs outside the targets and the failing lines. How many
+  stored texts fail on the first night is not known here: the PR's run flagged 54 blurbs and 4 lines in the top 200
+  with the checks that could run then.

@@ -193,13 +193,16 @@ def preview(conn: sa.Connection, ctx, meter: Meter) -> list[dict]:
     rows.append({"step": "group", "provider": "anthropic", "what": f"{CLAUDE_CLASSIFY_MODEL} classify described, unnamed hooks",
                  "calls": n_group, "unit_usd": haiku_group, "note": "bare-address hooks are never sent"})
 
-    n_enrich = len(enrich.select_candidates(conn)) if have["anthropic"] else 0
+    n_enrich = len(enrich.select_candidates(conn, now=ctx.now)) if have["anthropic"] else 0
     rows.append({"step": "enrich", "provider": "anthropic", "what": f"{CLAUDE_BLURB_MODEL} what_line",
-                 "calls": n_enrich, "unit_usd": sonnet_call, "note": "new busy projects only"})
+                 "calls": n_enrich, "unit_usd": sonnet_call,
+                 "note": "new busy projects, then empty or check-failing lines past ENRICH_RETRY_DAYS"})
 
-    n_sig = len(signals.select_targets(conn, ctx))
+    targets = signals.select_targets(conn, ctx)
+    n_sig = len(targets) + (len(signals.flagged_elsewhere(conn, ctx, {p.id for p, _ in targets})) if have["anthropic"] else 0)
     rows.append({"step": "signals", "provider": "anthropic", "what": f"{CLAUDE_BLURB_MODEL} why_blurb",
-                 "calls": n_sig if have["anthropic"] else 0, "unit_usd": sonnet_call, "note": "upper bound: only when signals changed"})
+                 "calls": n_sig if have["anthropic"] else 0, "unit_usd": sonnet_call,
+                 "note": "upper bound: targets whose signals changed or blurb fails the checks, plus failing blurbs elsewhere"})
 
     rows.append({"step": "radar", "provider": "exa", "what": "Exa radar searches",
                  "calls": radar.exa_query_cap() if have["exa"] and have["anthropic"] else 0, "unit_usd": exa_call, "note": ""})

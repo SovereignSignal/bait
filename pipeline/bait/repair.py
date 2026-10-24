@@ -23,6 +23,7 @@ import sqlalchemy as sa
 
 from . import db
 from . import keyless as K
+from .audit_links import dead_links
 from .clients.claude import prose_estimate, what_line_prompt, why_blurb_prompt
 from .costs import BudgetExceeded, Meter
 from .db import (api_spend, as_utc, hooks, pool_daily_onchain, pool_snapshots, pool_stats, pools, project_daily, projects,
@@ -376,7 +377,8 @@ def blurb_targets(conn, day: date, signals_limit: int, stale_before: datetime) -
 
 
 def what_line_estimates(conn, targets) -> list[float]:
-    return [prose_estimate(what_line_prompt(enrich.what_context(p, enrich.hooks_of(conn, p.id), dict(p.enrichment or {}))))
+    return [prose_estimate(what_line_prompt(enrich.what_context(p, enrich.hooks_of(conn, p.id), dict(p.enrichment or {}),
+                                                                dead_links(conn, p.id))))
             for p, _kind in targets]
 
 
@@ -399,8 +401,8 @@ def write_what_lines(engine, claude, targets, deadline: datetime | None = None, 
         enr = dict(p.enrichment or {})
         try:
             with engine.connect() as conn:
-                hs = enrich.hooks_of(conn, p.id)
-            res = claude.what_line(enrich.what_context(p, hs, enr))
+                hs, dead = enrich.hooks_of(conn, p.id), dead_links(conn, p.id)
+            res = claude.what_line(enrich.what_context(p, hs, enr, dead))
         except BudgetExceeded:
             out["budget_stop"] = 1
             break

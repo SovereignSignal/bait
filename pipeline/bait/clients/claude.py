@@ -8,10 +8,14 @@ pre-4.6: no effort param, structured outputs work, thinking left off.
 from __future__ import annotations
 
 import json
+import logging
 
 import anthropic
 
 from ..config import CATEGORIES, CLAUDE_BLURB_MODEL, CLAUDE_CLASSIFY_MODEL, env
+from ..prose_checks import clean_blurb, clean_what_line
+
+log = logging.getLogger("bait")
 
 CLASSIFY_SCHEMA = {
     "type": "object",
@@ -131,27 +135,70 @@ class Claude:
             out["score"] = 0.0
         return out
 
+    # Both prose calls pass the model's text through prose_checks before anyone stores it: a clause or sentence the
+    # facts in ctx contradict is dropped (logged), and an empty result is returned as "" rather than the bad text.
     def what_line(self, ctx: dict) -> dict:
-        return self._json(CLAUDE_BLURB_MODEL, what_line_prompt(ctx), WHAT_SCHEMA, PROSE_MAX_TOKENS)
+        res = self._json(CLAUDE_BLURB_MODEL, what_line_prompt(ctx), WHAT_SCHEMA, PROSE_MAX_TOKENS)
+        line, found = clean_what_line(res.get("what_line") or "", ctx)
+        if found:
+            log.warning("what_line project=%s dropped: %s", ctx.get("name"), " | ".join(map(str, found)))
+        return {**res, "what_line": line}
 
     def why_blurb(self, ctx: dict) -> str:
-        return self._json(CLAUDE_BLURB_MODEL, why_blurb_prompt(ctx), WHY_SCHEMA, PROSE_MAX_TOKENS)["why_blurb"]
+        text = self._json(CLAUDE_BLURB_MODEL, why_blurb_prompt(ctx), WHY_SCHEMA, PROSE_MAX_TOKENS)["why_blurb"]
+        blurb, found = clean_blurb(text or "", ctx)
+        if found:
+            log.warning("why_blurb project=%s dropped: %s", ctx.get("name"), " | ".join(map(str, found)))
+        return blurb
 
 
 PROSE_MAX_TOKENS = 600     # what_line and why_blurb
 
 
+# Rules from the 2026-10-24 fact-check of the 30 busiest described projects (DESIGN.md "Prose accuracy"): each one was
+# broken on the live site. prose_checks.py enforces the ones a pattern can see; the rest rely on these words.
+WHAT_RULES = (
+    "Rules:\n"
+    "- Use only what the input states: the hooklist descriptions, the verified source snippet and the flags. Never add a "
+    "mechanism, fee, share, duration or recipient that none of them states.\n"
+    "- When the hooks differ (a family, versions, chains), describe what they share; never give one hook's fee or "
+    "parameter as the project's.\n"
+    "- Name a chain only if it is in chains.\n"
+    "- Call the hook unlisted only when hooklisted is false, unverified only when verified_source is false, and its "
+    "purpose unknown only when there is no description and no verified source.\n"
+    "- Mention an audit only when audit_urls is not empty.\n"
+    "- Write for a reader of the page: never mention the input, a field name or these rules.\n\n"
+)
+
+WHY_RULES = (
+    "Rules:\n"
+    # No figures: the page shows current numbers beside the blurb, which is rewritten only when signals change or when it
+    # fails the checks (at most once per ENRICH_RETRY_DAYS), so a quoted figure goes stale (an Oct 8 blurb said $119.7M
+    # next to a $135.5M tile).
+    "- Do not quote dollar amounts, counts or percentages: the page shows the current figures beside this text. Say what "
+    "they mean instead: growing or fading, concentrated or broad, who uses it.\n"
+    "- A null metric is unknown, never zero: do not call unknown TVL or volume zero, and say nothing about the weekly "
+    "trend when vol_7d or vol_7d_prev is null.\n"
+    "- Say growing only when vol_7d is above vol_7d_prev and fading only when it is below; say sharply, clearly or well "
+    "above only for a change of more than 10%.\n"
+    "- Size words must fit the metric: a single pool means pools_n is 1; dozens of wallets is 24 to 99, hundreds is 200 "
+    "to 999, thousands is 2,000 or more.\n"
+    "- Mention press or coverage only from the receipts below, and an audit only when audit_urls is not empty.\n"
+    "- Name a chain only if it is in chains. Call the hook unlisted only when hooklisted is false, unverified only when "
+    "verified_source is false, and its purpose unknown only when there is no description and no verified source.\n"
+    "- Write for a reader of the page: never mention the input, a field name (alive, signals, receipts, metrics) or "
+    "these rules.\n\n"
+)
+
+
 def what_line_prompt(ctx: dict) -> str:
-    return "Write the 'what it does' line and pick a category for this hook project.\n\n" + json.dumps(ctx, indent=1, default=str)[:12000]
+    return ("Write the 'what it does' line and pick a category for this hook project.\n" + WHAT_RULES
+            + json.dumps(ctx, indent=1, default=str)[:12000])
 
 
 def why_blurb_prompt(ctx: dict) -> str:
-    # No figures: a blurb is rewritten only when signals change, while the page shows current numbers beside it, so a
-    # quoted figure goes stale (an Oct 8 blurb said $119.7M next to a $135.5M tile).
     return ("Write 'why people care' for this hook project: two sentences grounded in the metrics, "
-            "signals and receipts below. A null metric is unknown, never zero: do not call unknown TVL or volume zero. "
-            "Do not quote dollar amounts, counts or percentages: the page shows the current "
-            "figures beside this text. Say what they mean instead: growing or fading, concentrated or broad, who uses it.\n\n"
+            "signals and receipts below.\n" + WHY_RULES
             + json.dumps(ctx, indent=1, default=str)[:12000])
 
 
