@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from collections import Counter
 from datetime import date, datetime, timedelta
 
 from .config import DYNAMIC_FEE_FLAG
@@ -693,19 +694,72 @@ _CATEGORY_WORDS = (
 )
 
 
-def fallback_category(texts, properties, pool_fees, is_factory: bool, pools_total_max: int | None) -> str | None:
-    """A category for a project the enrichment has not described, or None when nothing says. Word matches on the hooks'
-    names and descriptions win, then the launchpad pattern, then a dynamic fee; "other" is never guessed."""
+# 2026-10-24: "launch" as a word of a hook's own name (registry or verified contract name: "LaunchHook", "Fair Launch
+# Hook"), never of a description ("80% at launch, decaying to 5%" is a fee schedule, not a launchpad). Checked in the
+# launchpad slot of the word rules, so an earlier category's words still win.
+_LAUNCH_NAME = re.compile(r"\blaunch\b", re.I)
+
+
+def _words(texts) -> str:
     # registry and contract names are CamelCase ("LimitOrderHook"): split them so word boundaries exist
-    blob = " ".join(re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", t) for t in texts if t)
+    return " ".join(re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", t) for t in texts if t)
+
+
+def fallback_category(texts, properties, pool_fees, is_factory: bool, pools_total_max: int | None,
+                      names=(), flags=(), pools=()) -> str | None:
+    """A category for a project the enrichment has not described, or None when nothing says. Word matches on the hooks'
+    names and descriptions win (and "launch" in a hook's own name, `names`), then the launchpad pattern, then a dynamic
+    fee, then the launch pattern in the permissions and pools (`flags` per hook, `pools` as (token0, token1, fee) per
+    pool; launch_pattern); "other" is never guessed."""
+    blob, named = _words(texts), _words(names)
     for cat, rx in _CATEGORY_WORDS:
         if blob and rx.search(blob):
+            return cat
+        if cat == "launchpad" and named and _LAUNCH_NAME.search(named):
             return cat
     if is_factory or (pools_total_max or 0) >= LAUNCHPAD_MIN_POOLS:
         return "launchpad"
     if any((p or {}).get("dynamicFee") for p in properties) or any(is_dynamic_fee(f) for f in pool_fees):
         return "dynamic-fee"
+    if launch_pattern(flags, pools):
+        return "launchpad"
     return None
+
+
+# --- the launch pattern (2026-10-24). A hook that decides who may create its pools (beforeInitialize), serving one pool
+# per coin on one shared asset, is a token-launch platform, if it either does nothing else or charges its own fee in the
+# swap (a returned delta) on pools whose LP fee is zero. Measured on the 2026-10-23 feed against the categories it
+# showed: 3 of 3 and 51 of 54 such projects were launchpads; dropping the beforeInitialize gate fell to 77-87%
+# (tokenized-stock and leveraged-token venues have the same pool shape), so the gate is required. afterInitialize
+# excludes: an oracle seeds its observations there (BackGeoOracle, an oracle, matched everything else). -----------
+LAUNCH_PATTERN_MIN_POOLS = 5        # pools on the stored rows (folded "hook:" rows excluded)
+LAUNCH_BASE_SHARE = 0.8             # of those pools, the share that hold the shared asset
+LAUNCH_DISTINCT_SHARE = 0.9         # of those, the share whose other coin is unique: one pool per coin
+
+
+def one_pool_per_coin(pairs, min_pools: int = LAUNCH_PATTERN_MIN_POOLS) -> bool:
+    """pairs: (token0, token1) addresses per pool. At least `min_pools` pools, LAUNCH_BASE_SHARE of them holding one token
+    (ETH, WETH, a stable or a platform's own token), and the other coin unique in LAUNCH_DISTINCT_SHARE of those."""
+    ps = [(str(a).lower(), str(b).lower()) for a, b in pairs if a and b]
+    if len(ps) < min_pools:
+        return False
+    base, n = Counter(t for a, b in ps for t in {a, b}).most_common(1)[0]
+    if n < LAUNCH_BASE_SHARE * len(ps):
+        return False
+    coins = [b if a == base else a for a, b in ps if base in (a, b)]
+    return len(set(coins)) >= LAUNCH_DISTINCT_SHARE * len(coins)
+
+
+def launch_pattern(flags, pools) -> bool:
+    """flags: each hook's permission flags (every hook must match); pools: (token0, token1, fee) per stored pool."""
+    marks = [frozenset(k for k, v in (f or {}).items() if v) for f in flags]
+    if not marks or not one_pool_per_coin([(t0, t1) for t0, t1, _ in pools]):
+        return False
+    if all(m == {"beforeInitialize"} for m in marks):
+        return True                               # its one permission: who may create a pool
+    takes_fee = all("beforeInitialize" in m and "afterInitialize" not in m
+                    and ("beforeSwapReturnsDelta" in m or "afterSwapReturnsDelta" in m) for m in marks)
+    return takes_fee and all(fee == 0 for _, _, fee in pools)
 
 
 # --- pool labels (steps/snapshot.py). Symbols Bait can vouch for by address: the native coin (currency 0x0), the wrapped

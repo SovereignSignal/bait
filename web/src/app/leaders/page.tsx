@@ -5,7 +5,7 @@ import { Footer } from "@/components/Footer";
 import { getFreshness } from "@/db/health";
 import { getLeaders, usingFixtures } from "@/db/queries";
 import { int, usd } from "@/lib/format";
-import { categoryShort, chainNames } from "@/lib/present";
+import { categoryAndChains } from "@/lib/present";
 import type { LeaderEntry } from "@/lib/types";
 import s from "./leaders.module.css";
 
@@ -37,7 +37,7 @@ function Board({ title, note, entries, fmt, empty }: { title: string; note: stri
                     {e.row.name}
                   </span>
                   <span className={s.s}>
-                    {categoryShort(e.row.category)} · {chainNames(e.row.chains)}
+                    {categoryAndChains(e.row.category, e.row.chains)}
                   </span>
                 </span>
                 <span className={`${s.val} num`}>{fmt(e.value)}</span>

@@ -156,12 +156,16 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
               </dl>
             </details>
             <div className={s.whereSub}>
-              {categoryLine(p)} · {chainNames(p.chains, " · ")}
+              {[categoryLine(p), chainNames(p.chains, " · ")].filter(Boolean).join(" · ")}
             </div>
           </div>
           <div className={s.where}>
-            {categoryLine(p)}
-            <br />
+            {categoryLine(p) && (
+              <>
+                {categoryLine(p)}
+                <br />
+              </>
+            )}
             {chainNames(p.chains, " · ")}
           </div>
         </div>

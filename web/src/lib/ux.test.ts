@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clip, dayLabel, deltaWords, fmtDelta, nextDigestDay, NONE, usd, usdWhole } from "./format";
-import { activePool, dayWindow, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric, seriesLabels } from "./present";
-import { emptyCopy, moversFor, searchRows } from "./feed";
+import { activePool, categoryAndChains, categoryLine, categoryShort, dayWindow, firstWebUrl, hookKeys, poolsNote, poolVolume, rowLabel, rowMetric, seriesLabels } from "./present";
+import { availableCategories, emptyCopy, feedQs, moversFor, parseFeedQuery, searchRows } from "./feed";
 import { indexerLine, liveDotOn, quietNote, tradesNote } from "./trades";
 import { respond, respondJson } from "./http";
 import { gunzipSync } from "node:zlib";
@@ -196,4 +196,26 @@ test("seriesLabels date every bar back from the closed day, across a month bound
   assert.deepEqual([l[0], l[2], l[3], l[13]], ["Sep 29", "Oct 1", "Oct 2", "Oct 12"]);
   assert.deepEqual(seriesLabels(3, null), ["3d ago", "2d ago", "1d ago"]);
   assert.ok(!seriesLabels(14, "2026-10-12").some((x) => /yesterday/i.test(x)));
+});
+
+// A category of "other" is the absence of one (nothing in the sources or the chain facts names a category). The site
+// shows nothing rather than a label, a chip or a filter called Other; the API still returns the value.
+test("no established category: no Other chip, no Other filter, no Other label", () => {
+  const rows = [
+    { category: "other" as const, secondaryCategories: [] },
+    { category: "launchpad" as const, secondaryCategories: ["dynamic-fee" as const] },
+  ];
+  assert.deepEqual(availableCategories(rows), ["dynamic-fee", "launchpad"]);
+  assert.deepEqual(availableCategories([{ category: "other" as const, secondaryCategories: [] }]), []);
+  // an old ?category=other link lists everything rather than apply a filter the page cannot show or clear
+  assert.equal(parseFeedQuery(new URLSearchParams("tab=all&category=other")).category, undefined);
+  assert.equal(parseFeedQuery(new URLSearchParams("category=oracle")).category, "oracle");
+  assert.equal(feedQs(parseFeedQuery(new URLSearchParams("tab=all&category=other"))), "?tab=all");
+  assert.equal(categoryLine({ category: "other", secondaryCategories: [], isFactory: false }), "");
+  assert.equal(categoryLine({ category: "other", secondaryCategories: [], isFactory: true }), "Factory");
+  assert.equal(categoryLine({ category: "other", secondaryCategories: ["oracle"], isFactory: false }), "Oracle");
+  assert.equal(categoryLine({ category: "launchpad", secondaryCategories: [], isFactory: true }), "Launchpad · Factory");
+  assert.equal(categoryShort("other"), "");
+  assert.equal(categoryAndChains("other", [4663, 1]), "Robinhood, Ethereum");
+  assert.equal(categoryAndChains("launchpad", [8453]), "Launchpad · Base");
 });

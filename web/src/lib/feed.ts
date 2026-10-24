@@ -2,7 +2,7 @@
 // and the client list (search, watchlist). Pure: no server-only imports.
 import { CHAINS, parseChainParam } from "./chains";
 import { isUnnamed } from "./unlisted";
-import { CATEGORIES, CATEGORY_LABEL, isCategory, type Category, type ChainId, type Eligibility, type FeedQuery, type HookIndex, type RowView, type Tab } from "./types";
+import { CATEGORY_LABEL, isShownCategory, SHOWN_CATEGORIES, type Category, type ChainId, type Eligibility, type FeedQuery, type HookIndex, type RowView, type Tab } from "./types";
 
 export const TRENDING_TOP_N = 20;
 export const TRENDING_MIN_VOL = 10_000;
@@ -19,10 +19,11 @@ function read(sp: Params, k: string): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
 
-/** URLSearchParams (client) or Next's searchParams object (server) -> FeedQuery. */
+/** URLSearchParams (client) or Next's searchParams object (server) -> FeedQuery. `category=other` is no filter: the
+ * feed offers no such chip, so an old link must not apply one the page cannot show or clear. */
 export function parseFeedQuery(sp: Params): FeedQuery {
   const category = read(sp, "category");
-  return { tab: parseTab(read(sp, "tab")), chain: parseChainParam(read(sp, "chain")), category: isCategory(category) ? category : undefined };
+  return { tab: parseTab(read(sp, "tab")), chain: parseChainParam(read(sp, "chain")), category: isShownCategory(category) ? category : undefined };
 }
 
 /** "?tab=new&chain=base" (empty string for the defaults). Trending is the default tab. */
@@ -126,9 +127,9 @@ export function feedSeed(all: RowView[], q: FeedQuery, version: string): FeedSee
   return { query: q, rows: rows.slice(0, LIST_PAGE), total: rows.length, count: all.length, cats: availableCategories(all), version };
 }
 
-/** Categories that have at least one row, in canonical order. */
+/** Categories that have at least one row, in canonical order. Never "other": no category is not a category. */
 export function availableCategories(rows: Array<Pick<RowView, "category" | "secondaryCategories">>): Category[] {
-  return CATEGORIES.filter((c) => rows.some((p) => p.category === c || p.secondaryCategories.includes(c)));
+  return SHOWN_CATEGORIES.filter((c) => rows.some((p) => p.category === c || p.secondaryCategories.includes(c)));
 }
 
 /** Chains that have at least one row, in CHAIN_ORDER. */

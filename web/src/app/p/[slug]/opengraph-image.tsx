@@ -92,7 +92,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
             </div>
             <div style={{ display: "flex", flexDirection: "column" }}>
               <div style={{ fontSize: 32, color: T.fg, letterSpacing: -0.5 }}>{p.name}</div>
-              <div style={{ fontSize: 20, color: T.fg2 }}>{categoryLine(p)}</div>
+              {categoryLine(p) && <div style={{ fontSize: 20, color: T.fg2 }}>{categoryLine(p)}</div>}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
