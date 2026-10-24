@@ -54,7 +54,7 @@ def _rows(e, pool_id):
 
 
 def _ctx(http=None, day=DAY, now=NOW):
-    ctx = RunContext(day=day, now=now, clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names")})
+    ctx = RunContext(day=day, now=now, clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names", "sourcify")})
     if http is not None:
         ctx.extras["keyless_http"] = http
     return ctx

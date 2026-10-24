@@ -302,6 +302,9 @@ See `.env.example`. `DATABASE_URL` (Railway injects; `postgres://` is rewritten 
 `postgresql+psycopg://`; unset falls back to `sqlite:///./bait.sqlite`), `GRAPH_API_KEY`,
 `ANTHROPIC_API_KEY`, `EXA_API_KEY` (radar only), `GITHUB_TOKEN`, `BLOCKSCOUT_API_KEY` (optional).
 
+Group step: `NAMES_MAX` (400, verified-source name lookups per night), `DEPLOYER_LOOKUPS` (200 hooks a night whose
+deployer is looked up, Sourcify first, then Blockscout; 0 turns the lookup off).
+
 Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_QUERIES` (6),
 `RADAR_CLASSIFY_MAX` (30); see "Dev radar" above.
 

@@ -769,3 +769,43 @@ The owner dropped three external sources. What changed and what stays:
   reads false, so treat the activity as unverified" of a project with no GitHub link. A repo with no commit in 30 days
   is still false. On the first nightly every signals target without a GitHub reading changes value once, so up to the
   signals cap (50) blurbs are rewritten that night, inside the cost preview's existing why_blurb upper bound.
+
+## 2026-10-24: Deployer attribution
+
+- **The deployer is the creation transaction's sender.** The lookup has been held since 10/16 (`DEPLOYER_LOOKUPS=0` on
+  the production pipeline) because Blockscout's `creator_address_hash` for a CREATE2-mined hook is the factory:
+  StablePairHook on Ethereum gives Arachnid's proxy `0x4e59…956c`, which deploys for anyone. Sourcify is now the first
+  source (keyless, every chain, paced like the names step): `?fields=deployment` gives `deployment.deployer`, the
+  sender. Recorded 2026-10-24 in `pipeline/fixtures/deployers-2026-10-24.json`: StablePairHook on Ethereum gives
+  `0xe49a…5b95`, an EOA and the wallet the registry names (Blockscout's creation transaction has the same `from`);
+  Clanker's static fee hook on Base `0xd466…1bd3`; UniswapV4KEMHook on Robinhood `0x6971…3cbc` (sent to a factory
+  contract, and Sourcify still gives the EOA); StablePairHook on Arbitrum is not verified there (404); Aegis on Base is
+  verified from its runtime alone, with every deployment field null. The sender is also the wallet the indexer counts
+  swaps by (tx.from): a contract creator never sends a swap, so its share always read "none".
+- **Blockscout is the fallback** for what Sourcify cannot name: the address record's `creation_transaction_hash`, then
+  that transaction's `from` (one more call on the same instance), else the creator. A shared CREATE2 deployer
+  (`rules.SHARED_DEPLOYERS`, which now also lists the Safe singleton factory, Zoltu's proxy, Create2Deployer and
+  CREATE3Factory) is never stored, from any source and from the registry either (one live hooklist entry, a
+  FactoryHook on Robinhood, names Arachnid's proxy): the hook stays unknown until a source names the sender. Rows that
+  already hold one are cleared and unstamped by the next run. `deployer_source` is `hooklist`, `sourcify` or `explorer`.
+- **Ingest no longer erases looked-up deployers.** It rewrote `hooks.deployer` from the registry every night, NULL for
+  the entries that name none (4,718 of 4,994 on 10/24), and the stamp stayed: a looked-up deployer of a listed hook
+  lasted one night in fourteen. The registry still wins where it names a deployer; one it stops naming is cleared and
+  unstamped.
+- **Budget and blocked chains.** `DEPLOYER_LOOKUPS` (200) is now the first 200 candidates, busiest first, each asked of
+  Sourcify and, when it cannot answer, of Blockscout. A blocked instance (Base, Arbitrum, Polygon and Robinhood answer
+  this server with a Cloudflare challenge) still costs one probe a night. One change: a hook the blocked instance
+  leaves open is stamped when Sourcify answered it (a miss, rechecked in 14 days) rather than left unstamped;
+  otherwise the same unverified Base and Robinhood hooks would head the queue every night, the 10/16 failure in another
+  form. Without Sourcify the old rule holds (not stamped, not counted).
+- **Display.** Score already left shared deployers out of `deployer_swap_share_7d` (NULL, not 0, when no other deployer
+  is known). The project page's Deployer line now leaves them out too (`present.ts` mirrors the list; a pipeline test
+  keeps the two equal) and names the source: registry, Sourcify or explorer.
+- **Tests stay offline.** The CLI end-to-end test ran the names and deployer lookups against the live explorers and
+  Sourcify (about 7,600 connection attempts per run with the network blocked); it now sets `NAMES_MAX=0` and
+  `DEPLOYER_LOOKUPS=0`.
+- **TODO.** Unverified hooks on the chains whose Blockscout challenges us stay unknown. Two routes: Blockscout PRO
+  (`api.blockscout.com/{chain}`, which the names step already uses when `BLOCKSCOUT_API_KEY` is set) for the address
+  and transaction records, or the creation transaction from HyperSync traces (the indexer reads logs only, so traces
+  are not plumbed). Wallets the deployer funded are still out of scope.
+- **To turn it on:** delete the `DEPLOYER_LOOKUPS=0` override on the production pipeline service and redeploy it.

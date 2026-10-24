@@ -10,6 +10,8 @@ from tests.conftest import FIXTURE
 def test_cli_end_to_end_sqlite_idempotent(tmp_path, monkeypatch):
     for k in ("GRAPH_API_KEY", "ANTHROPIC_API_KEY", "EXA_API_KEY", "GITHUB_TOKEN"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("NAMES_MAX", "0")              # the keyless lookups (Sourcify, Blockscout) stay off the network
+    monkeypatch.setenv("DEPLOYER_LOOKUPS", "0")
     url = f"sqlite:///{tmp_path}/t.sqlite"
     argv = ["run", "--day", "2026-10-06", "--hooklist-file", FIXTURE, "--database-url", url, "--force-digest", "--max-code-fetch", "0"]
     assert main(argv) == 0

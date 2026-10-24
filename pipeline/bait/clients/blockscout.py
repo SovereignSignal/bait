@@ -1,12 +1,14 @@
-"""Blockscout: deployed bytecode (for code_hash) and verified source. Chain-conditional; some instances 403 bots."""
+"""Blockscout: deployed bytecode (for code_hash), verified source, and a contract's deployer. Chain-conditional; some
+instances 403 bots."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 import httpx
 
 from ..config import CHAIN_BY_ID, env
-from ..rules import code_hash as canonical_code_hash, proxy_flag, proxy_kind
+from ..rules import code_hash as canonical_code_hash, deployer_or_none, proxy_flag, proxy_kind
 from . import http
 
 
@@ -63,24 +65,42 @@ class Blockscout:
         )
 
     def fetch_creator(self, chain_id: int, address: str) -> tuple[str | None, str]:
-        """The address that deployed a contract, from Blockscout's address record (creator_address_hash), lowercased.
-        Returns (creator, outcome): "found"; "miss" (404, or a record without a creator: an EOA, an unindexed chain, no
-        instance); "blocked" (403: the instance challenges bots, as Base and Robinhood do from this server, so asking
-        again tonight is pointless); "transient" (429, 5xx, a transport error or a non-JSON reply: ask next run)."""
+        """The wallet that deployed a contract: the sender of its creation transaction (what Sourcify reports as the
+        deployer, and the tx.from the indexer counts swaps by), from the address record's creation_transaction_hash
+        and that transaction's `from`, lowercased. When the transaction cannot be read, the record's
+        creator_address_hash. A shared CREATE2 deployer (rules.SHARED_DEPLOYERS) is never returned: it is the creator
+        Blockscout gives for StablePairHook on Ethereum (Arachnid's proxy) and for anyone else's CREATE2 deploys.
+        Returns (deployer, outcome): "found"; "miss" (404, or a record without a usable deployer: an EOA, an unindexed
+        chain, no instance, only a shared CREATE2 deployer); "blocked" (403: the instance challenges bots, as Base and
+        Robinhood do from this server, so asking again tonight is pointless); "transient" (429, 5xx, a transport error
+        or a non-JSON reply: ask next run)."""
         base = self.base_url(chain_id)
         if not base:
             return None, "miss"
+        d, outcome = self._record(f"{base}/api/v2/addresses/{address}")
+        if outcome:
+            return None, outcome
+        tx = d.get("creation_transaction_hash") or d.get("creation_tx_hash")
+        if isinstance(tx, str) and _TX_HASH.fullmatch(tx):
+            t, outcome = self._record(f"{base}/api/v2/transactions/{tx}")
+            if outcome in ("blocked", "transient"):
+                return None, outcome
+            if sender := deployer_or_none(_hash_of((t or {}).get("from"))):
+                return sender, "found"
+        if creator := deployer_or_none(_hash_of(d.get("creator_address_hash"))):
+            return creator, "found"
+        return None, "miss"
+
+    def _record(self, url: str) -> tuple[dict | None, str | None]:
+        """A v2 JSON object, or (None, outcome) with fetch_creator's outcomes; a reply that is not an object is a miss."""
         try:
-            d = http.get_json(self.c, f"{base}/api/v2/addresses/{address}", params=self.params)
+            d = http.get_json(self.c, url, params=self.params)
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
             return None, "miss" if code == 404 else "blocked" if code == 403 else "transient"
         except (httpx.HTTPError, ValueError):
             return None, "transient"
-        creator = d.get("creator_address_hash") if isinstance(d, dict) else None
-        if isinstance(creator, str) and creator.startswith("0x") and len(creator) == 42:
-            return creator.lower(), "found"
-        return None, "miss"
+        return (d, None) if isinstance(d, dict) else (None, "miss")
 
     def _from_eth_get_code(self, base: str, address: str) -> CodeInfo | None:
         try:
@@ -93,6 +113,14 @@ class Blockscout:
             return None
         kind = proxy_kind(code)
         return CodeInfo(code_hash=canonical_code_hash(code), is_proxy=proxy_flag(kind), proxy_kind=kind)
+
+
+_TX_HASH = re.compile(r"0x[0-9a-fA-F]{64}")
+
+
+def _hash_of(v) -> str | None:
+    """An address field: Blockscout v2 gives {"hash": ...} objects for transaction parties, a bare string elsewhere."""
+    return v.get("hash") if isinstance(v, dict) else v if isinstance(v, str) else None
 
 
 def _proxy_verdict(d: dict, code: str) -> dict:

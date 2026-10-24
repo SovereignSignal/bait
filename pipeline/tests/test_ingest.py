@@ -76,3 +76,41 @@ def test_ingest_marks_grouped_hooks_the_registry_just_named(conn, ctx, fixture_e
     out = ingest.run(conn, ctx)
     marked = {r.address for r in conn.execute(sa.select(db.hooks.c.address).where(db.hooks.c.regroup.is_(True)))}
     assert out["regroup"] == 1 and marked == {addr}
+
+
+def test_registry_deployer_wins_a_looked_up_one_survives_the_night_and_a_create2_proxy_is_none(conn, ctx, fixture_entries, tmp_path):
+    """Until 2026-10-24 ingest rewrote hooks.deployer from the registry every night, so a deployer the lookup found for
+    a listed hook the registry names no deployer for (most of them) was gone the next morning, still stamped."""
+    import json
+    from tests.conftest import NOW
+    entries = [dict(e, hook=dict(e["hook"])) for e in fixture_entries[:3]]
+    entries[0]["hook"]["deployer"] = ""                                                    # names none
+    entries[1]["hook"]["deployer"] = "0x4e59b44847b379578588920cA78FbF26c0B4956C"           # Arachnid's CREATE2 proxy
+    entries[2]["hook"]["deployer"] = "0x" + "AB" * 20
+    path = tmp_path / "hooklist.json"
+    ctx.hooklist_file = str(path)
+
+    def ingest_with(entries):
+        path.write_text(json.dumps(entries))
+        ingest.run(conn, ctx)
+
+    def dep(e):
+        h = db.hooks.c
+        r = conn.execute(sa.select(h.deployer, h.deployer_source, h.deployer_checked_at)
+                         .where(h.address == e["hook"]["address"].lower(), h.chain_id == e["hook"]["chainId"])).one()
+        return r.deployer, r.deployer_source, r.deployer_checked_at is not None
+
+    ingest_with(entries)
+    assert dep(entries[1]) == (None, None, False)                                         # the proxy is nobody's wallet
+    assert dep(entries[2]) == ("0x" + "ab" * 20, "hooklist", False)
+    found = "0x" + "12" * 20
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == entries[0]["hook"]["address"].lower())
+                 .values(deployer=found, deployer_source="sourcify", deployer_checked_at=NOW))   # the lookup's answer
+    ingest_with(entries)
+    assert dep(entries[0]) == (found, "sourcify", True)                                   # kept overnight
+    entries[2]["hook"]["deployer"] = ""
+    ingest_with(entries)
+    assert dep(entries[2]) == (None, None, False)                                         # dropped: cleared, unstamped
+    entries[0]["hook"]["deployer"] = "0x" + "CD" * 20
+    ingest_with(entries)
+    assert dep(entries[0])[:2] == ("0x" + "cd" * 20, "hooklist")                          # the registry wins

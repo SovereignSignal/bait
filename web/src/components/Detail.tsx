@@ -4,7 +4,7 @@ import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { activityNote, routingNote } from "@/lib/research";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention, topWalletText, deployerShareText, deployersOf } from "@/lib/present";
+import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention, topWalletText, deployerShareText, deployersOf, deployerSourceLabel } from "@/lib/present";
 import type { PoolView, ProjectDetail } from "@/lib/types";
 import { variants } from "@/lib/variants";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
@@ -49,7 +49,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     },
     { k: "Wallets 7d", v: int(u.wallets7d), title: "Distinct wallets across the project's pools over the seven closed days, from the indexer. Unknown unless every chain the project is on has caught up through the week." },
     { k: "Top wallet", v: topWalletText(u.topWalletShare7d), title: "Share of the week's swaps made by the single busiest wallet. Of swaps, not volume. Shown at any size; the wash rules only act past $250K a day." },
-    { k: "Deployer's swaps", v: deployerShareText(u.deployerSwapShare7d), title: "Share of the week's swaps made by the wallets that deployed this project's hooks (registry-supplied or the explorer's contract creator; CREATE2 factories excluded). Unknown when no deployer is known or coverage is incomplete. A team's own trades are not outside demand." },
+    { k: "Deployer's swaps", v: deployerShareText(u.deployerSwapShare7d), title: "Share of the week's swaps made by the wallets that deployed this project's hooks: registry-supplied, or the sender of the hook's creation transaction from Sourcify or the explorer. A shared CREATE2 deployment proxy is never counted as a deployer. Unknown when no deployer is known or coverage is incomplete. A team's own trades are not outside demand." },
     // the closed UTC day, from score; when a day is missing, the rolling buys + sells the trade card shows, marked "≈"
     (u.tx24h == null || (u.tx24h === 0 && (u.wallets24h ?? 0) > 0)) && u.buys24h != null && u.sells24h != null && u.buys24h + u.sells24h > 0
       ? { k: "Swaps 24h", v: `≈ ${int(u.buys24h + u.sells24h)}`, title: "Rolling 24h buys + sells from the pool feed; the closed-day count is not in yet." }
@@ -132,7 +132,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
                 Deployer{deployers.length > 1 ? "s" : ""}:{" "}
                 {deployers.slice(0, 2).map((d, i) => {
                   const href = explorerAddressUrl(d.chainId, d.address);
-                  const label = `${shortAddr(d.address)} (${chainNames([d.chainId], "")}, ${d.source === "hooklist" ? "registry" : d.source === "explorer" ? "creator" : "source unknown"})`;
+                  const label = `${shortAddr(d.address)} (${chainNames([d.chainId], "")}, ${deployerSourceLabel(d.source)})`;
                   return (
                     <span key={`${d.chainId}:${d.address}`}>
                       {i > 0 ? ", " : ""}

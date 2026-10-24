@@ -51,8 +51,9 @@ slugs redirect.
 - Wallet counts are distinct across a project's pools where the indexer is exact (`wallets_exact`), otherwise an upper
   bound shown with "≤". Unknown TVL is never treated as zero. `wallets_7d` and `top_wallet_share_7d` (the busiest
   wallet's share of the week's swaps) are known only when every chain of the project is ready and covers the window;
-  `deployer_swap_share_7d` is the same for the wallets that deployed the project's hooks (`hooks.deployer`, from the
-  registry or the explorer's contract creator, factories excluded).
+  `deployer_swap_share_7d` is the same for the wallets that deployed the project's hooks (`hooks.deployer`: the
+  registry's, else the sender of the hook's creation transaction from Sourcify or Blockscout; a shared CREATE2
+  deployer is never one).
 - Historical listing (`has_historical_usage`): at least 10 exact Swap events and $100 of priced volume in one real pool
   strictly before the current week keeps a project listed when it goes quiet. `activity_status` is `active` on any
   positive swap or volume in the window, `dormant` only with historical usage plus complete seven-day zero coverage on

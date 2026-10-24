@@ -63,8 +63,8 @@ hooks = sa.Table(
     sa.Column("audit_url", sa.Text),
     sa.Column("hooklisted", sa.Boolean),       # in the Uniswap hooklist as of the last ingest; NULL = not yet evaluated
     sa.Column("deployer", sa.Text),
-    sa.Column("deployer_source", sa.Text),     # 0019: hooklist (registry-supplied) | explorer (contract creator from Blockscout)
-    sa.Column("deployer_checked_at", TS),      # last explorer creator lookup; misses are retried after 14 days
+    sa.Column("deployer_source", sa.Text),     # 0019: hooklist (registry-supplied) | sourcify | explorer (Blockscout): creation tx sender
+    sa.Column("deployer_checked_at", TS),      # last deployer lookup (steps/deployers.py); misses are retried after 14 days
     sa.Column("code_hash", sa.Text, index=True),
     sa.Column("contract_name", sa.Text),       # verified-source name (Sourcify/Blockscout/Routescan), for unlisted hooks
     sa.Column("name_checked_at", TS),          # last contract-name lookup; misses are retried after 14 days
