@@ -73,6 +73,54 @@ export function seriesLabels(n: number, end: string | null | undefined): string[
   );
 }
 
+/** A UTC day ("2026-10-23") moved by `delta` days. */
+export function shiftDay(day: string, delta: number): string {
+  const d = new Date(day + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Closed UTC days in a project's daily volume series. */
+export const SERIES_DAYS = 14;
+
+/**
+ * The daily volume series for the SERIES_DAYS closed UTC days ending on `end`, oldest first. A day is a reading or null
+ * (unknown, never $0):
+ * - `observed`: per day, the sum of the project's known pool_snapshots volumes; null when every row that day has an
+ *   unknown volume; absent when the day has no row.
+ * - `measured`: per day (its window_end), score's verdict project_daily.vol_24h. Null unless a pool's volume that day is
+ *   known, and null for a $0 sum that leaves out a pool score cannot vouch for (pipeline score._unproven_windows).
+ * A positive observed sum is drawn (a lower bound when a pool was not read). Anything else is $0 only when score measured
+ * $0 that day: a day with no row or a $0 sum is not proof of an idle day (2026-10-24: Base projects whose week read a
+ * dash drew a row of $0 days). Fewer than two days with rows: [] (no history yet).
+ */
+export function dailySeries(
+  end: string,
+  observed: ReadonlyMap<string, number | null>,
+  measured: ReadonlyMap<string, number | null>,
+): (number | null)[] {
+  if (observed.size < 2) return [];
+  return Array.from({ length: SERIES_DAYS }, (_, i) => {
+    const day = shiftDay(end, i - (SERIES_DAYS - 1));
+    const o = observed.get(day);
+    if (o === null) return null;
+    if (o !== undefined && o > 0) return o;
+    return measured.get(day) === 0 ? 0 : null;
+  });
+}
+
+/** The note under the daily volume bars when a day has no reading (dailySeries null), else null. `partial`: the
+ * project's chains still indexing (freshness partialChains), whose pools may be missing from a day's total. */
+export function seriesGapNote(series: ReadonlyArray<number | null>, partial: ChainId[]): string | null {
+  if (!series.some((v) => v == null)) return null;
+  const blank = "Days without a complete reading are left blank; blank is unknown, not $0.";
+  if (!partial.length) return blank;
+  const names = partial.map((c) => chainNames([c]));
+  const many = names.length > 1;
+  const list = many ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+  return `${blank} ${list} ${many ? "are" : "is"} still indexing, so ${many ? "their" : list} pools may be missing from these totals.`;
+}
+
 // Address search is lazy-loaded separately; every grouped deployment must remain discoverable.
 
 /** The first http(s) URL among published audit links; anything else (javascript:, data:, bare text) is not a link. */

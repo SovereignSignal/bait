@@ -231,7 +231,8 @@ export interface ProjectSummary {
 export interface ProjectDetail extends ProjectSummary {
   hooks: HookView[];
   pools: PoolView[];
-  /** daily volume, oldest first (last ~14 days); null = volume unknown that day (a gap); project page only */
+  /** daily volume, oldest first (the 14 closed UTC days through `through`); null = no complete reading that day: unknown,
+   * never $0 (a gap). $0 only when the nightly score measured $0 that day (lib/present.ts dailySeries); project page only */
   series: (number | null)[];
   /** top wallets across the project's pools, latest pool_top_wallets day; project page only */
   topWallets: WalletView[];

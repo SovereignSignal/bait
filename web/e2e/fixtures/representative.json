@@ -2875,6 +2875,123 @@
       "hasHistoricalUsage": true,
       "activityStatus": "unknown",
       "washHistorical": true
+    },
+    {
+      "id": 109,
+      "slug": "qa-base-gaps",
+      "name": "QA Base partial days",
+      "category": "other",
+      "secondaryCategories": [],
+      "isFactory": false,
+      "whatLine": "Synthetic regression fixture: a Base project whose daily volume mixes read days, a measured $0 day and days without a complete reading.",
+      "whyBlurb": "",
+      "whyBlurbAt": null,
+      "website": null,
+      "github": null,
+      "xHandle": null,
+      "firstSeenAt": "2025-01-01T00:00:00Z",
+      "chains": [
+        8453
+      ],
+      "flagLabels": [],
+      "verified": true,
+      "hooklisted": true,
+      "upgradeable": false,
+      "metrics": {
+        "tvlUsd": 15000,
+        "vol7d": 133254,
+        "vol7dPrev": null,
+        "swaps7d": null,
+        "poolsN": 1,
+        "hooksN": 1
+      },
+      "signals": {
+        "lastCommitAt": null,
+        "routable": "eligible",
+        "auditCount": 0,
+        "auditUrl": null
+      },
+      "receipts": [],
+      "topPool": {
+        "poolId": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "chainId": 8453,
+        "token0Symbol": "QA",
+        "token1Symbol": "WETH",
+        "hookAddress": "0x2222222222222222222222222222222222220000"
+      },
+      "usage": {
+        "vol24h": null,
+        "vol24hRolling": null,
+        "tx24h": null,
+        "wallets24h": null,
+        "walletsExact": true,
+        "buys24h": null,
+        "sells24h": null,
+        "buyers24h": null,
+        "sellers24h": null
+      },
+      "isNew": false,
+      "isSpam": false,
+      "isWash": false,
+      "washReason": null,
+      "scoreTrending": 0,
+      "color": "#2563eb",
+      "hooks": [
+        {
+          "address": "0x2222222222222222222222222222222222220000",
+          "chainId": 8453,
+          "name": "QA Base regression hook",
+          "description": null,
+          "flags": {},
+          "properties": {},
+          "verifiedSource": true,
+          "auditUrl": null,
+          "hooklisted": true,
+          "deployer": null,
+          "firstSeenAt": "2025-01-01T00:00:00Z"
+        }
+      ],
+      "pools": [
+        {
+          "poolId": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "chainId": 8453,
+          "hookAddress": "0x2222222222222222222222222222222222220000",
+          "token0": "",
+          "token1": "",
+          "token0Symbol": "QA",
+          "token1Symbol": "WETH",
+          "fee": 3000,
+          "tickSpacing": 60,
+          "createdAt": "2025-01-01T00:00:00Z",
+          "tvlUsd": 15000,
+          "vol7d": 133254,
+          "tx7d": null,
+          "vol24h": null,
+          "wallets24h": null,
+          "walletsExact": true,
+          "eligibility": "eligible"
+        }
+      ],
+      "series": [
+        null,
+        null,
+        null,
+        0,
+        1200,
+        null,
+        null,
+        8800,
+        55236,
+        47722,
+        21496,
+        null,
+        null,
+        null
+      ],
+      "topWallets": [],
+      "through": "2026-10-13",
+      "hasHistoricalUsage": false,
+      "activityStatus": "active"
     }
   ],
   "aliases": {

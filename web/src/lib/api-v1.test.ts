@@ -41,6 +41,20 @@ test("summary and detail serializers: snake_case, nulls for unknown, never NaN",
   assert.equal(JSON.stringify(d).includes("NaN"), false);
 });
 
+test("daily_volume_usd: a day without a complete reading is vol_usd null on its own day, never 0", () => {
+  const p = SAMPLE_PROJECTS[0];
+  const series = [55_236, 47_722, 21_496, ...Array(10).fill(null), 0];
+  const d = projectV1({ ...p, series, through: "2026-10-23" }, SITE);
+  assert.equal(d.daily_volume_usd.length, 14);
+  assert.deepEqual(d.daily_volume_usd[0], { day: "2026-10-10", vol_usd: 55_236 });
+  assert.deepEqual(d.daily_volume_usd[3], { day: "2026-10-13", vol_usd: null });
+  assert.deepEqual(d.daily_volume_usd[12], { day: "2026-10-22", vol_usd: null });
+  assert.deepEqual(d.daily_volume_usd[13], { day: "2026-10-23", vol_usd: 0 });   // a measured $0 stays 0
+  assert.deepEqual(d.daily_volume_usd.filter((x) => x.vol_usd === null).map((x) => x.day),
+    ["2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22"]);
+  assert.equal(JSON.stringify(d.daily_volume_usd).includes("NaN"), false);
+});
+
 test("last_mention_at is the newest receipt the response lists, null with none (never a stored date without a mention)", () => {
   const r = (publishedAt: string) => ({ url: "https://e.org/x", title: "X hook ships", source: "e.org", publishedAt });
   assert.equal(lastMentionAt([]), null);

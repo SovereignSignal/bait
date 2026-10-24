@@ -4,8 +4,8 @@ import { weekDelta } from "@/lib/feed";
 import { ago, age, dayLabel, deltaWords, feeLabel, fmtDelta, int, NONE, pair, shortAddr, since, sourceLabel, usd, usdWhole } from "@/lib/format";
 import { activityNote, routingNote } from "@/lib/research";
 import { FRESH_NOTE, type Freshness } from "@/lib/health";
-import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesLabels, walletsText, washLine, auditMention, topWalletText, deployerShareText, deployersOf, deployerSourceLabel } from "@/lib/present";
-import type { PoolView, ProjectDetail } from "@/lib/types";
+import { activePool, categoryLine, chainNames, dayWindow, poolsNote, poolTvlNote, poolVolume, seriesGapNote, seriesLabels, walletsText, washLine, auditMention, topWalletText, deployerShareText, deployersOf, deployerSourceLabel } from "@/lib/present";
+import type { ChainId, PoolView, ProjectDetail } from "@/lib/types";
 import { variants } from "@/lib/variants";
 import { ProjectAvatar, WalletAvatar } from "./Avatar";
 import { indexerLine } from "@/lib/trades";
@@ -241,7 +241,7 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
 
       <div className={`panel ${s.chart}`}>
         <h2>Daily volume</h2>
-        <Bars series={p.series} through={through} />
+        <Bars series={p.series} through={through} partial={partial} />
       </div>
 
       <div className={s.two}>
@@ -280,26 +280,64 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
   );
 }
 
-function Bars({ series, through }: { series: (number | null)[]; through: string | null }) {
+/** A day without a complete reading (dailySeries null) is unknown, never a $0 bar: a faint dashed mark on the baseline,
+ * a hover target the height of the chart, and a note under the axis. `partial`: the project's chains still indexing. */
+function Bars({ series, through, partial }: { series: (number | null)[]; through: string | null; partial: ChainId[] }) {
   if (series.length < 2) return <div className={s.chartEmpty}>Daily history starts with the next snapshot.</div>;
+  const n = series.length;
+  const known = series.filter((v): v is number => v != null);
+  const unknown = n - known.length;
+  const note = seriesGapNote(series, partial);
+  const gaps = (legend: boolean) =>
+    note && (
+      <p className={s.gaps} data-testid="series-gaps">
+        {legend && (
+          <svg className={s.gapKey} viewBox="0 0 16 6" aria-hidden="true">
+            <line className={s.gapMark} x1={1} x2={15} y1={3} y2={3} />
+          </svg>
+        )}
+        {note}
+      </p>
+    );
+  // nothing known: say so rather than draw an empty grid
+  if (!known.length)
+    return (
+      <>
+        <div className={s.chartEmpty}>No complete reading for any of the last {n} days.</div>
+        {gaps(false)}
+      </>
+    );
   const W = 640;
   const H = 170;
   const pl = 4;
   const pr = 4;
   const pt = 12;
   const pb = 4;
-  const n = series.length;
-  const max = Math.max(0, ...series.filter((v): v is number => v != null)) || 1;
+  // over known days only: when every known day is $0 the axis says "peak $0", not "peak $1"
+  const peak = Math.max(...known);
+  const scale = peak > 0 ? peak : 1;
   const bw = (W - pl - pr) / n;
   const labels = seriesLabels(n, through);
   return (
     <>
-    <svg className={s.bars} viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Daily volume, last ${n} days, peak ${usd(max)}`}>
+    <svg
+      className={s.bars}
+      viewBox={`0 0 ${W} ${H}`}
+      role="img"
+      aria-label={`Daily volume, last ${n} days, peak ${usd(peak)}${unknown ? `, ${unknown} day${unknown === 1 ? "" : "s"} unknown` : ""}`}
+    >
       <line className={s.gl} x1={pl} x2={W - pr} y1={pt} y2={pt} />
       <line className={s.gl} x1={pl} x2={W - pr} y1={H - pb} y2={H - pb} />
       {series.map((v, i) => {
-        if (v == null) return null; // volume unknown that day: a gap, not a $0 bar
-        const bh = ((H - pt - pb) * v) / max;
+        if (v == null)
+          return (
+            <g key={i} className={s.gap}>
+              <title>{`${labels[i]}: no complete reading (unknown, not $0)`}</title>
+              <rect x={(pl + i * bw).toFixed(1)} y={pt} width={bw.toFixed(1)} height={H - pt - pb} fill="transparent" pointerEvents="all" />
+              <line className={s.gapMark} x1={(pl + i * bw + bw * 0.18).toFixed(1)} x2={(pl + i * bw + bw * 0.82).toFixed(1)} y1={H - pb - 2} y2={H - pb - 2} />
+            </g>
+          );
+        const bh = ((H - pt - pb) * v) / scale;
         return (
           <rect
             key={i}
@@ -317,9 +355,10 @@ function Bars({ series, through }: { series: (number | null)[]; through: string 
     </svg>
     <div className={s.axis}>
       <span>{labels[0]}</span>
-      <span>peak {usd(max)}</span>
+      <span>peak {usd(peak)}</span>
       <span>{labels[n - 1]}{through ? " (UTC)" : ""}</span>
     </div>
+    {gaps(true)}
     </>
   );
 }

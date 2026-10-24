@@ -22,7 +22,7 @@ import { routingLists, routingListsEnabled } from "./routing-lists";
 import { CHAINS, knownChain } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate } from "@/lib/format";
-import { auditLinks, digestIntro, digestItem, hookKeys, listedDigestItems, toRow, withCurrentNames } from "@/lib/present";
+import { auditLinks, dailySeries, digestIntro, digestItem, hookKeys, listedDigestItems, SERIES_DAYS, shiftDay, toRow, withCurrentNames } from "@/lib/present";
 import { packRows, rowsVersion, type PackedRows } from "@/lib/rows";
 import type {
   Category,
@@ -387,12 +387,6 @@ function toDigest(row: typeof t.digests.$inferSelect, names: ReadonlyMap<string,
 async function latestDay(db: Db): Promise<string | null> {
   const [row] = await db.select({ day: sql<string | null>`max(${t.projectDaily.day})` }).from(t.projectDaily);
   return row?.day ? String(row.day) : null;
-}
-
-function shiftDay(day: string, delta: number): string {
-  const d = new Date(day + "T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() + delta);
-  return d.toISOString().slice(0, 10);
 }
 
 const COLORS = ["#5b2fff", "#ff007a", "#1b8a5a", "#ff6a00", "#2563eb", "#0ea5e9", "#c2410c", "#7c3aed", "#0f766e", "#b45309"];
@@ -774,29 +768,43 @@ async function loadPools(db: Db, projectId: number, latest: string | null): Prom
   }));
 }
 
-/** Daily volume for the 14 closed UTC days ending the day before `latest`, oldest first. Days without snapshots are 0; a
- * day whose volume is unknown in every pool (NULL daily volume) is null, a gap, never 0. */
+/**
+ * Daily volume for the 14 closed UTC days ending the day before `latest`, oldest first (lib/present.ts dailySeries).
+ * A day is the sum of its pools' known snapshot volumes when that is positive (a lower bound when a pool was not read).
+ * Otherwise it is $0 only when the nightly score measured $0 for that day (project_daily.vol_24h of the row whose
+ * window_end is that day), and null, a gap, never $0, when it did not: no snapshot row that day, every row's volume
+ * unknown, or a $0 sum that leaves out a pool score cannot vouch for (on Base only the pools GeckoTerminal lists have
+ * rows until the indexer is ready).
+ */
 async function loadSeries(db: Db, projectId: number, latest: string | null): Promise<(number | null)[]> {
   if (!latest) return [];
   const end = shiftDay(latest, -1);
-  const from = shiftDay(end, -13);
-  const rows = await db.execute<{ day: string; v: unknown }>(sql`
-    select s.day::text as day,
-           sum(case when s.volume_usd_day is null then null else greatest(s.volume_usd_day, 0) end)::float8 as v
-    from ${t.poolSnapshots} s
-    join ${t.pools} p on p.pool_id = s.pool_id and p.chain_id = s.chain_id
-    join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
-    where h.project_id = ${projectId} and s.day >= ${from} and s.day <= ${end}
-    group by s.day
-    order by s.day`);
-  const byDay = new Map(rowsOf<{ day: string; v: unknown }>(rows).map((r) => [String(r.day).slice(0, 10), num(r.v)]));
-  if (byDay.size < 2) return [];
-  const out: (number | null)[] = [];
-  for (let i = 13; i >= 0; i--) {
-    const day = shiftDay(end, -i);
-    out.push(byDay.has(day) ? (byDay.get(day) ?? null) : 0);
-  }
-  return out;
+  const from = shiftDay(end, -(SERIES_DAYS - 1));
+  const [rows, scored] = await Promise.all([
+    db.execute<{ day: string; v: unknown }>(sql`
+      select s.day::text as day,
+             sum(case when s.volume_usd_day is null then null else greatest(s.volume_usd_day, 0) end)::float8 as v
+      from ${t.poolSnapshots} s
+      join ${t.pools} p on p.pool_id = s.pool_id and p.chain_id = s.chain_id
+      join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
+      where h.project_id = ${projectId} and s.day >= ${from} and s.day <= ${end}
+      group by s.day
+      order by s.day`),
+    // score's verdict per closed day, keyed by window_end (day - 1 on rows scored before it was stored): one primary-key
+    // range read. If it fails, no day is proven $0 and those days stay gaps.
+    safe<unknown>(
+      "series:project_daily",
+      () =>
+        db.execute<{ d: string; v: unknown }>(sql`
+          select coalesce(pd.window_end, pd.day - 1)::text as d, pd.vol_24h::float8 as v
+          from ${t.projectDaily} pd
+          where pd.project_id = ${projectId} and pd.day between ${shiftDay(from, 1)} and ${latest}`),
+      [],
+    ),
+  ]);
+  const observed = new Map(rowsOf<{ day: string; v: unknown }>(rows).map((r) => [String(r.day).slice(0, 10), num(r.v)]));
+  const measured = new Map(rowsOf<{ d: string; v: unknown }>(scored).map((r) => [String(r.d).slice(0, 10), num(r.v)]));
+  return dailySeries(end, observed, measured);
 }
 
 type TopWalletRow = { address: string; chain_id: number; volume: unknown; trades: unknown; buys: unknown; sells: unknown; last_trade_at: string | Date | null };
