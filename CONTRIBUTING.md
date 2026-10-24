@@ -25,7 +25,7 @@ database. CI runs them against Postgres 17.
 
 ## Rules for changes
 
-- **No paid calls in tests.** Anthropic, Exa, Parallel and GitHub clients are mocked. A test that needs a key is wrong.
+- **No paid calls in tests.** Anthropic, Exa and GitHub clients are mocked. A test that needs a key is wrong.
 - **No secrets in the repo.** Keys live in `.env` (ignored) and in Railway variables. `.env.example` lists every
   variable with a comment and no value; keep it current when you add one.
 - **Rule changes come with a DESIGN.md note.** `DESIGN.md` is the running spec: later sections override earlier ones,

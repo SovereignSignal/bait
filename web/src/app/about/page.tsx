@@ -37,17 +37,19 @@ export default function AboutPage() {
             GeckoTerminal&apos;s daily figures stand in. GeckoTerminal also supplies pool TVL and rolling 24-hour figures, and public RPC nodes
             resolve hooks and read their bytecode. The feed covers ten of those chains; the rest appear under Just launched. Figures are
             closed UTC days, refreshed by a nightly run; a project page says which day its figures run through. Contract names come
-            from Blockscout, Sourcify and Routescan. Links come from Exa, last 30 days. Team, site and audit details for new projects come from
-            Parallel. The one-line &quot;what it does&quot; and the two-sentence &quot;why people care&quot; are written by Claude from those sources,
-            rewritten only when the signals change; the page shows when.
+            from Blockscout, Sourcify and Routescan. Audit links come from the registry. Until October 24, 2026, Parallel also found team
+            sites, GitHub, X and audit links for new projects, and Exa found posts about them; what was found then still shows, and nothing
+            is added. The one-line &quot;what it does&quot; is written by Claude from the registry entry, the hook&apos;s permissions and any
+            verified source code; the two-sentence &quot;why people care&quot; from the figures, GitHub activity and those posts, rewritten only
+            when the signals change; the page shows when. The Building tab&apos;s audit, launch, hackathon and incubator posts come from Exa
+            searches, classified by Claude.
           </p>
           <h3>Activity</h3>
           <p>
             Buys and sells are GeckoTerminal&apos;s rolling 24-hour counts. Top wallets come from GeckoTerminal&apos;s latest ~300 trades in each
             of Bait&apos;s 30 busiest pools, once a day. Distinct wallet counts come from the indexer where it has caught up, otherwise from those
             trades; a &quot;≤&quot; marks an upper bound. The live trade feed on a project page reads GeckoTerminal&apos;s recent trades for the project&apos;s
-            busiest pool, hides trades under $10, and refreshes every minute while you watch. Wallet labels and the &quot;Smart money&quot; pill come
-            from Nansen labels collected through early October 2026. &quot;Wallets 7d&quot; and the top wallet&apos;s share of swaps come from the indexer
+            busiest pool, hides trades under $10, and refreshes every minute while you watch. &quot;Wallets 7d&quot; and the top wallet&apos;s share of swaps come from the indexer
             and are shown at any size, with no threshold; they are unknown unless every chain the project is on has caught up through the week. A project page names the wallet that deployed
             each hook (from the registry, or the explorer&apos;s contract creator) and the share of the week&apos;s swaps those wallets made.
             The same figures are available as JSON from the read API: /api/v1/projects, /api/v1/projects/[slug] and /api/v1/hooks/[address].
@@ -134,7 +136,6 @@ export default function AboutPage() {
             <li>Hooks are third-party code in the swap path. Nothing here is audited by us.</li>
             <li>Flags and properties are shown as published in the hooklist registry. We do not verify them against bytecode.</li>
             <li>&quot;Audit linked&quot; means an audit link is published. It is not a statement about the audit&apos;s scope or findings.</li>
-            <li>Smart-money counts are Nansen labels on addresses that interacted with a project&apos;s top pools. They are not investment signals.</li>
             <li>Figures come from Bait&apos;s indexer and public APIs and can lag or be wrong when a source stalls; a project page says which day its figures run through. Metrics are USD estimates.</li>
             <li>Bait is a personal project, not affiliated with Uniswap Labs or the Uniswap Foundation.</li>
           </ul>

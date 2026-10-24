@@ -17,10 +17,10 @@ with the classic Uniswap swap widget.
 ## How it works
 
 - `pipeline/` (Python 3.12): nightly Railway cron at 06:00 UTC. Steps in order: ingest (Uniswap hooklist),
-  snapshot (GeckoTerminal + on-chain fallback), activity (trades, top wallets, Nansen labels), onchain (copies
-  indexer tables), group (hooks to projects, incl. verified-source naming in `steps/names.py`), enrich (Parallel +
-  Claude), score (7d volume, trending, new, spam and wash rules), signals (Exa receipts, GitHub, Claude blurbs),
-  radar (hooks being built), digest (Mondays).
+  snapshot (GeckoTerminal + on-chain fallback), activity (trades, top wallets), onchain (copies
+  indexer tables), group (hooks to projects, incl. verified-source naming in `steps/names.py`), enrich (Claude),
+  score (7d volume, trending, new, spam and wash rules), signals (GitHub, Claude blurbs), radar (hooks being built;
+  Exa + Claude), digest (Mondays).
 - `pipeline/bait/indexer/`: always-on HyperSync indexer, 16 chains, every hooked v4 pool plus a 14-day swap window.
 - `pipeline/bait/costs.py`: spend ledger and budgets ($3/day, $40/30 days) checked before every paid call.
 - `web/` (Next.js 16, Drizzle, Postgres): server-rendered, ISR 1h, in-process caches.

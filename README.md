@@ -32,7 +32,7 @@ Uniswap hooklist (registry) ─┐
 HyperSync (16 chains) ───────┤   pipeline/   nightly 06:00 UTC: ingest, snapshot, activity, onchain,
 GeckoTerminal, public RPC ───┤               group, enrich, score, signals, radar, digest
 Blockscout, Sourcify ────────┤   indexer/    always on: every hooked v4 pool + 14 days of swaps
-Exa, Parallel, Claude ───────┘        │
+Exa, Claude ─────────────────┘        │
                                       ▼
                                   Postgres  ◄──  web/   Next.js, server-rendered, in-process caches
 ```
@@ -75,7 +75,8 @@ Per-service details: [`pipeline/README.md`](pipeline/README.md), [`web/README.md
 | GeckoTerminal | pool TVL, rolling 24h figures, closed-day candles, recent trades, top wallets | about 5 calls a minute on the free tier; keyless runs take ~35 minutes |
 | Public RPC, Blockscout, Sourcify, Routescan | hook resolution, bytecode, contract names | per-chain quirks listed in `pipeline/README.md` |
 | DefiLlama | prices | current prices, so raw indexer USD is an estimate |
-| Exa, Parallel, Claude | links, team and audit details, the two text lines | paid; all three optional and budget-capped |
+| Claude | the two text lines, classifying unnamed hooks and radar results | paid; optional and budget-capped |
+| Exa | the Building tab's web results (audits, launches, hackathons, incubators) | paid; optional and budget-capped; radar only |
 
 ## Read API
 

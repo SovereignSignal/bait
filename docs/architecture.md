@@ -13,9 +13,11 @@ where the two disagree, this page is wrong and should be fixed in the same PR as
 
 Nightly steps, in order (`pipeline/bait/steps/`): `ingest` (hooklist registry), `snapshot` (per-pool TVL and volume
 from GeckoTerminal, subgraphs or public RPC), `activity` (trades and top wallets), `onchain` (copy the indexer's exact
-usage into the feed tables), `group` (hooks into projects), `enrich` (links, team, the two text lines), `score`
-(windows, trending, new, spam, wash, activity status), `signals` (receipts, repos), `radar` (hooks being built),
-`digest` (Mondays). Each step is idempotent per day: rows are keyed on their natural key plus `day` and upserted.
+usage into the feed tables), `group` (hooks into projects), `enrich` (the "what it does" line and category, from the
+registry, the chain and verified source), `score` (windows, trending, new, spam, wash, activity status), `signals`
+(GitHub activity, alive, the "why people care" line), `radar` (hooks being built; the only Exa caller), `digest`
+(Mondays). Parallel and the per-project Exa receipts search were removed on 2026-10-24; the links, receipts and signal
+rows they wrote stay stored and are not refreshed. Each step is idempotent per day: rows are keyed on their natural key plus `day` and upserted.
 
 Spend: `pipeline/bait/costs.py` keeps an `api_spend` ledger and refuses a paid call past `SPEND_DAILY_USD` (3) or
 `SPEND_MONTHLY_USD` (40). `python -m bait cost-preview` prints the worst case for a run.
@@ -100,7 +102,7 @@ Server-rendered from Postgres only. `/` ships the first 100 rows and the client 
 1-hour stale-while-revalidate in-process cache that drops within a minute of the pipeline scoring a new day.
 `/api/ready` is the healthcheck (503 until the schema the build reads exists); `/api/health` is data freshness. The
 routing-eligibility and receipt-relevance rules are implemented twice (Python and TypeScript) and both assert the
-shared fixtures in `fixtures/`.
+shared fixtures in `fixtures/` (no step writes receipts any more; the web still filters the stored ones).
 
 ## Where things are decided
 

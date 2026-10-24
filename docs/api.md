@@ -29,7 +29,9 @@ curl -s https://bait-production-2706.up.railway.app/api/v1/projects/angstrom | j
 A retired slug (renamed or merged project) answers 308 to the current one. Spam-flagged projects are 404, as on the
 site. Response: `{ api_version, project }` where `project` is the summary plus `data_day`, `why_blurb`,
 `why_blurb_at`, `hooks[]`, `pools[]`, `daily_volume_usd[]` (`{day, vol_usd}`, oldest first, about 14 days),
-`top_wallets[]`, `receipts[]`, `signals`.
+`top_wallets[]`, `receipts[]`, `signals`. `receipts[]` are posts about the project found before 2026-10-24 (none are
+added now). `signals` is `{last_commit_at, last_mention_at, audit_count}`: the last GitHub commit Bait saw, the newest
+`published_at` among the listed receipts (null when there are none), and the number of audit links.
 
 ## Look up a hook address
 
@@ -55,7 +57,7 @@ hooklisted, deployer, deployer_source}] }] }`.
 | `metrics.vol_7d_usd`, `vol_7d_prev_usd`, `vol_24h_usd`, `tvl_usd`, `swaps_7d`, `swaps_24h`, `pools`, `hooks` | closed UTC days; volume is a USD estimate |
 | `metrics.wallets_24h`, `wallets_24h_exact` | distinct wallets on the last closed day; when `exact` is false the number is an upper bound |
 | `metrics.wallets_7d`, `top_wallet_share_7d`, `deployer_swap_share_7d` | from the indexer's exact per-wallet swap counts; known only when every chain of the project is caught up; shares are of swaps, not volume |
-| `metrics.buys_24h_rolling`, `sells_24h_rolling`, `smart_wallets_24h` | GeckoTerminal's rolling 24h counts and Nansen-labelled wallets among the top traders |
+| `metrics.buys_24h_rolling`, `sells_24h_rolling` | GeckoTerminal's rolling 24h counts |
 | `metrics.score_trending`, `rank_trending`, `trending_min_vol_usd` | the site's trending score and rank (null when not ranked) |
 | `links.website`, `links.github`, `links.x` | validated links; may be null |
 
