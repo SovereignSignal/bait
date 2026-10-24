@@ -79,16 +79,11 @@
 a.trade:hover { background: var(--hover); }
 .tWho { min-width: 96px; flex: 1; display: flex; flex-direction: column; gap: 2px; }
 .tAddr { font-size: 12px; white-space: nowrap; }
-.tTags { display: flex; gap: 4px; flex-wrap: wrap; }
-.tTags:empty { display: none; }
 .tUsd { font-weight: 600; min-width: 64px; text-align: right; }
 .tAge { font-size: 12px; min-width: 28px; text-align: right; }
 
 /* top wallets */
 .wallet { display: flex; align-items: center; gap: 8px; min-width: 0; }
-/* label pills are .b (nowrap globally): let a long one wrap inside the table cell too, not only on phones */
-.wallet .tTags { min-width: 0; }
-.wallet .tTags > span { white-space: normal; overflow-wrap: anywhere; }
 .bs { display: inline-flex; gap: 4px; }
 
 .why { font-size: 15px; line-height: 1.55; max-width: 70ch; text-wrap: pretty; }
@@ -115,6 +110,4 @@ a.trade:hover { background: var(--hover); }
   .stack li { min-width: 0; overflow-wrap: anywhere; }
   .stackSub { white-space: normal; }
   .stack .wallet { align-items: flex-start; }
-  .stack .wallet .tTags { flex: 1 1 0; min-width: 0; flex-wrap: wrap; overflow-wrap: anywhere; white-space: normal; }
-  .stack .wallet .tTags > span { white-space: normal; min-width: 0; }
 }

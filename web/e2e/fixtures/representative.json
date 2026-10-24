@@ -33,7 +33,6 @@
         "hooksN": 2
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "ineligible",
@@ -57,8 +56,7 @@
         "buys24h": null,
         "sells24h": null,
         "buyers24h": null,
-        "sellers24h": null,
-        "smartWallets": null
+        "sellers24h": null
       },
       "isNew": false,
       "isSpam": false,
@@ -214,7 +212,6 @@
         "hooksN": 6
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "ineligible",
@@ -238,8 +235,7 @@
         "buys24h": null,
         "sells24h": null,
         "buyers24h": null,
-        "sellers24h": null,
-        "smartWallets": null
+        "sellers24h": null
       },
       "isNew": false,
       "isSpam": false,
@@ -641,7 +637,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "ineligible",
@@ -665,8 +660,7 @@
         "buys24h": null,
         "sells24h": null,
         "buyers24h": null,
-        "sellers24h": null,
-        "smartWallets": null
+        "sellers24h": null
       },
       "isNew": false,
       "isSpam": false,
@@ -898,7 +892,6 @@
         "hooksN": 2
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "ineligible",
@@ -922,8 +915,7 @@
         "buys24h": null,
         "sells24h": null,
         "buyers24h": null,
-        "sellers24h": null,
-        "smartWallets": null
+        "sellers24h": null
       },
       "isNew": false,
       "isSpam": false,
@@ -1094,7 +1086,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "ineligible",
@@ -1118,8 +1109,7 @@
         "buys24h": null,
         "sells24h": null,
         "buyers24h": null,
-        "sellers24h": null,
-        "smartWallets": null
+        "sellers24h": null
       },
       "isNew": false,
       "isSpam": false,
@@ -1356,7 +1346,6 @@
         "hooksN": 12
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "ineligible",
@@ -1380,8 +1369,7 @@
         "buys24h": null,
         "sells24h": null,
         "buyers24h": null,
-        "sellers24h": null,
-        "smartWallets": null
+        "sellers24h": null
       },
       "isNew": false,
       "isSpam": false,
@@ -1987,7 +1975,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2011,8 +1998,7 @@
         "buys24h": 0,
         "sells24h": 0,
         "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "sellers24h": 0
       },
       "isNew": false,
       "isSpam": false,
@@ -2107,7 +2093,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2131,8 +2116,7 @@
         "buys24h": null,
         "sells24h": null,
         "buyers24h": null,
-        "sellers24h": null,
-        "smartWallets": null
+        "sellers24h": null
       },
       "isNew": false,
       "isSpam": false,
@@ -2227,7 +2211,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2251,8 +2234,7 @@
         "buys24h": 0,
         "sells24h": 0,
         "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "sellers24h": 0
       },
       "isNew": false,
       "isSpam": false,
@@ -2347,7 +2329,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2371,8 +2352,7 @@
         "buys24h": 0,
         "sells24h": 0,
         "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "sellers24h": 0
       },
       "isNew": false,
       "isSpam": true,
@@ -2467,7 +2447,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2491,8 +2470,7 @@
         "buys24h": 0,
         "sells24h": 0,
         "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "sellers24h": 0
       },
       "isNew": false,
       "isSpam": true,
@@ -2587,7 +2565,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2611,8 +2588,7 @@
         "buys24h": 0,
         "sells24h": 0,
         "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "sellers24h": 0
       },
       "isNew": false,
       "isSpam": false,
@@ -2707,7 +2683,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2731,8 +2706,7 @@
         "buys24h": 0,
         "sells24h": 0,
         "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "sellers24h": 0
       },
       "isNew": false,
       "isSpam": false,
@@ -2827,7 +2801,6 @@
         "hooksN": 1
       },
       "signals": {
-        "smartMoneyLps": null,
         "lastCommitAt": null,
         "lastExaHitAt": null,
         "routable": "eligible",
@@ -2851,8 +2824,7 @@
         "buys24h": 0,
         "sells24h": 0,
         "buyers24h": 0,
-        "sellers24h": 0,
-        "smartWallets": 0
+        "sellers24h": 0
       },
       "isNew": false,
       "isSpam": false,

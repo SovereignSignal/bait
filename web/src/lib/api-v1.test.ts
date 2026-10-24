@@ -38,6 +38,11 @@ test("summary and detail serializers: snake_case, nulls for unknown, never NaN",
   assert.equal(JSON.stringify(d).includes("NaN"), false);
 });
 
+test("retired Nansen figures are gone from the summary", () => {
+  const m = projectSummaryV1(SAMPLE_PROJECTS[0], SITE).metrics as Record<string, unknown>;
+  assert.equal("smart_wallets_24h" in m, false);
+});
+
 test("hook lookup: by address regardless of case, optionally one chain; unknown addresses are empty", () => {
   const p = SAMPLE_PROJECTS.find((x) => x.hooks.length > 0)!;
   const h = p.hooks[0];

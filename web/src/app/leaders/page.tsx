@@ -12,7 +12,7 @@ import s from "./leaders.module.css";
 // Dynamic like "/": a build-time prerender would be empty (no DATABASE_URL in the image) for up to an hour after each deploy.
 // The heavy read is behind the 1h in-process cache in queries.ts.
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = { title: "Leaders", description: "Usage leaderboards across Uniswap v4 hooks: wallets, volume, TVL and smart-money wallets." };
+export const metadata: Metadata = { title: "Leaders", description: "Usage leaderboards across Uniswap v4 hooks: wallets, volume and TVL." };
 
 function Board({ title, note, entries, fmt, empty }: { title: string; note: string; entries: LeaderEntry[]; fmt: (n: number) => string; empty: string }) {
   return (
@@ -82,7 +82,6 @@ export default async function LeadersPage() {
           <Board title="Most wallets" note="last closed UTC day, distinct where known" entries={L.wallets} fmt={int} empty="Wallet counts appear after the next pipeline run." />
           <Board title="Most volume" note="7 days" entries={L.volume} fmt={usd} empty="No volume indexed yet." />
           <Board title="Most TVL" note="now" entries={L.tvl} fmt={usd} empty="No TVL indexed yet." />
-          {L.smartMoney.length > 0 && <Board title="Most smart money" note="distinct wallets, 24h" entries={L.smartMoney} fmt={int} empty="" />}
         </div>
       </main>
       <Footer sample={usingFixtures()} through={fresh?.through} />

@@ -131,7 +131,6 @@ export function projectSummaryV1(p: ProjectSummary & { rank?: number }, site: st
       deployer_swap_share_7d: num(u.deployerSwapShare7d),
       buys_24h_rolling: num(u.buys24h),
       sells_24h_rolling: num(u.sells24h),
-      smart_wallets_24h: num(u.smartWallets),
       score_trending: p.scoreTrending,
       rank_trending: p.rank ?? null,
       trending_min_vol_usd: TRENDING_MIN_VOL,

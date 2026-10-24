@@ -154,7 +154,8 @@ export const poolTopWallets = pgTable(
   (t) => [primaryKey({ columns: [t.poolId, t.chainId, t.day, t.address] })],
 );
 
-/** Nansen labels per wallet. An empty list is a real answer ("no labels"). */
+/** Nansen labels per wallet, frozen since early October 2026. An empty list is a real answer ("no labels"). Read only for
+ *  the read API's top_wallets[].labels; the pages no longer show them. */
 export const walletLabels = pgTable(
   "wallet_labels",
   {
@@ -170,10 +171,10 @@ export const walletLabels = pgTable(
 
 /**
  * One row per (project, kind). Value shapes written by the pipeline:
- *   nansen {addresses_checked, labeled: [{address, chain_id, labels: string[]}], smart_money: bool}
  *   github {repo, stars, last_commit_at, commits_30d}
- *   exa    {hits_30d, latest, top: [{url, title}]}
- *   alive  {alive: bool}
+ *   alive  {alive: bool}            (GitHub only since 2026-10-24)
+ *   exa    {hits_30d, latest, top: [{url, title}]}   frozen since 2026-10-24 (receipts search removed)
+ * Frozen and no longer read by the web: nansen (until 2026-10-08).
  */
 export const signals = pgTable(
   "signals",

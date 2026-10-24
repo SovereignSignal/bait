@@ -81,9 +81,6 @@ export function Detail({ p, now, fresh }: { p: ProjectDetail; now: number; fresh
     ...(p.upgradeable ? [{ cls: "b-a", label: "Upgradeable", why: "The owner can change this hook's code. Read it before you trade." }] : []),
     ...(p.isNew ? [{ cls: "b-p", label: `New · ${ago(p.firstSeenAt, now)}`, why: "First seen in the last 7 days." }] : []),
     ...(!p.isNew && p.rank ? [{ cls: "b-a", label: `#${p.rank} trending`, why: "Rank by 7-day volume growth, among projects older than a week with at least $10K this week and $1K the week before." }] : []),
-    ...(u.smartWallets != null && u.smartWallets > 0
-      ? [{ cls: "b-p", label: `◆ ${u.smartWallets} smart wallet${u.smartWallets === 1 ? "" : "s"}`, why: "Wallets Nansen labelled as smart money (labels collected until October 2026) traded here in the last day." }]
-      : []),
   ];
   const partial = p.chains.filter((c) => fresh?.partialChains?.includes(c));
   const vs = variants(p.hooks);
@@ -444,14 +441,6 @@ function WalletWho({ w }: { w: ProjectDetail["topWallets"][number] }) {
       ) : (
         <span className="mono">{shortAddr(w.address)}</span>
       )}
-      <span className={s.tTags}>
-        {w.smartMoney && <span className="b b-p">◆ Smart money</span>}
-        {w.labels.slice(0, w.smartMoney ? 1 : 2).map((l) => (
-          <span key={l} className="b b-n">
-            {l}
-          </span>
-        ))}
-      </span>
     </span>
   );
 }

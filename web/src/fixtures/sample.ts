@@ -12,7 +12,6 @@ import type {
   PoolView,
   ProjectDetail,
   ReceiptView,
-  WalletLabel,
   WalletView,
 } from "@/lib/types";
 import data from "./terminal-sample.json";
@@ -119,8 +118,8 @@ function wallets(raw: Raw, chainId: ChainId, h: number): WalletView[] {
     left -= v;
     const trades = 3 + ((h >> i) % 40);
     const buys = Math.round(trades * (0.35 + ((h >> (i + 2)) % 50) / 100));
-    // one deliberately long label list so the phone layout's overflow test has something to wrap
-    const labels = raw.name === "StablePairHook" && i === 0 ? ["Relay Protocol: EOA Bridge Relay Protocol mevrevolutionx.eth"] : LABELS[(h + i) % LABELS.length];
+    // stands in for the frozen Nansen labels, which reach only the read API's top_wallets (the pages no longer show them)
+    const labels = LABELS[(h + i) % LABELS.length];
     out.push({
       address: addr(`${raw.name}:${i}`),
       chainId,
@@ -209,7 +208,7 @@ function build(raw: Raw, i: number): ProjectDetail {
     hooklisted: raw.hooklisted,
     upgradeable: raw.upg,
     metrics: { tvlUsd: raw.tvl, vol7d: raw.vol7, vol7dPrev: raw.prev, swaps7d: raw.txs * 7, poolsN: raw.pools, hooksN: raw.hooks },
-    signals: { smartMoneyLps: null, lastCommitAt: null, lastExaHitAt: null, routable: raw.routable, auditCount: raw.audited ? 1 : 0, auditUrl: raw.audited ? "https://github.com/Uniswap/hooklist" : null },
+    signals: { lastCommitAt: null, lastExaHitAt: null, routable: raw.routable, auditCount: raw.audited ? 1 : 0, auditUrl: raw.audited ? "https://github.com/Uniswap/hooklist" : null },
     receipts: (raw.rec ?? []).map(receipt),
     topPool: top ? { poolId: top.poolId, chainId: top.chainId, token0Symbol: top.token0Symbol, token1Symbol: top.token1Symbol, hookAddress: hookAddr } : null,
     usage: {
@@ -222,7 +221,6 @@ function build(raw: Raw, i: number): ProjectDetail {
       sells24h: buys == null ? null : raw.txs - buys,
       buyers24h: raw.wallets > 0 ? Math.round(raw.wallets * (buyShare + 0.05)) : null,
       sellers24h: raw.wallets > 0 ? Math.round(raw.wallets * (1.05 - buyShare)) : null,
-      smartWallets: topWallets.filter((w) => w.smartMoney).length,
       wallets7d: null,
       topWalletShare7d: null,
       deployerSwapShare7d: null,
@@ -244,11 +242,6 @@ const candidateFixtures = loadE2eFixtures();
 export const SAMPLE_PROJECTS: ProjectDetail[] = candidateFixtures?.projects ?? (data as Raw[]).map(build);
 export const SAMPLE_ALIASES: Record<string, string> = candidateFixtures?.aliases ?? {};
 export const SAMPLE_FRESHNESS = candidateFixtures?.freshness ?? null;
-
-/** wallet_labels stand-in: every sample top wallet with a label. Key: `${chainId}:${address}`. */
-export const SAMPLE_WALLET_LABELS: Map<string, WalletLabel> = new Map(
-  SAMPLE_PROJECTS.flatMap((p) => p.topWallets.filter((w) => w.labels.length).map((w) => [`${w.chainId}:${w.address}`, { labels: w.labels, smartMoney: w.smartMoney }] as const)),
-);
 
 export const SAMPLE_DIGESTS: DigestView[] = [
   {
