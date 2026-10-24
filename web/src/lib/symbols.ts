@@ -5,6 +5,7 @@
 
 // DefiLlama chain keys, mirroring pipeline/bait/indexer/chains.py.
 import { nativeSymbol } from "./chains";
+import { processSingleton } from "./singleton";
 
 const LLAMA: Record<number, string> = {
   1: "ethereum", 10: "optimism", 56: "bsc", 130: "unichain", 137: "polygon", 143: "monad", 480: "wc", 1868: "soneium",
@@ -22,7 +23,12 @@ const RPC: Record<number, string> = {
 const ZERO = "0x0000000000000000000000000000000000000000";
 const HIT_MS = 24 * 3600_000;
 const MISS_MS = 6 * 3600_000;
-const cache = new Map<string, { at: number; sym: string | null }>();
+// Per process, not per Next bundle (lib/singleton.ts): the list load that reads it can start from any bundle.
+const { cache, inflight } = processSingleton("symbols", () => ({
+  cache: new Map<string, { at: number; sym: string | null }>(),
+  /** Lookups in flight, per token: concurrent renders share one resolution instead of each starting their own. */
+  inflight: new Map<string, Promise<void>>(),
+}));
 
 export type TokenRef = { chainId: number; address: string };
 const key = (t: TokenRef) => `${t.chainId}:${t.address.toLowerCase()}`;
@@ -107,9 +113,6 @@ async function fromChain(refs: TokenRef[]): Promise<void> {
     }),
   );
 }
-
-/** Lookups in flight, per token: concurrent renders share one resolution instead of each starting their own. */
-const inflight = new Map<string, Promise<void>>();
 
 export type ResolveDeps = { llama: (refs: TokenRef[]) => Promise<void>; chain: (refs: TokenRef[]) => Promise<void> };
 const REAL_DEPS: ResolveDeps = { llama: fromLlama, chain: fromChain };

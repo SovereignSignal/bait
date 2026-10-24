@@ -10,6 +10,7 @@ import { researchProject } from "@/lib/research";
 import { receiptRelevant } from "@/lib/relevance";
 import { resolveSymbols } from "@/lib/symbols";
 import { createSwrCache, type Ttl } from "@/lib/swr-cache";
+import { processSingleton } from "@/lib/singleton";
 import { isSlugShaped, isUnlisted, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
@@ -161,7 +162,7 @@ export async function getProjectPage(slug: string): Promise<{ project: ProjectDe
     const gen = (all as Loaded).gen;
     const pin = gen != null ? { latest: (all as Loaded).day ?? null } : {};
     // No safe() here: a database error throws (Next keeps the last good page) instead of becoming a cached 404.
-    const loaded = await cached(`project:${gen ?? "-"}:${slug}`, () => loadFromDb(db, { slug, full: true, ...pin }), degradedTtl);
+    const loaded = await detailCache.get(`project:${gen ?? "-"}:${slug}`, () => loadFromDb(db, { slug, full: true, ...pin }), degradedTtl);
     detail = loaded[0] ?? null;
     // the list row's name and top pool: symbol lookups can differ between two loads, the label must not
     if (detail && base) detail = { ...detail, name: base.name, topPool: base.topPool };
@@ -312,47 +313,61 @@ export async function safe<T>(label: string, fn: () => Promise<T>, fallback: T, 
   }
 }
 
-// ---------- one-hour stale-while-revalidate cache for the heavy reads (single replica on Railway) ----------
-const cache = createSwrCache<unknown>({ ttlMs: 3_600_000, max: 400 });
-// Pool probes get their own cache: a burst of unknown pool ids from /api/trades must never evict loadAll or the leaders.
-const poolKeyCache = createSwrCache<boolean>({ ttlMs: 600_000, max: 5_000 });
+// ---------- one-hour stale-while-revalidate caches for the heavy reads (single replica on Railway) ----------
+/** A load where a usage sub-query fell back to null (outage, or a table that is not there yet) is retried after 60 s, not 1 h. */
+type Loaded = ProjectDetail[] & { degraded?: boolean; day?: string | null; gen?: number };
+
+// One set per server process (lib/singleton.ts), not per Next bundle: pages and route handlers read the same list load,
+// so GET /api/rows, which every visit to "/" fetches next, no longer loads the whole list a second time.
+const state = processSingleton("queries", () => ({
+  // the list load and the freshness line
+  cache: createSwrCache<unknown>({ ttlMs: 3_600_000, max: 400 }),
+  // Project details get their own cache: eviction takes the oldest entry, which was the list load, so a crawl of a few
+  // hundred project pages made the next visitor wait for the full reload.
+  details: createSwrCache<Loaded>({ ttlMs: 3_600_000, max: 400 }),
+  // Pool probes get their own cache: a burst of unknown pool ids from /api/trades must never evict loadAll or the leaders.
+  poolKeys: createSwrCache<boolean>({ ttlMs: 600_000, max: 5_000 }),
+  loads: 0,   // generation stamp: a detail is cached per list load, never mixed with another one
+  lastGen: undefined as number | undefined,
+  lastDaySeen: null as string | null,
+  lastProbe: 0,
+}));
+const { cache, details: detailCache, poolKeys: poolKeyCache } = state;
 export function cached<T>(key: string, fn: () => Promise<T>, ttl?: Ttl<T>): Promise<T> {
   return cache.get(key, fn as () => Promise<unknown>, ttl as Ttl<unknown> | undefined) as Promise<T>;
 }
 
-/** A load where a usage sub-query fell back to null (outage, or a table that is not there yet) is retried after 60 s, not 1 h. */
-type Loaded = ProjectDetail[] & { degraded?: boolean; day?: string | null; gen?: number };
-let loads = 0;   // generation stamp: a detail is cached per list load, never mixed with another one
 const DEGRADED_TTL_MS = 60_000;
 const degradedTtl = (r: Loaded): number => (r.degraded ? DEGRADED_TTL_MS : 3_600_000);
 
-let lastDaySeen: string | null = null;
-let lastProbe = 0;
-/** Cheap probe: when the pipeline has scored a new day, drop every cached read so the site refreshes within a minute. */
+/**
+ * Cheap probe: when the pipeline has scored a new day, mark every cached read stale so the site moves to it within a
+ * minute. Stale, not dropped: the next read starts the reload and is answered from the previous load meanwhile, so the
+ * first visitor of the day no longer waits the several seconds a full list load takes.
+ */
 async function refreshIfNewDay(db: NonNullable<ReturnType<typeof getDb>>): Promise<void> {
   const now = Date.now();
-  if (now - lastProbe < 60_000) return;
-  lastProbe = now;
+  if (now - state.lastProbe < 60_000) return;
+  state.lastProbe = now;
   const r = await safe("probe:maxday", async () => (await db.execute<{ d: string | null }>(sql`select max(day)::text as d from project_daily`)) as unknown, null);
   const d = ((Array.isArray(r) ? r[0] : (r as { rows?: unknown[] } | null)?.rows?.[0]) as { d?: string | null } | undefined)?.d ?? null;
-  if (d && d !== lastDaySeen) {
-    if (lastDaySeen !== null) cache.invalidate();
-    lastDaySeen = d;
+  if (d && d !== state.lastDaySeen) {
+    if (state.lastDaySeen !== null) cache.expire();
+    state.lastDaySeen = d;
   }
 }
 
 // ---------- loading ----------
 
-let lastGen: number | undefined;
 async function loadAll(): Promise<ProjectDetail[]> {
   const db = getDb();
   if (!db) return usingFixtures() ? SAMPLE_PROJECTS.map((p) => derive(p)) : [];
   await refreshIfNewDay(db);
   const all: Loaded = await safe("loadAll", () => cached<Loaded>("loadAll", () => loadFromDb(db, { full: false }), degradedTtl), []);
   // a new list load retires the details cached against the old one (they would never be read again)
-  if (all.gen != null && all.gen !== lastGen) {
-    if (lastGen !== undefined) cache.invalidate(`project:${lastGen}:`);
-    lastGen = all.gen;
+  if (all.gen != null && all.gen !== state.lastGen) {
+    if (state.lastGen !== undefined) detailCache.invalidate(`project:${state.lastGen}:`);
+    state.lastGen = all.gen;
   }
   return all;
 }
@@ -524,7 +539,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
   // reach the rows within minutes instead of an hour
   out.degraded = statsUsage === null || (lists.checkedAt === null && routingListsEnabled());
   out.day = latest;
-  out.gen = ++loads;
+  out.gen = ++state.loads;
   for (const p of projectRows) {
     const d = dailyBy.get(p.id);
     // Registry hooks span ~22 chains; Bait covers the ten in CHAINS. Unknown ids would crash every CHAINS[...] lookup.

@@ -4,6 +4,7 @@
 // minutes after deploy while API routes, which fetched the same files, answered. Node's own https client is used so Next
 // neither intercepts the request nor reclassifies the page.
 import { get } from "node:https";
+import { processSingleton } from "@/lib/singleton";
 import {
   ALLOWLIST_FILE,
   DENYLIST_FILE,
@@ -22,9 +23,13 @@ const MAX_BYTES = 2_000_000;
 const MIN_ALLOWLISTED = 100;
 const UA = "bait/0.1 (+https://github.com/SovereignSignal/bait; hook discovery feed)";
 
-let last: { lists: RoutingLists; at: number } | null = null;
-let pending: Promise<void> | null = null;
-let failedAt = 0;
+// One copy per process (lib/singleton.ts): the list load is shared by every Next bundle, and a refresh started from one
+// that had not fetched the lists yet would rebuild every row's routing from the rule alone.
+const state = processSingleton("routing-lists", () => ({
+  last: null as { lists: RoutingLists; at: number } | null,
+  pending: null as Promise<void> | null,
+  failedAt: 0,
+}));
 
 function text(file: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -66,19 +71,19 @@ export function routingListsEnabled(): boolean {
 export async function routingLists(): Promise<RoutingLists> {
   if (!routingListsEnabled()) return NO_LISTS;
   const now = Date.now();
-  const stale = !last || now - last.at >= TTL_MS;
-  if (stale && !pending && now - failedAt >= RETRY_MS) {
-    pending = load()
+  const stale = !state.last || now - state.last.at >= TTL_MS;
+  if (stale && !state.pending && now - state.failedAt >= RETRY_MS) {
+    state.pending = load()
       .then((lists) => {
-        last = { lists, at: Date.now() };
+        state.last = { lists, at: Date.now() };
       })
       .catch((e) => {
-        failedAt = Date.now();
+        state.failedAt = Date.now();
         console.warn(`[bait] routing lists unavailable: ${e instanceof Error ? e.message : e}`);
       })
       .finally(() => {
-        pending = null;
+        state.pending = null;
       });
   }
-  return last?.lists ?? NO_LISTS;
+  return state.last?.lists ?? NO_LISTS;
 }
