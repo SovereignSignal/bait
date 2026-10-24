@@ -140,8 +140,12 @@ def _blurb_ctx(conn, p, daily) -> dict:
            if r.kind not in FROZEN_KINDS}
     if (sig.get("alive") or {}).get("alive") is None:
         sig.pop("alive", None)              # unknown (no GitHub reading): left out, so it cannot be read as "not alive"
-    rec = conn.execute(sa.select(receipts.c.title, receipts.c.source, receipts.c.published_at)
-                       .where(receipts.c.project_id == p.id).order_by(receipts.c.published_at.desc()).limit(5)).all()
+    # Only receipts the page lists (rules.receipt_relevant, mirrored by web/src/lib/relevance.ts): merges and splits move
+    # receipts between projects, and a blurb must not cite a post its page hides. The five newest of those.
+    from ..rules import receipt_relevant
+    rec = [r for r in conn.execute(sa.select(receipts.c.title, receipts.c.source, receipts.c.published_at)
+                                   .where(receipts.c.project_id == p.id).order_by(receipts.c.published_at.desc()))
+           if receipt_relevant(p.name, r.title or "", r.source or "")][:5]
     return {
         "name": p.name, "category": p.category, "what_line": p.what_line,
         "metrics": {

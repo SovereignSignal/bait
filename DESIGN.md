@@ -957,3 +957,12 @@ Audit items open for the MVP, checked against the live API on 2026-10-24 (data d
   not known; their intro says how many are listed ("4 new projects listed") instead of a count it cannot back.
 - **Still open.** A project page's daily volume bars (and the API's `daily_volume_usd`) still draw $0 for a day with no
   rows on a chain that is not ready: Base projects whose week reads a dash can show a row of $0 days.
+
+## Blurb receipts match the page (2026-10-24)
+
+- **The why_blurb prompt gets the receipts the page lists.** `signals._blurb_ctx` sent the five newest stored receipts
+  unfiltered, while the web lists only those whose title names the project's current name and reads as DeFi
+  (`receiptRelevant`), and hides both receipts and blurb on an unidentified project. Merges and splits move receipts
+  between projects, so a blurb could cite a post its page hides. The prompt now gets the five newest that pass
+  `rules.receipt_relevant`, the Python copy of the same rule (shared cases in `fixtures/relevance_cases.json`); an
+  "Unlisted hook" name passes none. A stored blurb is still rewritten only when its signals change.

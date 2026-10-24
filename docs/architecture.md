@@ -109,7 +109,8 @@ Server-rendered from Postgres only. `/` ships the first 100 rows and the client 
 loading when the server boots and reloads in the background within a minute of the pipeline scoring a new day.
 `/api/ready` is the healthcheck (503 until the schema the build reads exists); `/api/health` is data freshness. The
 routing-eligibility and receipt-relevance rules are implemented twice (Python and TypeScript) and both assert the
-shared fixtures in `fixtures/` (no step writes receipts any more; the web still filters the stored ones).
+shared fixtures in `fixtures/` (no step writes receipts any more; the web filters the stored ones before it lists them,
+and the signals step before the why_blurb prompt sees them).
 
 ## Where things are decided
 

@@ -637,8 +637,8 @@ def is_alive(last_commit_at: datetime | None, now: datetime) -> bool:
 
 
 # --- receipt relevance (mirrors web/src/lib/relevance.ts; shared cases in fixtures/relevance_cases.json) ---
-# No step writes receipts since 2026-10-24 (the Exa receipts search is gone); the web still filters the stored ones with
-# its copy, and this one keeps the shared cases pinned on both sides.
+# No step writes receipts since 2026-10-24 (the Exa receipts search is gone). The stored ones are filtered on both sides:
+# the web with its copy before it lists them, the signals step with this one before the why_blurb prompt sees them.
 _DOMAIN_WORDS = ("uniswap", "hook", "v4", "liquidity", "swap", "pool", "amm", "dex", "lp", "mev", "fee")
 _BLOCKED_HOSTS = ("linkedin.com", "wikipedia.org", "netlify.app", "facebook.com", "instagram.com", "tiktok.com")
 

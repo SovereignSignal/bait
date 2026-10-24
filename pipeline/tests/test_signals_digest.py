@@ -99,6 +99,36 @@ def test_digest_only_on_monday_or_forced(conn, ctx):
     assert conn.execute(sa.select(sa.func.count()).select_from(db.digests)).scalar_one() == 2
 
 
+def test_the_blurb_prompt_gets_only_the_receipts_the_page_lists(conn, ctx):
+    # The web lists a stored receipt only when its title names the project's current name and reads as DeFi
+    # (relevance.ts), none for an "Unlisted hook", and merges and splits move receipts between projects. The prompt gets
+    # the same filter (rules.receipt_relevant) before the five-newest cut, so a blurb cannot cite a post its page hides.
+    p = insert_project(conn, "Angstrom", NOW - timedelta(days=40), slug="angstrom")
+    unnamed = insert_project(conn, "Unlisted hook 0x16f2…3a80", NOW - timedelta(days=40), slug="unlisted-hook-0x16f2-3a80")
+    for pid, score in ((p, 30.0), (unnamed, 20.0)):
+        insert_hook(conn, f"0x{pid}", 1, project_id=pid)
+        seed_daily(conn, pid, score=score, tvl=1e6)
+    hidden = [("Invincible Vs developers provide a detailed overview of Angstrom Levy's fighting style", "eventhubs.com"),
+              ("Kyle Hall", "linkedin.com"),
+              ("Fables: the deepest ETH/USDG pool on Robinhood Chain", "x.com")]       # another project's, moved by a merge
+    shown = [(f"Angstrom brings MEV protection to Uniswap v4 pools, part {i}", "theblock.co") for i in range(6)]
+    rows = [(p, t, s, age) for age, (t, s) in enumerate(hidden + shown)]                # the hidden three are the newest
+    rows.append((unnamed, "New Uniswap v4 hook launched", "x.com", 0))
+    conn.execute(sa.insert(db.receipts), [
+        {"project_id": pid, "url": f"https://news.example.com/{i}", "title": t, "source": s,
+         "published_at": NOW - timedelta(days=1 + age)} for i, (pid, t, s, age) in enumerate(rows)])
+    seen = {}
+
+    class Capture(FakeClaude):
+        def why_blurb(self, c):
+            seen[c["name"]] = c
+            return super().why_blurb(c)
+    ctx.clients.update(exa=NoExa(), github=None, claude=Capture())
+    assert signals.run(conn, ctx)["blurbs"] == 2
+    assert [r["title"] for r in seen["Angstrom"]["receipts"]] == [t for t, _ in shown[:5]]
+    assert seen["Unlisted hook 0x16f2…3a80"]["receipts"] == []
+
+
 def test_frozen_exa_and_nansen_signals_stay_out_of_alive_and_the_blurb(conn, ctx):
     # Signal rows written before 2026-10-24 stay stored, but no step refreshes them: a recent Exa hit no longer makes a
     # project alive, and the blurb prompt sees only live signals. Stored receipts are still dated facts it may use.
