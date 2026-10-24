@@ -809,3 +809,13 @@ The owner dropped three external sources. What changed and what stays:
   and transaction records, or the creation transaction from HyperSync traces (the indexer reads logs only, so traces
   are not plumbed). Wallets the deployer funded are still out of scope.
 - **To turn it on:** delete the `DEPLOYER_LOOKUPS=0` override on the production pipeline service and redeploy it.
+
+Update 2026-10-24 (review): the lookup queue takes turns. Ordered by project volume alone, factory families' clones
+took the budget. The 500 busiest projects held 4,918 hooks, 4,080 of them in 16 families, and 3,502 of those are
+unverified clones on Base and Robinhood (Sourcify 404 for all 10 sampled, explorer challenged): a miss every time.
+Rechecked every 14 days, they outnumber what 200 a night can ask in that window (about 3,000), so the queue stalled
+behind them; replaying that shape for 45 nights left 292 of the 500 projects never looked up. Projects now take turns,
+20 hooks each, busiest project first and newest hook first: every project's first 20 hooks come before any project's
+21st, and a family's later clones get what is left. Replayed, each of the 500 is asked within 10 nights. Tests are now
+held offline by `tests/conftest.py`: a name lookup or connect beyond loopback is refused and fails the test that tried.
+The old guard only set `KEYLESS=0`, which is how the CLI test's explorer and Sourcify calls went unnoticed.

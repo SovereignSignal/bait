@@ -84,3 +84,12 @@ def test_a_lost_response_on_a_paid_post_is_recorded_as_ambiguous_spend(monkeypat
     with pytest.raises(httpx.HTTPError):
         exa.search_recent("q")
     assert [(p, "ambiguous" in d) for p, d in exa.meter.records] == ([("exa", True)] if billed else [])
+
+
+def test_tests_cannot_reach_the_network():
+    """conftest._block_network: a real request fails at once instead of reaching the host, and is recorded so the test
+    that made it fails (this one takes its record back)."""
+    from tests.conftest import NETWORK_ATTEMPTS
+    with pytest.raises(httpx.ConnectError):
+        http.client(timeout=5).get("https://sourcify.dev/server/v2/contract/1/0x0000113dcf4add69999fad8f20f2b63f979bfcc0")
+    assert NETWORK_ATTEMPTS.pop() == "sourcify.dev"

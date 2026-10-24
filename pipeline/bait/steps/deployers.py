@@ -6,7 +6,8 @@ verified contract), then the chain's Blockscout instance for what Sourcify canno
 the runtime alone with no deployment record): the address record's creation transaction and its sender. A shared
 CREATE2 deployer (rules.SHARED_DEPLOYERS) is never stored, whichever source gives it; such a hook stays unknown.
 
-Bounded per run (DEPLOYER_LOOKUPS, 200), busiest projects first, newest hooks first. A hook is stamped
+Bounded per run (DEPLOYER_LOOKUPS, 200), busiest projects first, newest hooks first, TURN hooks of a project per turn
+(every project's first 20 before any project's 21st: see the candidate query). A hook is stamped
 (deployer_checked_at) once a source answered and none failed transiently, and a miss is retried after RECHECK_DAYS; a
 transient failure (429, 5xx, network) is not stamped and is asked again next run. A Blockscout instance that blocks
 bots (403, a Cloudflare challenge) is found with one probe and skipped for the night. A hook it leaves open is stamped
@@ -28,6 +29,7 @@ from . import RunContext, log
 RECHECK_DAYS = 14
 CANDIDATE_FACTOR = 5          # explorer-only runs: candidates read per cap slot, so blocked chains can be skipped
 SOURCES = ("sourcify", "explorer")   # hooks.deployer_source for each lookup, in the order they are asked
+TURN = 20                     # hooks of one project per turn of the queue (a factory family has 21+: group.FACTORY_MIN_HOOKS)
 
 
 def run(conn: sa.Connection, ctx: RunContext, out: dict) -> None:
@@ -48,13 +50,27 @@ def run(conn: sa.Connection, ctx: RunContext, out: dict) -> None:
     latest = conn.execute(sa.select(sa.func.max(project_daily.c.day))).scalar_one()
     vol = sa.select(project_daily.c.project_id, project_daily.c.vol_7d).where(project_daily.c.day == latest).subquery()
     stale = ctx.now - timedelta(days=RECHECK_DAYS)
+    # Projects take turns, TURN hooks each, busiest project first, newest hook first: every project's first 20 hooks
+    # come before any project's 21st. Ordered by project volume alone, factory families' clones took the budget: on
+    # 2026-10-24 the 500 busiest projects held 4,918 hooks, 4,080 of them in 16 families, 3,502 of those unverified
+    # clones on Base and Robinhood (Sourcify 404, explorer challenged) that miss every time. Rechecked every 14 days,
+    # they outnumber what 200 a night can ask in that time (about 3,000), so the queue stalled behind them: replaying
+    # that shape for 45 nights left 292 of the 500 never looked up; with turns, each was asked within 10 nights.
+    # A hook's turn is its place among all of its project's hooks, so a family's later clones stay behind every other
+    # project's first 20 even after its first 20 are stamped.
+    place = sa.func.row_number(type_=sa.Integer).over(
+        partition_by=hooks.c.project_id, order_by=(hooks.c.first_seen_at.desc(), hooks.c.chain_id, hooks.c.address))
+    grouped = (sa.select(hooks.c.chain_id, hooks.c.address, hooks.c.project_id, hooks.c.first_seen_at, hooks.c.deployer,
+                         hooks.c.deployer_checked_at, ((place - 1) // TURN).label("turn"))
+               .where(hooks.c.project_id.is_not(None)).subquery())
     # Sourcify answers every chain, so the cap is the first `cap` hooks. Without it, read well past the cap: a chain
     # whose instance blocks us is skipped for the night, and the cap is filled from the chains that answer.
-    q = (sa.select(hooks.c.chain_id, hooks.c.address)
-         .outerjoin(vol, vol.c.project_id == hooks.c.project_id)
-         .where(hooks.c.project_id.is_not(None), hooks.c.deployer.is_(None),
-                sa.or_(hooks.c.deployer_checked_at.is_(None), hooks.c.deployer_checked_at < stale))
-         .order_by(sa.func.coalesce(vol.c.vol_7d, 0).desc(), hooks.c.first_seen_at.desc(), hooks.c.chain_id, hooks.c.address)
+    q = (sa.select(grouped.c.chain_id, grouped.c.address)
+         .select_from(grouped.outerjoin(vol, vol.c.project_id == grouped.c.project_id))
+         .where(grouped.c.deployer.is_(None),
+                sa.or_(grouped.c.deployer_checked_at.is_(None), grouped.c.deployer_checked_at < stale))
+         .order_by(grouped.c.turn, sa.func.coalesce(vol.c.vol_7d, 0).desc(), grouped.c.first_seen_at.desc(),
+                   grouped.c.chain_id, grouped.c.address)
          .limit(cap if src is not None else cap * CANDIDATE_FACTOR))
     cands = [h for h in conn.execute(q).all() if src is not None or has_instance(h.chain_id)]
     if not cands:

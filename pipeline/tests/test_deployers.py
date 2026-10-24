@@ -12,7 +12,7 @@ from bait import db
 from bait.clients.blockscout import Blockscout
 from bait.clients.sourcify import Sourcify
 from bait.steps import deployers
-from tests.conftest import NOW, insert_hook, insert_project
+from tests.conftest import DAY, NOW, insert_hook, insert_project
 
 
 class FakeBlockscout:
@@ -227,6 +227,38 @@ def test_a_stored_create2_proxy_is_forgotten_and_looked_up_again(conn, ctx):
     deployers.run(conn, ctx, out)
     row = conn.execute(sa.select(db.hooks)).one()
     assert (row.deployer, row.deployer_source, out["deployers_cleared"]) == (STABLEPAIR_TEAM, "sourcify", 1)
+
+
+
+def test_a_factory_family_of_clones_that_always_miss_does_not_stall_the_queue(conn, ctx, monkeypatch):
+    """On 10/24, 3,502 of the hooks of the 500 busiest projects were factory-family clones on Base and Robinhood: not on
+    Sourcify, explorer challenged, a miss every time and more than 14 days of lookups can ask. Ordered by project volume
+    alone, every lookup went to rechecking them and the projects behind them were never asked. Projects take turns, 20
+    hooks each, so the quieter project is asked as soon as the family's first 20 are."""
+    monkeypatch.setenv("DEPLOYER_LOOKUPS", "5")                  # 5 a night: 75 per 14-day recheck, fewer than 100 clones
+    family = insert_project(conn, "Unlisted hook family 0xfa", first_seen=NOW)
+    solo = insert_project(conn, "Solo", first_seen=NOW)
+    clones = [W(1000 + i) for i in range(100)]
+    for i, a in enumerate(clones):
+        insert_hook(conn, a, 4663, project_id=family, first_seen=NOW - timedelta(minutes=i))
+    insert_hook(conn, W(1), 1, project_id=solo)
+    conn.execute(sa.insert(db.project_daily), [{"project_id": family, "day": DAY, "vol_7d": 1e9},
+                                               {"project_id": solo, "day": DAY, "vol_7d": 1e5}])
+    src = FakeSourcify({W(1): (W(2), "found")})                  # the clones: (None, "miss")
+    bs = FakeBlockscout({})
+    bs.blocked = (4663,)
+    ctx.clients.update(sourcify=src, blockscout=bs)
+    asked_on = {}
+    for night in range(45):
+        ctx.now, before = NOW + timedelta(days=night), len(src.calls)
+        deployers.run(conn, ctx, {})
+        for a in src.calls[before:]:
+            asked_on.setdefault(a, night)
+    assert conn.execute(sa.select(db.hooks.c.deployer).where(db.hooks.c.address == W(1))).scalar_one() == W(2)
+    assert asked_on[W(1)] == 4                                   # after the family's first 20, five a night
+    # What the budget cannot reach is the family's last clones (75 lookups per recheck, 100 clones that always miss),
+    # never another project: the first 60 clones are all asked.
+    assert set(clones[:60]) <= set(asked_on)
 
 
 def test_web_and_pipeline_share_the_create2_deployer_list():
