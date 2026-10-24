@@ -30,9 +30,7 @@ def test_anthropic_estimate_is_an_upper_bound():
     assert costs.anthropic_estimate("claude-sonnet-5-5", 3000, 600) == pytest.approx(0.0081)
 
 
-def test_parallel_and_exa_prices():
-    assert costs.parallel_usd("core") == 0.025 and costs.parallel_usd("lite") == 0.005
-    assert costs.parallel_usd("mystery") == 0.30          # unknown processor priced as ultra
+def test_exa_prices():
     assert costs.exa_usd(10) == pytest.approx(0.017)      # 0.007 search + 10 highlight pages x 0.001
     assert costs.exa_usd(10, highlights=False) == pytest.approx(0.007)
     assert costs.exa_usd(20) == pytest.approx(0.007 + 0.010 + 0.020)   # 10 extra results + 20 highlight pages
@@ -73,12 +71,25 @@ def test_monthly_window_is_rolling_30_days(file_engine):
 
 
 def test_per_provider_cap(file_engine):
-    m = _meter(file_engine, daily=100, monthly=100, per={"parallel": (0.05, None)})
-    m.record("parallel", 0.025)
-    m.record("parallel", 0.025)
-    m.check("exa", 1.0)                               # other providers unaffected
+    m = _meter(file_engine, daily=100, monthly=100, per={"exa": (0.05, None)})
+    m.record("exa", 0.025)
+    m.record("exa", 0.025)
+    m.check("anthropic", 1.0)                         # other providers unaffected
     with pytest.raises(BudgetExceeded):
-        m.check("parallel", 0.025)
+        m.check("exa", 0.025)
+
+
+def test_retired_parallel_spend_still_counts_toward_the_shared_budget(file_engine, monkeypatch):
+    # Parallel left on 2026-10-24; its ledger rows stay and still count in the all-provider windows.
+    monkeypatch.setenv("SPEND_DAILY_USD_PARALLEL", "0")              # a leftover per-provider cap is ignored
+    assert "parallel" not in costs.Budgets.from_env().per_provider
+    with file_engine.begin() as c:
+        c.execute(sa.insert(db.api_spend).values(ts=NOW - timedelta(days=2), provider="parallel", step="enrich", units=1,
+                                                 usd=4.0, detail=""))
+    m = _meter(file_engine, daily=100, monthly=5.0)
+    m.check("exa", 0.9)
+    with pytest.raises(BudgetExceeded):
+        m.check("exa", 1.1)
 
 
 def test_ledger_survives_a_rolled_back_step(file_engine):
@@ -132,9 +143,8 @@ def test_claude_client_refuses_before_calling_when_over_budget(file_engine):
     assert fake.calls == 0                             # no request was sent
 
 
-def test_exa_and_parallel_clients_record(file_engine):
+def test_exa_client_records(file_engine):
     from bait.clients.exa import Exa
-    from bait.clients.parallel import Parallel
 
     class Resp:
         def __init__(self, data, status=200):
@@ -148,17 +158,12 @@ def test_exa_and_parallel_clients_record(file_engine):
 
     class Http:
         def post(self, url, **kw):
-            return Resp({"results": []} if "exa" in url else {"run_id": "r1"})
-
-        def get(self, url, **kw):
-            return Resp({"output": {"content": {"team": "T"}}})
+            return Resp({"results": []})
 
     m = _meter(file_engine)
     e = Exa("k", http_client=Http()); e.meter = m
     e.search_recent("q")
-    p = Parallel("k", http_client=Http(), poll_s=0); p.meter = m
-    p.enrich("Proj", "")
-    assert m.run_usd == pytest.approx(0.017 + 0.025)
+    assert m.run_usd == pytest.approx(0.017)
 
 
 # --- group: cap + shortlist ---------------------------------------------------------------------
@@ -196,7 +201,7 @@ def test_shortlist_finds_the_matching_project():
 
 # --- preview matches what the steps would do ----------------------------------------------------
 def test_preview_counts_and_totals(conn, ctx, monkeypatch):
-    for k in ("ANTHROPIC_API_KEY", "PARALLEL_API_KEY", "EXA_API_KEY"):
+    for k in ("ANTHROPIC_API_KEY", "EXA_API_KEY"):
         monkeypatch.setenv(k, "test")
     monkeypatch.setenv("ENRICH_MAX", "40")
     monkeypatch.setenv("GROUP_CLAUDE_MAX", "100")
@@ -215,13 +220,13 @@ def test_preview_counts_and_totals(conn, ctx, monkeypatch):
     conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0x" + "8" * 40).values(description="limit order hook"))
     m = Meter(None, budgets=Budgets(3.0, 40.0, {}))
     rows = {(r["step"], r["provider"]): r for r in costs.preview(conn, ctx, m)}
-    assert rows[("enrich", "parallel")]["calls"] == 3 and rows[("enrich", "anthropic")]["calls"] == 3
-    assert rows[("signals", "exa")]["calls"] == 3 and rows[("signals", "anthropic")]["calls"] == 3
+    assert rows[("enrich", "anthropic")]["calls"] == 3 and rows[("signals", "anthropic")]["calls"] == 3
+    assert {p for _, p in rows} == {"anthropic", "exa"} and ("signals", "exa") not in rows   # Exa is radar only
     assert rows[("group", "anthropic")]["calls"] == 1   # only the described one; bare addresses cost nothing
     assert rows[("radar", "exa")]["calls"] == 6 and rows[("radar", "anthropic")]["calls"] == 30
     total = sum(r["worst_usd"] for r in rows.values())
     hand = (1 * costs.anthropic_estimate("claude-haiku-4-5", group.PROMPT_CHARS_MAX, 400)
-            + 3 * 0.025 + 3 * costs.anthropic_estimate("claude-sonnet-5-5", 6000, 600)
-            + 3 * 0.017 + 3 * costs.anthropic_estimate("claude-sonnet-5-5", 6000, 600)
+            + 3 * costs.anthropic_estimate("claude-sonnet-5-5", 6000, 600)
+            + 3 * costs.anthropic_estimate("claude-sonnet-5-5", 6000, 600)
             + 6 * 0.017 + 30 * costs.anthropic_estimate("claude-haiku-4-5", 4000, 300))
     assert total == pytest.approx(hand, rel=1e-6)

@@ -124,8 +124,6 @@ export interface Usage {
   sells24h: number | null;
   buyers24h: number | null;
   sellers24h: number | null;
-  /** distinct smart_money wallets among pool_top_wallets, latest day */
-  smartWallets: number | null;
 }
 
 export interface WalletView {
@@ -136,13 +134,6 @@ export interface WalletView {
   buys: number | null;
   sells: number | null;
   lastTradeAt: string | null; // ISO
-  labels: string[];
-  smartMoney: boolean;
-}
-
-export interface WalletLabel {
-  labels: string[];
-  smartMoney: boolean;
 }
 
 /** One trade from /api/trades/[chain]/[pool]. */
@@ -152,8 +143,6 @@ export interface TradeView {
   usd: number;
   wallet: string; // lowercase
   tx: string;
-  labels?: string[];
-  smartMoney?: boolean;
 }
 
 export interface ReceiptView {
@@ -164,12 +153,8 @@ export interface ReceiptView {
 }
 
 export interface SignalsView {
-  /** null = no Nansen coverage on any of the project's chains; tile hidden */
-  smartMoneyLps: number | null;
   /** ISO of the last GitHub commit, if any */
   lastCommitAt: string | null;
-  /** ISO of the last Exa hit, if any */
-  lastExaHitAt: string | null;
   routable: Eligibility;
   /** what decided `routable`: Uniswap's published allowlist or denylist, or the automatic rule */
   routingSource?: RoutingSource;
@@ -294,7 +279,6 @@ export interface LeadersView {
   wallets: LeaderEntry[];
   volume: LeaderEntry[];
   tvl: LeaderEntry[];
-  smartMoney: LeaderEntry[];
 }
 
 export interface DigestItem {

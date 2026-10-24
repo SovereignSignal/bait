@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { apiRedirect, findByHook, isHexAddress, listProjects, parseListQuery, projectSummaryV1, projectV1 } from "./api-v1";
+import { apiRedirect, findByHook, isHexAddress, lastMentionAt, listProjects, parseListQuery, projectSummaryV1, projectV1 } from "./api-v1";
 import { SAMPLE_PROJECTS } from "../fixtures/sample";
 
 const SITE = "https://example.test";
@@ -36,6 +36,30 @@ test("summary and detail serializers: snake_case, nulls for unknown, never NaN",
   assert.equal(d.daily_volume_usd.length, p.series.length);
   assert.ok(d.hooks.every((h) => h.address === h.address.toLowerCase()));
   assert.equal(JSON.stringify(d).includes("NaN"), false);
+});
+
+test("last_mention_at is the newest receipt the response lists, null with none (never a stored date without a mention)", () => {
+  const r = (publishedAt: string) => ({ url: "https://e.org/x", title: "X hook ships", source: "e.org", publishedAt });
+  assert.equal(lastMentionAt([]), null);
+  assert.equal(lastMentionAt([r(""), r("not a date")]), null);
+  assert.equal(lastMentionAt([r("2026-10-03T00:00:00.000Z"), r(""), r("2026-10-17T00:00:00.000Z"), r("2026-09-14T00:00:00.000Z")]), "2026-10-17T00:00:00.000Z");
+  const p = SAMPLE_PROJECTS[0];
+  assert.equal(projectV1({ ...p, receipts: [] }, SITE).signals.last_mention_at, null);
+  assert.equal(projectV1({ ...p, receipts: [r("2026-10-22T00:00:00.000Z")] }, SITE).signals.last_mention_at, "2026-10-22T00:00:00.000Z");
+});
+
+test("retired Nansen figures are gone from the summary", () => {
+  const m = projectSummaryV1(SAMPLE_PROJECTS[0], SITE).metrics as Record<string, unknown>;
+  assert.equal("smart_wallets_24h" in m, false);
+});
+
+test("top_wallets[] lists only the documented fields: the frozen Nansen labels and smart_money are gone", () => {
+  const p = SAMPLE_PROJECTS[0];
+  const w = { address: "0x" + "ab".repeat(20), chainId: p.chains[0], volumeUsd: 1200, trades: 3, buys: 2, sells: 1, lastTradeAt: null };
+  const stale = { ...w, labels: ["Smart Trader"], smartMoney: true };   // the shape a wallet carried before 2026-10-24
+  const d = projectV1({ ...p, topWallets: [stale] }, SITE);
+  assert.deepEqual(Object.keys(d.top_wallets[0]).sort(), ["address", "buys", "chain_id", "last_trade_at", "sells", "trades", "volume_usd"]);
+  assert.equal(JSON.stringify(d).includes("smart_money"), false);
 });
 
 test("hook lookup: by address regardless of case, optionally one chain; unknown addresses are empty", () => {

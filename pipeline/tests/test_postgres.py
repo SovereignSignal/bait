@@ -11,16 +11,17 @@ from tests.conftest import DAY, FIXTURE, NOW
 
 def _ctx():
     return RunContext(day=DAY, now=NOW, hooklist_file=FIXTURE, max_code_fetch=0,
-                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "parallel", "github", "names")})
+                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names")})
 
 
 def test_one_bad_item_does_not_lose_the_step_on_postgres(pg_engine):
-    # Three signals targets. The middle one's receipt write violates a constraint. Before savepoints, Postgres
-    # aborted the whole transaction: the first project's signals vanished too and the log still said "ok".
+    # Three signals targets. The middle one's signal write fails in Postgres. Before savepoints, Postgres aborted the
+    # whole transaction: the first project's signals vanished too and the log still said "ok".
     with pg_engine.begin() as conn:
         pids = []
         for i, name in enumerate(("Alpha", "Beta", "Gamma")):
             r = conn.execute(sa.insert(db.projects).values(slug=name.lower(), name=name, norm_name=name.lower(),
+                                                           github=f"https://github.com/x/{name.lower()}",
                                                            first_seen_at=NOW - timedelta(days=40)))
             pid = r.inserted_primary_key[0]
             pids.append(pid)
@@ -29,16 +30,14 @@ def test_one_bad_item_does_not_lose_the_step_on_postgres(pg_engine):
             conn.execute(sa.insert(db.project_daily).values(project_id=pid, day=DAY, tvl_usd=1e6 - i, vol_7d=0, vol_7d_prev=0,
                                                             swaps_7d=0, pools_n=1, score_trending=30.0 - i, is_new=False, is_spam=False))
 
-    class Exa:
-        def search_recent(self, query, days=30, n=10, now=None):
-            if "Beta" in query:
-                # url None violates receipts.url NOT NULL -> IntegrityError inside the per-project try
-                return [{"url": None, "title": "Beta hook ships", "source": "x", "published_at": NOW, "highlights": []}]
-            return [{"url": f"https://e.com/{query[:5]}", "title": f"{query[1:6]} hook ships", "source": "e.com",
-                     "published_at": NOW - timedelta(days=1), "highlights": []}]
+    class GitHub:
+        def activity(self, url, days=30, now=None):
+            # jsonb rejects \u0000 ("unsupported Unicode escape sequence"): a server-side error inside the per-project try
+            repo = "x/beta\u0000" if url.endswith("/beta") else url.removeprefix("https://github.com/")
+            return {"repo": repo, "stars": 1, "last_commit_at": (NOW - timedelta(days=1)).isoformat(), "commits_30d": True}
 
     ctx = _ctx()
-    ctx.clients["exa"] = Exa()
+    ctx.clients["github"] = GitHub()
     with pg_engine.begin() as conn:
         out = signals.run(conn, ctx)
     assert out["errors"] == 1

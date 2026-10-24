@@ -730,3 +730,42 @@ had to ask HyperSync again at swap time.
   pool is a row there). A later `prune-pools` deletes rows that have no key, so the scan is rerun after a prune.
 - **Not done here.** Deleting `pool_lookup_queue` and the resolver: the queue still drains the ids owed from before the
   scan, and chains without keys still need the lookups. Once every capped chain is keyed, both can go.
+
+## 2026-10-24: Providers pruned
+
+The owner dropped three external sources. What changed and what stays:
+
+- **Parallel is gone.** No client, no `PARALLEL_API_KEY`, no run ids or tombstones, no price row or budget key; the cost
+  preview no longer lists it. Enrich is Blockscout verified source plus one Claude `what_line` per busy project.
+  `enrichment["parallel"]` and `parallel_run_id` / `parallel_run_at` already in Postgres are kept as they are (no
+  migration): they are never sent to Claude, never become a website, GitHub or X link, and a pending run id no longer
+  holds a project back. The web still counts a stored Parallel `audit_url` as an audit link under the old guard (a team
+  was identified and the project is named). New projects get no website, GitHub or X link, so the GitHub signal and the
+  "alive" flag reach only projects that already have one. `repair prose` lost its "missing" kind (Parallel paid, no
+  line); the nightly enrich covers those.
+- **The per-project Exa receipts search is gone.** `signals` no longer searches Exa, writes `receipts` or the `exa`
+  signal. `alive` is a GitHub commit in the last 30 days. Stored receipts stay and still render on project pages and
+  in the API (dated; nothing is added). Stored `exa` and `nansen` signal rows are frozen and left out of the blurb
+  prompt. Exa now serves only the radar step (the Building tab), which the cost preview shows.
+- **`last_mention_at` comes from the receipts.** The API read it from the stored `exa` signal, which outlived its
+  receipts and sat on unnamed hook families (`unlisted-hook-family-0x0f48`: 2026-10-08, no receipts). It is now the
+  newest `published_at` among the receipts the same response lists, null when there are none.
+- **Nansen is off the site.** The smart-wallets badge, the Smart money pills and label tags on top wallets and live
+  trades, the Leaders board and the OG pill are removed; `metrics.smart_wallets_24h` is removed from the read API. The
+  labels were a static October file with no hits on today's top wallets. `wallet_labels` and its columns stay; only the
+  API's undocumented `top_wallets[].labels` / `smart_money` still read it.
+- **Env.** `BLOCKWORKS_API_KEY` was never read and is gone from the examples. `HYPERSYNC_API_TOKEN_SCAN` is read by
+  `scan-pool-keys` (falling back to `HYPERSYNC_API_TOKEN`) and is now listed. `GRAPH_API_KEY` stays.
+
+## 2026-10-24: Providers pruned, review follow-up
+
+- **Nansen is out of the read API too.** `top_wallets[]` is now `{address, chain_id, volume_usd, trades, buys, sells,
+  last_trade_at}`: `labels` and `smart_money` are removed like `metrics.smart_wallets_24h` (`api_version` stays 1;
+  docs/api.md lists the three under "Removed fields"). Nothing reads `wallet_labels` any more; the table and its rows
+  stay until a migration drops them. This replaces the last sentence of the Nansen bullet above.
+- **`alive` is unknown without a GitHub reading.** With Exa gone, a GitHub commit date is its only input, and new
+  projects no longer get a GitHub link. A project with no `github` signal now gets `{"alive": null}` instead of false,
+  and the blurb prompt leaves an unknown `alive` out. As false it read as a fact: a live blurb said "the alive signal
+  reads false, so treat the activity as unverified" of a project with no GitHub link. A repo with no commit in 30 days
+  is still false. On the first nightly every signals target without a GitHub reading changes value once, so up to the
+  signals cap (50) blurbs are rewritten that night, inside the cost preview's existing why_blurb upper bound.

@@ -175,10 +175,10 @@ test("/p/angstrom: the audit badge links out, the summary says when it was writt
   expect(errs).toEqual([]);
 });
 
-test("desktop at 1280px: the detail tables fit their pane, long wallet labels included", async ({ page }) => {
+test("desktop at 1280px: the detail tables fit their pane", async ({ page }) => {
   test.skip(phone(), "tables are a desktop layout");
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto("/p/stablepairhook");   // its top wallet carries a long label
+  await page.goto("/p/stablepairhook");
   const over = await page.locator("table").evaluateAll((ts) => ts.map((t) => t.scrollWidth - (t.parentElement?.clientWidth ?? 0)));
   expect(over.length).toBeGreaterThan(0);
   for (const o of over) expect(o, "a detail table scrolls sideways at 1280px").toBeLessThanOrEqual(0);

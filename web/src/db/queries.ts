@@ -4,7 +4,7 @@
 // the same derivation (routable, flag labels) and the same tab rules (lib/feed.ts).
 //
 // Every read goes through safe(): a missing table or a bad query renders empty, never 500.
-// The activity tables (pool_stats, pool_top_wallets, wallet_labels) are newer than the rest
+// The activity tables (pool_stats, pool_top_wallets) are newer than the rest
 // and may be missing or empty in production, so each has its own safe() and degrades to null.
 import { researchProject } from "@/lib/research";
 import { receiptRelevant } from "@/lib/relevance";
@@ -14,11 +14,11 @@ import { isSlugShaped, isUnlisted, unlistedLabel } from "@/lib/unlisted";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { getDb, type Db } from "./client";
 import * as t from "./schema";
-import { SAMPLE_ALIASES, SAMPLE_DIGESTS, SAMPLE_PROJECTS, SAMPLE_WALLET_LABELS } from "@/fixtures/sample";
+import { SAMPLE_ALIASES, SAMPLE_DIGESTS, SAMPLE_PROJECTS } from "@/fixtures/sample";
 import { DYNAMIC_FEE_FLAG, flagLabels, poolRouting, projectRouting } from "@/lib/routable";
 import type { RoutingLists } from "@/lib/uniswap-routing";
 import { routingLists, routingListsEnabled } from "./routing-lists";
-import { CHAINS, knownChain, nansenCovers } from "@/lib/chains";
+import { CHAINS, knownChain } from "@/lib/chains";
 import { applyTab } from "@/lib/feed";
 import { longDate } from "@/lib/format";
 import { auditLinks, digestIntro, digestItem, hookKeys, toRow, withCurrentNames } from "@/lib/present";
@@ -39,16 +39,12 @@ import type {
   ReceiptView,
   RowView,
   Usage,
-  WalletLabel,
   WalletView,
 } from "@/lib/types";
 
-// Same markers as pipeline/bait/clients/nansen.py is_smart_money.
-const SMART_MONEY_MARKERS = ["smart money", "fund", "smart trader", "smart lp", "smart dex"];
-
 const KNOWN_CHAINS = sql.raw(`array[${Object.keys(CHAINS).join(",")}]::int[]`);
 
-const EMPTY_USAGE: Usage = { vol24h: null, vol24hRolling: null, tx24h: null, wallets24h: null, walletsExact: null, wallets7d: null, topWalletShare7d: null, deployerSwapShare7d: null, buys24h: null, sells24h: null, buyers24h: null, sellers24h: null, smartWallets: null };
+const EMPTY_USAGE: Usage = { vol24h: null, vol24hRolling: null, tx24h: null, wallets24h: null, walletsExact: null, wallets7d: null, topWalletShare7d: null, deployerSwapShare7d: null, buys24h: null, sells24h: null, buyers24h: null, sellers24h: null };
 
 // ---------- derivation shared by both sources ----------
 
@@ -86,7 +82,6 @@ function derive(p: ProjectDetail, ctx: { lists?: RoutingLists; fees?: HookFees }
       routable: routing.state,
       routingSource: routing.source,
       routingListsAt: ctx.lists?.checkedAt ?? null,
-      smartMoneyLps: nansenCovers(p.chains) ? (p.signals.smartMoneyLps ?? 0) : null,
     },
   });
 }
@@ -250,35 +245,7 @@ export async function getLeaders(n = 10): Promise<LeadersView> {
     wallets: board((p) => p.usage.wallets24h),
     volume: board((p) => p.metrics.vol7d),
     tvl: board((p) => p.metrics.tvlUsd),
-    smartMoney: board((p) => p.usage.smartWallets),
   };
-}
-
-/** wallet_labels for a set of wallets on one chain. Empty map when the table is missing or empty. */
-export async function getWalletLabels(chainId: ChainId, addresses: string[]): Promise<Map<string, WalletLabel>> {
-  const addrs = [...new Set(addresses.map((a) => a.toLowerCase()))];
-  const out = new Map<string, WalletLabel>();
-  if (!addrs.length) return out;
-  const db = getDb();
-  if (!db) {
-    if (!usingFixtures()) return out;
-    for (const a of addrs) {
-      const l = SAMPLE_WALLET_LABELS.get(`${chainId}:${a}`);
-      if (l) out.set(a, l);
-    }
-    return out;
-  }
-  const rows = await safe(
-    "getWalletLabels",
-    () =>
-      db
-        .select({ address: t.walletLabels.address, labels: t.walletLabels.labels, smartMoney: t.walletLabels.smartMoney })
-        .from(t.walletLabels)
-        .where(and(eq(t.walletLabels.chainId, chainId), inArray(t.walletLabels.address, addrs))),
-    [],
-  );
-  for (const r of rows) out.set(r.address, toLabel(r.labels, r.smartMoney));
-  return out;
 }
 
 export async function getDigest(week: string): Promise<DigestView | null> {
@@ -417,16 +384,6 @@ function colorFor(id: number): string {
   return COLORS[id % COLORS.length];
 }
 
-function isSmartMoney(labels: unknown): boolean {
-  if (!Array.isArray(labels)) return false;
-  return labels.some((l) => typeof l === "string" && SMART_MONEY_MARKERS.some((m) => l.toLowerCase().includes(m)));
-}
-
-function toLabel(labels: unknown, smart: boolean | null): WalletLabel {
-  const list = Array.isArray(labels) ? labels.filter((l): l is string => typeof l === "string") : [];
-  return { labels: list, smartMoney: smart ?? isSmartMoney(list) };
-}
-
 /** float8 / int come back as numbers, bigint / numeric as strings; null stays null. */
 function num(v: unknown): number | null {
   if (v == null) return null;
@@ -434,9 +391,8 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-type NansenValue = { labeled?: Array<{ labels?: unknown }>; smart_money?: boolean };
 type GithubValue = { last_commit_at?: string | null };
-type ExaValue = { latest?: string | null };
+// `parallel` was written by the retired Parallel lane (removed 2026-10-24) and is never refreshed; only its audit link is read.
 type Enrichment = { secondary_categories?: Category[]; color?: string; parallel?: { audit_url?: string | null; team?: string | null } };
 
 type TopPoolRow = {
@@ -444,7 +400,6 @@ type TopPoolRow = {
   token0_symbol: string | null; token1_symbol: string | null; token0_id: string | null; token1_id: string | null;
 };
 type StatsUsageRow = { project_id: number; rolling: unknown; buys: unknown; sells: unknown; buyers: unknown; sellers: unknown };
-type SmartRow = { project_id: number; smart: unknown };
 
 /**
  * Loads projects with their latest project_daily row, hooks, signals, receipts,
@@ -465,7 +420,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
   // the running day and is never read.
   const end = latest ? shiftDay(latest, -1) : null;
 
-  const [daily, hookRows, signalRows, receiptRows, topPools, statsUsage, smartUsage, lists, hookFees] = await Promise.all([
+  const [daily, hookRows, signalRows, receiptRows, topPools, statsUsage, lists, hookFees] = await Promise.all([
     latest ? withTimeout("load:project_daily", db.select().from(t.projectDaily).where(and(eq(t.projectDaily.day, latest), inArray(t.projectDaily.projectId, ids)))) : [],
     withTimeout("load:hooks", db.select().from(t.hooks).where(inArray(t.hooks.projectId, ids))),
     withTimeout("load:signals", db.select().from(t.signals).where(inArray(t.signals.projectId, ids))),
@@ -522,23 +477,6 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
       null,
       QUERY_TIMEOUT_MS,
     ),
-    // Distinct smart-money wallets among the latest top wallets.
-    safe(
-      "usage:smart_money",
-      () =>
-        db.execute<SmartRow>(sql`
-          with d as (select max(day) as day from ${t.poolTopWallets})
-          select h.project_id, count(distinct w.address)::int as smart
-          from ${t.poolTopWallets} w
-          join d on w.day = d.day
-          join ${t.walletLabels} l on l.address = w.address and l.chain_id = w.chain_id and l.smart_money
-          join ${t.pools} p on p.pool_id = w.pool_id and p.chain_id = w.chain_id
-          join ${t.hooks} h on h.address = p.hook_address and h.chain_id = p.chain_id
-          where h.project_id = any(${idArray})
-          group by h.project_id`),
-      null,
-      QUERY_TIMEOUT_MS,
-    ),
     routingLists(),
     // Static and dynamic fees per hook across every pool (about 80 ms over 230K pools): routing needs all of them.
     safe(
@@ -566,7 +504,6 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
   const topBy = new Map(rowsOf<TopPoolRow>(topPools).map((r) => [Number(r.project_id), r]));
   const sigBy = new Map(signalRows.map((s) => [`${s.projectId}:${s.kind}`, s.value ?? {}]));
   const statsBy = statsUsage ? new Map(rowsOf<StatsUsageRow>(statsUsage).map((r) => [Number(r.project_id), r])) : null;
-  const smartBy = smartUsage ? new Map(rowsOf<SmartRow>(smartUsage).map((r) => [Number(r.project_id), num(r.smart) ?? 0])) : null;
 
   // Unnamed projects show their busiest pair; indexer-only pools need symbols resolved first (cached, never throws).
   const unlistedIds = new Set(projectRows.filter((p) => isUnlisted(p.name)).map((p) => p.id));
@@ -585,7 +522,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
   const out: Loaded = [];
   // without Uniswap's lists routing is rule-only: keep the load short-lived so the lists, fetched in the background,
   // reach the rows within minutes instead of an hour
-  out.degraded = statsUsage === null || smartUsage === null || (lists.checkedAt === null && routingListsEnabled());
+  out.degraded = statsUsage === null || (lists.checkedAt === null && routingListsEnabled());
   out.day = latest;
   out.gen = ++loads;
   for (const p of projectRows) {
@@ -593,9 +530,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
     // Registry hooks span ~22 chains; Bait covers the ten in CHAINS. Unknown ids would crash every CHAINS[...] lookup.
     const hs = (hooksBy.get(p.id) ?? []).filter((h) => knownChain(h.chainId)).map(toHook);
     const chains = [...new Set(hs.map((h) => h.chainId))];
-    const nansen = sigBy.get(`${p.id}:nansen`) as NansenValue | undefined;
     const gh = sigBy.get(`${p.id}:github`) as GithubValue | undefined;
-    const exa = sigBy.get(`${p.id}:exa`) as ExaValue | undefined;
     const enrichment = (p.enrichment ?? {}) as Enrichment;
     const top = topBy.get(p.id);
     const recs = (receiptsBy.get(p.id) ?? []).filter((r) => receiptRelevant(p.name, r.title ?? "", r.source ?? "")).map(toReceipt);
@@ -628,7 +563,6 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
       sells24h: su ? num(su.sells) : null,
       buyers24h: su ? num(su.buyers) : null,
       sellers24h: su ? num(su.sellers) : null,
-      smartWallets: smartBy ? (smartBy.get(p.id) ?? 0) : null,
     };
 
     out.push(
@@ -661,9 +595,7 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
           hooksN: hs.length,
         },
         signals: {
-          smartMoneyLps: (nansen?.labeled ?? []).filter((x) => isSmartMoney(x.labels)).length,
           lastCommitAt: gh?.last_commit_at ?? null,
-          lastExaHitAt: exa?.latest ?? null,
           routable: "unknown", // derive() computes it from hooks and pools
           auditCount: audits.length,
           auditUrl: audits[0] ?? null,
@@ -853,7 +785,8 @@ async function loadSeries(db: Db, projectId: number, latest: string | null): Pro
 
 type TopWalletRow = { address: string; chain_id: number; volume: unknown; trades: unknown; buys: unknown; sells: unknown; last_trade_at: string | Date | null };
 
-/** Top wallets across the project's pools on the latest pool_top_wallets day, labels joined in a second (optional) read. */
+/** Top wallets across the project's pools on the latest pool_top_wallets day. The frozen Nansen wallet_labels are not
+ *  read (removed from the read API on 2026-10-24). */
 async function loadTopWallets(db: Db, projectId: number, n = 10): Promise<WalletView[]> {
   const rows = rowsOf<TopWalletRow>(
     await db.execute<TopWalletRow>(sql`
@@ -871,31 +804,15 @@ async function loadTopWallets(db: Db, projectId: number, n = 10): Promise<Wallet
       order by volume desc nulls last
       limit ${n}`),
   ).filter((r) => knownChain(Number(r.chain_id)));
-  if (!rows.length) return [];
-  const labels = await safe(
-    "topWallets:labels",
-    () =>
-      db
-        .select({ address: t.walletLabels.address, chainId: t.walletLabels.chainId, labels: t.walletLabels.labels, smartMoney: t.walletLabels.smartMoney })
-        .from(t.walletLabels)
-        .where(inArray(t.walletLabels.address, [...new Set(rows.map((r) => r.address))])),
-    [],
-  );
-  const labelBy = new Map(labels.map((l) => [`${l.chainId}:${l.address}`, toLabel(l.labels, l.smartMoney)]));
-  return rows.map((r) => {
-    const l = labelBy.get(`${r.chain_id}:${r.address}`);
-    return {
-      address: r.address,
-      chainId: Number(r.chain_id) as ChainId,
-      volumeUsd: num(r.volume) ?? 0,
-      trades: num(r.trades) ?? 0,
-      buys: num(r.buys),
-      sells: num(r.sells),
-      lastTradeAt: r.last_trade_at ? new Date(r.last_trade_at).toISOString() : null,
-      labels: l?.labels ?? [],
-      smartMoney: l?.smartMoney ?? false,
-    };
-  });
+  return rows.map((r) => ({
+    address: r.address,
+    chainId: Number(r.chain_id) as ChainId,
+    volumeUsd: num(r.volume) ?? 0,
+    trades: num(r.trades) ?? 0,
+    buys: num(r.buys),
+    sells: num(r.sells),
+    lastTradeAt: r.last_trade_at ? new Date(r.last_trade_at).toISOString() : null,
+  }));
 }
 
 /** postgres.js returns a RowList (array-like); drizzle types it loosely. */

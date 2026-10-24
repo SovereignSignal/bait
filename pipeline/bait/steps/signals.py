@@ -1,55 +1,44 @@
-"""Step 7 (signals): for New ∪ Trending (top N): Exa receipts, GitHub activity,
-then Claude why_blurb when signals changed since blurb_at."""
+"""Step 7 (signals): for New ∪ Trending (top N): GitHub activity and the alive signal, then Claude why_blurb when
+signals changed since blurb_at.
+
+The per-project Exa receipts search was removed on 2026-10-24 (Exa now serves only the radar step). The receipts table
+and the "exa" / "nansen" signal rows written before then stay stored; they no longer change, so they are left out of
+the blurb's signals and out of `alive`. `alive` is null (unknown) without a GitHub reading, and then left out of the
+blurb's signals too."""
 from __future__ import annotations
 
 import re
 
 import json
-import os
 from datetime import datetime
 
 import sqlalchemy as sa
 
-from ..rules import name_tokens, receipt_relevant
-from ..db import as_utc, project_daily, projects, receipts, savepoint, signals, upsert, utcnow
+from ..db import as_utc, project_daily, projects, receipts, savepoint, signals, upsert
 from ..rules import is_alive
 from . import RunContext, log
 
+# signal kinds no step writes any more (Exa receipts until 2026-10-24, Nansen until 2026-10-08): frozen, never prompt input
+FROZEN_KINDS = ("exa", "nansen")
+
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
-    out = {"projects": 0, "exa": 0, "receipts": 0, "github": 0, "blurbs": 0, "errors": 0}
+    out = {"projects": 0, "github": 0, "blurbs": 0, "errors": 0}
     targets = select_targets(conn, ctx)
     out["projects"] = len(targets)
     if not targets:
         return out
     from ..costs import BudgetExceeded
-    exa, gh, claude = (ctx.client(n) for n in ("exa", "github", "claude"))
+    gh, claude = (ctx.client(n) for n in ("github", "claude"))
     for p, daily in targets:
-        changed = False
-        hits = None
         try:
             with savepoint(conn):
-                if exa is not None and name_tokens(p.name):   # unnamed projects can never keep a receipt: don't pay to search
-                    try:
-                        hits = exa.search_recent(f'"{p.name}" Uniswap v4 hook', now=ctx.now)
-                    except BudgetExceeded:
-                        out["budget_stop"] = 1
-                        exa = None            # no more paid searches this run; free signals continue
-                        hits = None
-                if exa is not None and hits is not None:
-                    out["exa"] += 1
-                    hits = [h for h in hits if receipt_relevant(p.name, h["title"], h["source"])]
-                    rows = [{"project_id": p.id, "url": h["url"], "title": h["title"], "source": h["source"], "published_at": h["published_at"]} for h in hits]
-                    out["receipts"] += upsert(conn, receipts, rows, keys=["project_id", "url"])
-                    latest = max((h["published_at"] for h in hits if h["published_at"]), default=None)
-                    changed |= _set_signal(conn, p.id, "exa", {"hits_30d": len(hits), "latest": latest.isoformat() if latest else None,
-                                                                "top": [{"url": h["url"], "title": h["title"]} for h in hits[:2]]}, ctx.now)
                 if gh is not None and p.github:
                     act = gh.activity(p.github, now=ctx.now)
                     if act:
                         out["github"] += 1
-                        changed |= _set_signal(conn, p.id, "github", act, ctx.now)
-                changed |= _set_signal(conn, p.id, "alive", {"alive": _alive(conn, p.id, ctx.now)}, ctx.now)
+                        _set_signal(conn, p.id, "github", act, ctx.now)
+                _set_signal(conn, p.id, "alive", {"alive": _alive(conn, p.id, ctx.now)}, ctx.now)
         except Exception as e:
             out["errors"] += 1
             log.warning("signals project=%s failed: %s", p.slug, e)
@@ -95,11 +84,14 @@ def _set_signal(conn, pid: int, kind: str, value: dict, now: datetime) -> bool:
     return True
 
 
-def _alive(conn, pid: int, now: datetime) -> bool:
-    vals = {r.kind: r.value for r in conn.execute(sa.select(signals.c.kind, signals.c.value).where(signals.c.project_id == pid))}
-    gh = (vals.get("github") or {}).get("last_commit_at")
-    ex = (vals.get("exa") or {}).get("latest")
-    return is_alive(_dt(gh), _dt(ex), now)
+def _alive(conn, pid: int, now: datetime) -> bool | None:
+    """A GitHub commit in the last 30 days; None (unknown) when Bait has no GitHub reading for the project. GitHub is the
+    only input since the Exa half went with the receipts search on 2026-10-24, so no reading is no evidence either way,
+    never "not alive" (as false it reached the blurb: "the alive signal reads false" of a project with no GitHub link)."""
+    gh = conn.execute(sa.select(signals.c.value).where(signals.c.project_id == pid, signals.c.kind == "github")).scalar_one_or_none()
+    if not gh:
+        return None
+    return is_alive(_dt(gh.get("last_commit_at")), now)
 
 
 def _dt(s):
@@ -124,14 +116,11 @@ def _needs_blurb(conn, p, daily=None) -> bool:
     return latest is not None and as_utc(latest) > as_utc(p.blurb_at)
 
 
-def _parallel_facts(enrichment) -> dict | None:
-    """Parallel output for the blurb prompt; a {"_failed": ...} tombstone is not a fact."""
-    par = (enrichment or {}).get("parallel")
-    return None if not par or "_failed" in par else par
-
-
 def _blurb_ctx(conn, p, daily) -> dict:
-    sig = {r.kind: r.value for r in conn.execute(sa.select(signals.c.kind, signals.c.value).where(signals.c.project_id == p.id))}
+    sig = {r.kind: r.value for r in conn.execute(sa.select(signals.c.kind, signals.c.value).where(signals.c.project_id == p.id))
+           if r.kind not in FROZEN_KINDS}
+    if (sig.get("alive") or {}).get("alive") is None:
+        sig.pop("alive", None)              # unknown (no GitHub reading): left out, so it cannot be read as "not alive"
     rec = conn.execute(sa.select(receipts.c.title, receipts.c.source, receipts.c.published_at)
                        .where(receipts.c.project_id == p.id).order_by(receipts.c.published_at.desc()).limit(5)).all()
     return {
@@ -145,5 +134,4 @@ def _blurb_ctx(conn, p, daily) -> dict:
                 "distinct" if daily.wallets_exact else "upper bound (buyers + sellers per pool)"),
             "pools_n": daily.pools_n, "is_new": daily.is_new},
         "signals": sig, "receipts": [dict(r._mapping) for r in rec],
-        "enrichment": _parallel_facts(p.enrichment),
     }

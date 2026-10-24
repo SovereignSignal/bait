@@ -53,9 +53,9 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 | 3 | activity | pool_stats(day) ⨝ pools, top `ACTIVITY_POOLS` non-wash pools by 24h vol plus up to `ACTIVITY_WASH_POOLS` 24h-wash candidates; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept); pool_stats.wallets_24h when the fetch saw every trade of the day | keyless |
 | 3b | onchain | v4_pools, pool_daily_onchain, indexer_state (from `python -m bait.indexer`) | hooks (unlisted, capped), pools, pool_snapshots, pool_stats(day) overriding keyless usage | nothing; no-op when the indexer tables are empty |
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
-| 5 | enrich | projects with enriched_at null | what_line, category, website/github/x_handle, enrichment | ANTHROPIC_API_KEY; optional PARALLEL_API_KEY, Blockscout |
+| 5 | enrich | projects with enriched_at null | what_line, category, enrichment (verified source); stored website/github/x_handle re-validated | ANTHROPIC_API_KEY; optional Blockscout |
 | 6 | score | pool_snapshots (window_end-13..window_end), pool_stats(day), pool_top_wallets(day), pool_daily_onchain / pool_wallet_day (ready chains) | project_daily(day) incl. window_end, vol_24h, swaps, wallets, is_wash / wash_reason | nothing |
-| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | receipts, signals, why_blurb | optional EXA_API_KEY, GITHUB_TOKEN, ANTHROPIC_API_KEY |
+| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | signals (github, alive: null without a GitHub reading), why_blurb | optional GITHUB_TOKEN, ANTHROPIC_API_KEY |
 | 8 | radar | Uniswap/hooklist issues + PRs (30d), GitHub repo/code search (30d), Exa (60d) classified by Claude Haiku | radar_items (one row per URL, 90 days kept) | optional GITHUB_TOKEN (else anonymous unless KEYLESS=0), EXA_API_KEY + ANTHROPIC_API_KEY |
 | 9 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
 
@@ -72,7 +72,8 @@ Trades come from GeckoTerminal through the same `keyless.Http` the snapshot uses
 lowercased): USD volume, trades, buys, sells, last trade; the top 20 per pool are written for the day
 (the day's rows for a pool are replaced on re-run). Rows older than 14 days are deleted.
 
-Wallet labels (`wallet_labels`) are a frozen cache from the retired Nansen lane; the web reads them, nothing writes them.
+Wallet labels (`wallet_labels`) are a frozen cache from the retired Nansen lane; since 2026-10-24 nothing writes or reads
+them (the site and the read API dropped them), and the table stays until a migration drops it.
 With `KEYLESS=0` and no keys the step only prunes.
 
 ### On-chain indexer + step `onchain` (step 3b)
@@ -299,20 +300,21 @@ for the nightly ~50 blurbs and is the obvious next step.
 ## Env vars
 See `.env.example`. `DATABASE_URL` (Railway injects; `postgres://` is rewritten to
 `postgresql+psycopg://`; unset falls back to `sqlite:///./bait.sqlite`), `GRAPH_API_KEY`,
-`ANTHROPIC_API_KEY`, `EXA_API_KEY`, `PARALLEL_API_KEY`, `GITHUB_TOKEN`, `BLOCKSCOUT_API_KEY` (optional). `BLOCKWORKS_API_KEY` is
-unused by the pipeline.
+`ANTHROPIC_API_KEY`, `EXA_API_KEY` (radar only), `GITHUB_TOKEN`, `BLOCKSCOUT_API_KEY` (optional).
 
 Radar step: `RADAR_REGISTRY_PAGES` (3), `RADAR_GITHUB_QUERIES` (8), `RADAR_EXA_QUERIES` (6),
 `RADAR_CLASSIFY_MAX` (30); see "Dev radar" above.
 
 Activity step: `ACTIVITY_POOLS` (pools whose trades are fetched per run, default 30), `ACTIVITY_WASH_POOLS` (24h-wash
 candidates fetched as well, for the symmetric-trader check; default 10),
-`ENRICH_MAX` (projects enriched with Parallel + Claude per run, busiest first, only projects with live pools; default 20), Keyless source:
+`ENRICH_MAX` (projects enriched with Claude per run, busiest first, only projects with live pools; default 20), Keyless source:
 `KEYLESS` (0 disables GeckoTerminal + public RPC), `KEYLESS_SPACING` (seconds between GeckoTerminal
 calls, default 10), `KEYLESS_CACHE_DIR`, `KEYLESS_PAGES`, `KEYLESS_NEW_PAGES`, `KEYLESS_OHLCV_CAP` (pools past it get yesterday's volume from the rolling 24h,
 marked `estimated`).
 
-Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs), `INDEXER_INTERVAL`
+Indexer (`python -m bait.indexer`): `HYPERSYNC_API_TOKEN` (Envio; without it the RPC fallback runs),
+`HYPERSYNC_API_TOKEN_SCAN` (optional, read only by the one-off `scan-pool-keys`, which falls back to `HYPERSYNC_API_TOKEN`;
+see `../railway/README.md`), `INDEXER_INTERVAL`
 (seconds per loop, 60), `INDEXER_CHAINS` (comma slugs or ids, default all 16), `INDEXER_MAX_PAGES` (40),
 `INDEXER_TOPIC_FILTER_MAX` (2000), `INDEXER_TOPIC_CHUNK` (500), `INDEXER_RPC_MAX_WINDOWS` (30), `INDEXER_POOLS_PER_HOOK`
 (2000; 0 = no new caps), `INDEXER_POOL_LOOKUPS` (10, at least 1), `INDEXER_POOL_LOOKUPS_CATCHUP` (3), `INDEXER_LOOKUP_CHUNK`
@@ -346,7 +348,7 @@ command.
 | `repair backfill-days --since 14 [--pools N]` | GeckoTerminal daily candles (one call per pool, `KEYLESS_SPACING` apart, busiest first) into `pool_snapshots.volume_usd_day` for the closed days `today-since-14 .. today-1`: rows written before 0012 and closed-day estimates only; stops between pools at `--stop-at` (05:30 UTC); a rerun resumes | free, about 10 s a pool |
 | `repair rescore --since 14` | `score.run` for every stored run day in `today-since .. today`, oldest first, after copying each day once into `project_daily_p9_backup`; prints counts, wash reasons and the Trending top-10 change; `--restore [--day D]` puts back every day the copy holds | free, seconds a day |
 | `repair verify --sample 5` | Bait's 24h / 7d / prev 7d against GeckoTerminal candle sums for the same pools and closed days, as a markdown table | free, up to 15 calls |
-| `repair prose --what-lines --blurbs --dry-run\|--yes --max-usd X [--limit N]` | Claude rewrites from stored facts: what-lines never written after a budget stop or cut mid-word at 200 chars; blurbs of the current signals targets written before package 8 | paid, Meter-checked |
+| `repair prose --what-lines --blurbs --dry-run\|--yes --max-usd X [--limit N]` | Claude rewrites from stored facts: what-lines cut mid-word at 200 chars; blurbs of the current signals targets written before package 8 | paid, Meter-checked |
 
 GeckoTerminal candles carry no trade counts, so backfilled days keep `tx_count_day` NULL and those projects' `swaps_7d`
 stays NULL (unknown) until seven nights of counts exist. Signals and digests are never rewritten by the repair.
@@ -364,8 +366,8 @@ written on its own connection so it survives a rolled-back step), and hard budge
 |---|---|---|
 | `SPEND_DAILY_USD` | 3.00 | All providers, UTC day. `0` = hold: paid calls skipped, free steps still run. |
 | `SPEND_MONTHLY_USD` | 40.00 | All providers, rolling 30 days. |
-| `SPEND_DAILY_USD_<PROVIDER>` / `SPEND_MONTHLY_USD_<PROVIDER>` | unset | Optional per provider (`ANTHROPIC`, `PARALLEL`, `EXA`). |
-| `ENRICH_MAX` | 20 | Projects enriched (Parallel core + Sonnet) per run; live-pool projects only. 20 fits the $40/30-day budget (~$1.25 a night all in). |
+| `SPEND_DAILY_USD_<PROVIDER>` / `SPEND_MONTHLY_USD_<PROVIDER>` | unset | Optional per provider (`ANTHROPIC`, `EXA`). |
+| `ENRICH_MAX` | 20 | Projects enriched (Sonnet what_line) per run; live-pool projects only. |
 | `SHAPE_MAX` | 3000 | Hooks whose bytecode template (`code_shape`) the group step fetches per run, free public RPC: unassigned first, then same-team (rule 4) candidates, then the newest. |
 | `GROUP_CLAUDE_MAX` | 100 | Haiku classifications per run; bare-address hooks are never sent. |
 | `RADAR_EXA_QUERIES` / `RADAR_CLASSIFY_MAX` | 6 / 30 | Radar Exa searches and Haiku classifications per run. |

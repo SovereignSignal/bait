@@ -131,7 +131,6 @@ export function projectSummaryV1(p: ProjectSummary & { rank?: number }, site: st
       deployer_swap_share_7d: num(u.deployerSwapShare7d),
       buys_24h_rolling: num(u.buys24h),
       sells_24h_rolling: num(u.sells24h),
-      smart_wallets_24h: num(u.smartWallets),
       score_trending: p.scoreTrending,
       rank_trending: p.rank ?? null,
       trending_min_vol_usd: TRENDING_MIN_VOL,
@@ -180,11 +179,23 @@ function poolV1(x: PoolView) {
 }
 
 function walletV1(w: WalletView) {
-  return { address: w.address, chain_id: w.chainId, volume_usd: w.volumeUsd, trades: w.trades, buys: w.buys, sells: w.sells, last_trade_at: w.lastTradeAt, labels: w.labels, smart_money: w.smartMoney };
+  return { address: w.address, chain_id: w.chainId, volume_usd: w.volumeUsd, trades: w.trades, buys: w.buys, sells: w.sells, last_trade_at: w.lastTradeAt };
 }
 
 function receiptV1(r: ReceiptView) {
   return { title: r.title, url: r.url, source: r.source, published_at: r.publishedAt };
+}
+
+/** The newest published date among the receipts the response lists; null when none has one. Read from the same list, so
+ *  `last_mention_at` can never name a mention the response does not show (it used to read a stored Exa signal that
+ *  outlived its receipts, and even sat on unnamed hooks). */
+export function lastMentionAt(receipts: ReceiptView[]): string | null {
+  let best: number | null = null;
+  for (const r of receipts) {
+    const t = r.publishedAt ? Date.parse(r.publishedAt) : NaN;
+    if (Number.isFinite(t) && (best == null || t > best)) best = t;
+  }
+  return best == null ? null : new Date(best).toISOString();
 }
 
 export function projectV1(p: ProjectDetail & { rank?: number }, site: string) {
@@ -203,7 +214,7 @@ export function projectV1(p: ProjectDetail & { rank?: number }, site: string) {
     })),
     top_wallets: p.topWallets.map(walletV1),
     receipts: p.receipts.map(receiptV1),
-    signals: { last_commit_at: p.signals.lastCommitAt, last_mention_at: p.signals.lastExaHitAt, audit_count: p.signals.auditCount },
+    signals: { last_commit_at: p.signals.lastCommitAt, last_mention_at: lastMentionAt(p.receipts), audit_count: p.signals.auditCount },
   };
 }
 

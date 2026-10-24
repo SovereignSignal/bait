@@ -615,12 +615,14 @@ def is_uniform(top: list[tuple[float, int, int]], vol_24h: float | None, wallets
     return vol_24h / wallets_24h >= UNIFORM_MIN_AVG_SHARE * median
 
 
-def is_alive(last_commit_at: datetime | None, latest_exa_hit: datetime | None, now: datetime) -> bool:
-    cutoff = now - timedelta(days=30)
-    return bool((last_commit_at and last_commit_at >= cutoff) or (latest_exa_hit and latest_exa_hit >= cutoff))
+def is_alive(last_commit_at: datetime | None, now: datetime) -> bool:
+    """A commit in the last 30 days. GitHub only since 2026-10-24, when the Exa receipts search was removed."""
+    return bool(last_commit_at and last_commit_at >= now - timedelta(days=30))
 
 
 # --- receipt relevance (mirrors web/src/lib/relevance.ts; shared cases in fixtures/relevance_cases.json) ---
+# No step writes receipts since 2026-10-24 (the Exa receipts search is gone); the web still filters the stored ones with
+# its copy, and this one keeps the shared cases pinned on both sides.
 _DOMAIN_WORDS = ("uniswap", "hook", "v4", "liquidity", "swap", "pool", "amm", "dex", "lp", "mev", "fee")
 _BLOCKED_HOSTS = ("linkedin.com", "wikipedia.org", "netlify.app", "facebook.com", "instagram.com", "tiktok.com")
 

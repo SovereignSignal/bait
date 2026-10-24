@@ -65,22 +65,21 @@ export default async function Image({ params }: { params: Promise<{ slug: string
 
   const delta = pctDelta(p.metrics.vol7d ?? 0, p.metrics.vol7dPrev ?? 0, p.isNew);
   const badge = p.isNew ? { text: "New", bg: T.pinkTint, fg: T.pinkTintFg } : p.rank ? { text: `#${p.rank} trending`, bg: T.amberTint, fg: T.amber } : null;
-  const sig = (on: boolean, text: string, money = false) => (
+  const sig = (on: boolean, text: string) => (
     <div
       style={{
         display: "flex",
         padding: "8px 16px",
         borderRadius: 999,
         fontSize: 20,
-        background: money ? T.pinkTint : on ? T.greenTint : T.surface,
-        color: money ? T.pinkTintFg : on ? T.green : T.fg3,
-        border: money || on ? "1px solid transparent" : `1px solid ${T.border}`,
+        background: on ? T.greenTint : T.surface,
+        color: on ? T.green : T.fg3,
+        border: on ? "1px solid transparent" : `1px solid ${T.border}`,
       }}
     >
       {text}
     </div>
   );
-  const money = p.signals.smartMoneyLps;
 
   return new ImageResponse(
     <div style={{ width: "100%", height: "100%", display: "flex", background: T.bg, fontFamily: font, position: "relative" }}>
@@ -119,7 +118,6 @@ export default async function Image({ params }: { params: Promise<{ slug: string
         </div>
         <div style={{ display: "flex", flexDirection: "column", background: T.well, borderRadius: 28, padding: 24, gap: 14 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {money !== null && money > 0 && sig(true, `◆ ${money} smart money LP${money === 1 ? "" : "s"}`, true)}
             {sig(p.signals.routable === "eligible", p.signals.routingSource === "allowlist" ? "● On Uniswap’s allowlist" : p.signals.routingSource === "denylist" ? "○ Uniswap will not route" : p.signals.routable === "eligible" ? "● Meets routing rule" : p.signals.routable === "ineligible" ? "○ Not routed by rule" : "○ Routing unknown")}
             {sig(p.signals.auditUrl != null, p.signals.auditUrl != null ? "✓ Audit linked" : "○ No audit linked")}
           </div>

@@ -43,6 +43,8 @@ test("audit badge only for a real link that belongs to the project", () => {
   // an unnamed hook is an address with no team: whatever Parallel returned is someone else's audit
   assert.deepEqual(auditLinks([], team, true), []);
   assert.deepEqual(auditLinks([], { team: "", audit_url: "https://x.org/audit" }, false), []);
+  // a stored Parallel tombstone (a paid run that never delivered; none are written since 2026-10-24) is no audit
+  assert.deepEqual(auditLinks(["https://h.org/a.pdf"], JSON.parse('{"_failed":"trun_1","reason":"404"}'), false), ["https://h.org/a.pdf"]);
   // placeholders and non-web values are not links
   assert.deepEqual(auditLinks(["N/A", "none", "javascript:alert(1)"], { team: "Acme", audit_url: "Not found" }, false), []);
   // Uniswap's own v4 audits cover the PoolManager, not this hook

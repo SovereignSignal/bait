@@ -3,7 +3,8 @@
 Read-only JSON over the same figures the site shows. No key. About 600 requests a minute per deployment, then 429 with
 `Retry-After`. Responses carry `X-Bait-Data-Day` (the closed UTC day the figures end on), `X-Bait-Api-Version: 1`,
 `Cache-Control: public, max-age=300` and `Access-Control-Allow-Origin: *`. `null` means unknown, never zero. Field
-names are stable within v1; new fields may be added.
+names are stable within v1; new fields may be added, and a field whose data source is retired is removed (listed
+under [Removed fields](#removed-fields)).
 
 Base URL: `https://bait-production-2706.up.railway.app`
 
@@ -29,7 +30,11 @@ curl -s https://bait-production-2706.up.railway.app/api/v1/projects/angstrom | j
 A retired slug (renamed or merged project) answers 308 to the current one. Spam-flagged projects are 404, as on the
 site. Response: `{ api_version, project }` where `project` is the summary plus `data_day`, `why_blurb`,
 `why_blurb_at`, `hooks[]`, `pools[]`, `daily_volume_usd[]` (`{day, vol_usd}`, oldest first, about 14 days),
-`top_wallets[]`, `receipts[]`, `signals`.
+`top_wallets[]`, `receipts[]`, `signals`. `top_wallets[]` is up to 10 `{address, chain_id, volume_usd, trades, buys,
+sells, last_trade_at}`, by volume across the project's pools, from GeckoTerminal's latest ~300 trades in each of Bait's
+busiest pools on the latest day fetched. `receipts[]` are posts about the project found before 2026-10-24 (none are
+added now). `signals` is `{last_commit_at, last_mention_at, audit_count}`: the last GitHub commit Bait saw, the newest
+`published_at` among the listed receipts (null when there are none), and the number of audit links.
 
 ## Look up a hook address
 
@@ -55,9 +60,14 @@ hooklisted, deployer, deployer_source}] }] }`.
 | `metrics.vol_7d_usd`, `vol_7d_prev_usd`, `vol_24h_usd`, `tvl_usd`, `swaps_7d`, `swaps_24h`, `pools`, `hooks` | closed UTC days; volume is a USD estimate |
 | `metrics.wallets_24h`, `wallets_24h_exact` | distinct wallets on the last closed day; when `exact` is false the number is an upper bound |
 | `metrics.wallets_7d`, `top_wallet_share_7d`, `deployer_swap_share_7d` | from the indexer's exact per-wallet swap counts; known only when every chain of the project is caught up; shares are of swaps, not volume |
-| `metrics.buys_24h_rolling`, `sells_24h_rolling`, `smart_wallets_24h` | GeckoTerminal's rolling 24h counts and Nansen-labelled wallets among the top traders |
+| `metrics.buys_24h_rolling`, `sells_24h_rolling` | GeckoTerminal's rolling 24h counts |
 | `metrics.score_trending`, `rank_trending`, `trending_min_vol_usd` | the site's trending score and rank (null when not ranked) |
 | `links.website`, `links.github`, `links.x` | validated links; may be null |
 
 The rules behind every figure are in [`architecture.md`](architecture.md). Nothing here is an endorsement: hooks are
 third-party code in the swap path, and a listing, badge or rank says nothing about safety.
+
+## Removed fields
+
+Removed on 2026-10-24 with the retired Nansen wallet labels (collected once in early October 2026, never refreshed):
+`metrics.smart_wallets_24h`, `top_wallets[].labels` and `top_wallets[].smart_money`. `api_version` stays 1.

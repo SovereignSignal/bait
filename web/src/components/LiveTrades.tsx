@@ -92,16 +92,11 @@ export function LiveTrades({ chainId, chainSlug, poolId, pair, indexer }: { chai
           <ul className={s.tradeList}>
             {feed.trades.map((x, i) => {
               const href = explorerTxUrl(chainId, x.tx);
-              const label = x.labels?.[0];
               const body = (
                 <>
                   <WalletAvatar address={x.wallet} />
                   <span className={s.tWho}>
                     <span className={`${s.tAddr} mono`}>{shortAddr(x.wallet)}</span>
-                    <span className={s.tTags}>
-                      {x.smartMoney && <span className="b b-p">◆ Smart money</span>}
-                      {label && <span className="b b-n">{label}</span>}
-                    </span>
                   </span>
                   <span className={`b ${x.kind === "buy" ? "b-g" : "b-r"}`}>{x.kind === "buy" ? "Buy" : "Sell"}</span>
                   <span className={`${s.tUsd} num`}>{usd(x.usd)}</span>

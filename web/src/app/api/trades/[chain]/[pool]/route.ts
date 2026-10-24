@@ -1,6 +1,6 @@
-// Live recent trades for one pool, from GeckoTerminal (keyless), with wallet_labels joined.
+// Live recent trades for one pool, from GeckoTerminal (keyless).
 // Never throws: any upstream error, 429 or bad input is an empty list with an explicit status. Only pools Bait knows are proxied.
-import { getWalletLabels, isKnownPool } from "@/db/queries";
+import { isKnownPool } from "@/db/queries";
 import { respondJson } from "@/lib/http";
 import { createSwrCache } from "@/lib/swr-cache";
 import { createTokenBucket } from "@/lib/token-bucket";
@@ -80,14 +80,7 @@ async function load(chainId: ChainId, poolId: string): Promise<Payload> {
       .filter((x) => x.ts && x.tx && Number.isFinite(x.usd) && x.usd >= MIN_USD)
       .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))
       .slice(0, LIMIT);
-    const labels = await getWalletLabels(chainId, trades.map((x) => x.wallet)).catch(() => new Map());
-    return {
-      trades: trades.map((x) => {
-        const l = labels.get(x.wallet);
-        return l ? { ...x, labels: l.labels, smartMoney: l.smartMoney } : x;
-      }),
-      status: trades.length ? "ok" : "empty",
-    };
+    return { trades, status: trades.length ? "ok" : "empty" };
   } catch (e) {
     if (e instanceof RateLimited) throw e;
     console.error("[trades] upstream failed, serving empty:", (e as Error).message);

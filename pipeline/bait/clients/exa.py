@@ -1,4 +1,4 @@
-"""Exa search, last 30 days, for receipts."""
+"""Exa search over recent web results. Called only by the radar step (steps/radar.py) since 2026-10-24."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

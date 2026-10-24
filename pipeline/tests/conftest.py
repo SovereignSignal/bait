@@ -31,7 +31,7 @@ def conn(engine):
 def ctx():
     # clients pre-populated with None = "no key"; tests override what they need
     return RunContext(day=DAY, now=NOW, hooklist_file=FIXTURE, max_code_fetch=0,
-                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "parallel", "github", "names")})
+                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names")})
 
 
 @pytest.fixture
