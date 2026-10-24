@@ -33,17 +33,26 @@ LIVE = {  # project_daily for 2026-10-23, in KEYS order
 }
 
 
-def bctx(slug, receipts=(), audit_url=None, **extra):
-    """A why_blurb context shaped like signals._blurb_ctx."""
-    m = dict(zip(KEYS, LIVE[slug]), wallets_24h_kind="distinct")
-    enr = {"audit_url": audit_url, "team": "Team"} if audit_url else None
-    return {"name": slug, "metrics": m, "signals": {}, "receipts": [{"title": t} for t in receipts], "enrichment": enr, **extra}
+CHAINS = {"fablesrampeth": ["robinhood"], "fablesramp": ["robinhood"]}   # the rest: Ethereum, unless a test is about chains
+
+
+def bctx(slug, receipts=(), audit_urls=(), chains=None, hooklisted=None, verified_source=None, descriptions=(),
+         hooks_n=1, wallets_7d=None, **extra):
+    """A why_blurb context shaped like signals._blurb_ctx: the hook facts (enrich.hook_facts; registry flags unknown
+    unless given), the 2026-10-23 metrics, signals and the stored receipts."""
+    m = dict(zip(KEYS, LIVE[slug]), wallets_24h_kind="distinct", wallets_7d=wallets_7d)
+    return {"name": slug, "category": "other", "what_line": None, "hooks_n": hooks_n,
+            "chains": list(chains if chains is not None else CHAINS.get(slug, ["ethereum"])),
+            "hooklisted": hooklisted, "verified_source": verified_source, "hooklist_descriptions": list(descriptions),
+            "audit_urls": list(audit_urls), "metrics": m, "signals": {},
+            "receipts": [{"title": t} for t in receipts], **extra}
 
 
 def wctx(chains, descriptions=(), audit_urls=(), **extra):
-    """A what_line context shaped like enrich.what_context."""
-    return {"name": "x", "hooks_n": 1, "chains": list(chains), "hooklist_descriptions": list(descriptions),
-            "flags_union": ["beforeSwap"], "audit_urls": list(audit_urls), "enrichment": {}, **extra}
+    """A what_line context shaped like enrich.what_context (registry flags unknown unless given)."""
+    return {"name": "x", "is_factory": False, "hooks_n": 1, "chains": list(chains), "hooklisted": None,
+            "verified_source": None, "hooklist_descriptions": list(descriptions), "audit_urls": list(audit_urls),
+            "flags_union": ["beforeSwap"], "dynamic_fee": False, "enrichment": {}, **extra}
 
 
 def kinds(problems):
@@ -163,10 +172,10 @@ def test_an_audit_needs_an_audit_link():
     out, found = clean_blurb(AEGIS, bctx("aegis"))
     assert kinds(found) == ["audit"]
     assert out.startswith("Weekly volume has grown sharply") and "audit" not in out
-    assert blurb_problems(AEGIS, bctx("aegis", audit_url="https://example.org/aegis-audit.pdf")) == []
-    # a Uniswap core audit is nobody's hook audit
-    core = "https://github.com/Uniswap/v4-core/tree/main/docs/security/audits"
-    assert kinds(blurb_problems(AEGIS, bctx("aegis", audit_url=core))) == ["audit"]
+    # the hooks' hooklist audit link, the one the web's audit badge shows
+    assert blurb_problems(AEGIS, bctx("aegis", audit_urls=["https://example.org/aegis-audit.pdf"])) == []
+    # text that is not a web URL is no link, as on the web (firstWebUrl)
+    assert kinds(blurb_problems(AEGIS, bctx("aegis", audit_urls=["see the docs"]))) == ["audit"]
 
 
 def test_statements_that_there_is_no_audit_pass():
@@ -253,9 +262,53 @@ def test_chain_words_in_other_senses_are_not_chains():
     assert chains_named("Charges a base fee in the base token, for Robinhood stock tokens.") == set()
     assert chains_named("Same address on Ethereum, BNB Chain, Base and Robinhood.") == {"ethereum", "bnb", "base", "robinhood"}
     assert chains_named("A Robinhood Chain hook, also tested on Sepolia.") == {"robinhood", "testnet"}
-    # a blurb context without chains is not checked rather than stripped
+    # the blurb context carries chains now (enrich.hook_facts); a context without them is not checked rather than stripped
     assert blurb_problems("It launched on Ethereum mainnet this month.", bctx("volatilepairhook")) == []
     assert kinds(blurb_problems("It launched on Base this month.", bctx("volatilepairhook", chains=["ethereum"]))) == ["chain"]
+    no_chains = {k: v for k, v in bctx("volatilepairhook").items() if k != "chains"}
+    assert blurb_problems("It launched on Base this month.", no_chains) == []
+
+
+# --- facts the contexts gained (enrich.hook_facts, metrics.wallets_7d) -----------------------------------------------
+
+def test_the_hooklisted_flag_settles_unlisted_with_or_without_a_description():
+    line = "Unlisted hook that takes the whole trading fee on launch pools."
+    out, found = clean_what_line(line, wctx(["robinhood"], hooklisted=True))        # listed, no description
+    assert out == "Hook that takes the whole trading fee on launch pools." and kinds(found) == ["status"]
+    # dropped from the registry: it keeps its description, and "unlisted" is now true
+    assert clean_what_line(line, wctx(["robinhood"], [PANGEA_DESC], hooklisted=False)) == (line, [])
+    blurb = "It is an unlisted hook, yet volume is spread across a very large number of pools."
+    assert kinds(blurb_problems(blurb, bctx("pangea-multichain-hook", hooklisted=True))) == ["status"]
+    assert blurb_problems(blurb, bctx("pangea-multichain-hook")) == []               # registry status unknown
+
+
+def test_purpose_unknown_in_a_blurb_is_checked_against_the_descriptions():
+    pangea = "Swap counts are unknown, so what the hook does and whether the activity will last are unclear."
+    assert kinds(blurb_problems(pangea, bctx("pangea-multichain-hook", descriptions=[PANGEA_DESC]))) == ["status"]
+    assert blurb_problems(pangea, bctx("pangea-multichain-hook")) == []              # no description: may be true
+    # SessionFeeHook: no hooklist entry, but a verified source documents the fee logic
+    session = "Its fee-setting logic is unknown, so the hook's role in the pools is unclear."
+    assert kinds(blurb_problems(session, bctx("sessionfeehook", verified_source=True))) == ["status"]
+    assert blurb_problems(session, bctx("sessionfeehook")) == []
+
+
+def test_hook_counts_and_seven_day_wallets_are_checked_against_the_metrics():
+    assert blurb_problems("It runs 3 hooks across many pools.", bctx("aegis", hooks_n=3)) == []
+    assert kinds(blurb_problems("It runs 5 hooks across many pools.", bctx("aegis", hooks_n=3))) == ["figure"]
+    assert kinds(blurb_problems("It spans five hooks.", bctx("aegis", hooks_n=3))) == ["figure"]
+    weekly = "Over the week 1,500 wallets traded it, a broad base."
+    assert blurb_problems(weekly, bctx("angstrom", wallets_7d=1_500)) == []          # 63 that day, 1,500 over the week
+    assert kinds(blurb_problems(weekly, bctx("angstrom"))) == ["figure"]              # weekly count unknown
+
+
+def test_verified_source_from_the_hooks_settles_unverified():
+    line = "Unverified hook on Robinhood Chain that runs on pool init and swaps."
+    assert clean_what_line(line, wctx(["robinhood"], verified_source=False)) == (line, [])     # no hook verified
+    out, found = clean_what_line(line, wctx(["robinhood"], verified_source=True))
+    assert out == "Hook on Robinhood Chain that runs on pool init and swaps." and kinds(found) == ["status"]
+    blurb = "The hook is unverified, so its logic cannot be read."
+    assert blurb_problems(blurb, bctx("launchhook-0x963f-25cc", verified_source=False)) == []
+    assert kinds(blurb_problems(blurb, bctx("launchhook-0x963f-25cc", verified_source=True))) == ["status"]
 
 
 # --- right text passes untouched -------------------------------------------------------------------------------------
@@ -298,3 +351,7 @@ def test_prompts_carry_the_rules_before_the_facts():
     assert "Mention an audit only when audit_urls is not empty" in w
     assert b.index("Say growing only when vol_7d is above vol_7d_prev") < b.index('"name"')
     assert "Do not quote dollar amounts" in b and "never mention the input" in b
+    for p in (w, b):        # the contexts carry the registry flags now; nothing researched reaches the prompts
+        assert "unverified only when verified_source is false" in p and "unlisted only when hooklisted is false" in p
+        assert "researched" not in p and "website" not in p and "under enrichment" not in p
+    assert "an audit only when audit_urls is not empty" in b and "Name a chain only if it is in chains" in b

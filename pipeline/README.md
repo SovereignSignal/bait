@@ -60,9 +60,9 @@ default 300), `--signals-limit N` (default 50), `--database-url`.
 | 3 | activity | pool_stats(day) ⨝ pools, top `ACTIVITY_POOLS` non-wash pools by 24h vol plus up to `ACTIVITY_WASH_POOLS` 24h-wash candidates; GeckoTerminal `/pools/{id}/trades` | pool_top_wallets(day) (top 20 wallets/pool, 14 days kept); pool_stats.wallets_24h when the fetch saw every trade of the day | keyless |
 | 3b | onchain | v4_pools, pool_daily_onchain, indexer_state (from `python -m bait.indexer`) | hooks (unlisted, capped), pools, pool_snapshots, pool_stats(day) overriding keyless usage | nothing; no-op when the indexer tables are empty |
 | 4 | group | hooks | projects, hooks.project_id, is_factory | optional: Blockscout, ANTHROPIC_API_KEY |
-| 5 | enrich | projects with enriched_at null | what_line, category, enrichment (verified source); stored website/github/x_handle re-validated | ANTHROPIC_API_KEY; optional Blockscout |
+| 5 | enrich | projects with enriched_at null; then, past `ENRICH_RETRY_DAYS`, lines that are empty or fail the prose checks | what_line, category, enrichment (verified source); stored website/github/x_handle re-validated | ANTHROPIC_API_KEY; optional Blockscout |
 | 6 | score | pool_snapshots (window_end-13..window_end), pool_stats(day), pool_top_wallets(day), pool_daily_onchain / pool_wallet_day (ready chains; for the 7-day wallet figures also a chain whose swap cursor is past the window, hooks under the per-hook cap) | project_daily(day) incl. window_end, vol_24h, swaps, wallets, is_wash / wash_reason | nothing |
-| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded) | signals (github, alive: null without a GitHub reading), why_blurb | optional GITHUB_TOKEN, ANTHROPIC_API_KEY |
+| 7 | signals | New ∪ Trending (top 20 trending + new, cap 50, spam excluded); then up to `BLURB_RECHECK_MAX` other projects whose stored blurb fails the prose checks | signals (github, alive: null without a GitHub reading), why_blurb (new, signals changed, or empty / failing the checks past `ENRICH_RETRY_DAYS`) | optional GITHUB_TOKEN, ANTHROPIC_API_KEY |
 | 8 | radar | Uniswap/hooklist issues + PRs (30d), GitHub repo/code search (30d), Exa (60d) classified by Claude Haiku | radar_items (one row per URL, 90 days kept) | optional GITHUB_TOKEN (else anonymous unless KEYLESS=0), EXA_API_KEY + ANTHROPIC_API_KEY |
 | 9 | digest | project_daily(day) | digests(week_of) | Monday or `--force-digest` |
 
@@ -386,6 +386,8 @@ written on its own connection so it survives a rolled-back step), and hard budge
 | `SPEND_MONTHLY_USD` | 40.00 | All providers, rolling 30 days. |
 | `SPEND_DAILY_USD_<PROVIDER>` / `SPEND_MONTHLY_USD_<PROVIDER>` | unset | Optional per provider (`ANTHROPIC`, `EXA`). |
 | `ENRICH_MAX` | 20 | Projects enriched (Sonnet what_line) per run; live-pool projects only. |
+| `ENRICH_RETRY_DAYS` | 7 | Age at which a stored what_line or blurb that is empty or fails the prose checks is written again; a rewrite restarts the wait, so failing text costs at most one call per project per window. |
+| `BLURB_RECHECK_MAX` | 20 | Blurbs of projects outside the night's signals targets rewritten per run because they fail the prose checks (busiest first); `0` turns this off. |
 | `SHAPE_MAX` | 3000 | Hooks whose bytecode template (`code_shape`) the group step fetches per run, free public RPC: unassigned first, then same-team (rule 4) candidates, then the newest. |
 | `AUDIT_LINKS` / `AUDIT_LINKS_MAX` / `AUDIT_LINKS_BUDGET_S` | 1 / 300 / 180 | Free: the signals step asks every published audit link once a night (status only, public hosts only) and records 404/410 links as dead (`bait/audit_links.py`); `AUDIT_LINKS=0` turns it off. |
 | `GROUP_CLAUDE_MAX` | 100 | Haiku classifications per run; bare-address hooks are never sent. |

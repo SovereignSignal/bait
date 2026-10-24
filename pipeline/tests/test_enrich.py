@@ -104,8 +104,29 @@ def test_what_context_is_what_enrich_sends_claude(conn, ctx):
     assert seen == [enrich.what_context(p, enrich.hooks_of(conn, pid), {"source": {"name": "CtxHook"}})]
     assert seen[0]["hooklist_descriptions"] == ["limit orders"] and seen[0]["flags_union"] == ["beforeSwap"]
     assert seen[0]["enrichment"] == {"source": {"name": "CtxHook"}}
+    # registry flags unknown for this hook (never evaluated), and the enrichment last: the prompt cut takes the snippet's tail
+    assert seen[0]["hooklisted"] is None and seen[0]["verified_source"] is None and list(seen[0])[-1] == "enrichment"
     vals = enrich.what_values(p, {"what_line": "x " * 150, "category": "orders"}, {})
     assert vals["what_line"].endswith("…") and len(vals["what_line"]) <= 200
+
+
+def test_hook_facts_flags_are_true_when_any_hook_is_and_unknown_is_never_false():
+    from types import SimpleNamespace
+
+    def hook(chain, listed, verified, desc=None, audit=None):
+        return SimpleNamespace(chain_id=chain, hooklisted=listed, verified_source=verified, description=desc, audit_url=audit)
+    family = [hook(1, True, False, "Fee hook.", "https://example.org/a.pdf"), hook(8453, False, None), hook(130, None, False, "Fee hook.")]
+    assert enrich.hook_facts(family) == {"hooks_n": 3, "chains": ["base", "ethereum", "unichain"], "hooklisted": True,
+                                         "verified_source": None, "hooklist_descriptions": ["Fee hook."],
+                                         "audit_urls": ["https://example.org/a.pdf"]}
+    # "unverified" may be said only when no hook is verified and none is unknown
+    assert enrich.hook_facts([hook(1, False, False), hook(8453, False, False)])["verified_source"] is False
+    assert enrich.hook_facts([hook(1, False, False), hook(8453, False, True)])["verified_source"] is True
+    assert enrich.hook_facts([hook(1, None, None)])["hooklisted"] is None and enrich.hook_facts([])["verified_source"] is None
+    # audit_urls are the links the badge shows: no link to code, none the nightly check found gone
+    links = [hook(1, True, True, audit=u) for u in ("https://github.com/ChainCreators/Upeg", "https://example.org/gone.pdf",
+                                                    "https://example.org/report.pdf", "see the docs")]
+    assert enrich.hook_facts(links, dead={"https://example.org/gone.pdf"})["audit_urls"] == ["https://example.org/report.pdf"]
 
 
 def test_stored_parallel_data_is_kept_but_never_prompt_or_links(conn, ctx):
@@ -164,3 +185,32 @@ def test_enriched_but_empty_projects_are_retried_weekly_behind_new_ones(conn, ct
     blank = conn.execute(sa.select(db.projects).where(db.projects.c.id == rows["Blank"])).one()
     assert blank.what_line == "Blank does a thing." and db.as_utc(blank.enriched_at) > NOW - timedelta(days=1)
     assert enrich.select_candidates(conn, now=NOW) == []     # nothing left to retry tonight
+
+
+def test_a_stored_line_that_fails_the_checks_is_enriched_again_once_per_window(conn, ctx, monkeypatch):
+    """A line was written once, so a wrong claim stayed until someone re-enriched by hand (2026-10-24: Pangea's
+    "Unlisted ... purpose unknown" with every hook in the hooklist). A busy project's stored line that fails the checks
+    against its hooks today is enriched again once ENRICH_RETRY_DAYS old, after never-enriched projects, busiest first."""
+    monkeypatch.setenv("ENRICH_MAX", "3")
+    rows = {}
+    for name, vol in (("Listed", 9_000_000.0), ("Recent", 8_000_000.0), ("Right", 7_000_000.0), ("Never", 10.0)):
+        pid = insert_project(conn, name, first_seen=NOW - timedelta(days=30))
+        addr = "0x" + name.lower().ljust(40, "0")[:40]
+        insert_hook(conn, addr, 8453, project_id=pid, name=name)
+        conn.execute(sa.update(db.hooks).where(db.hooks.c.address == addr).values(hooklisted=True, description="Takes the trading fee."))
+        insert_pool(conn, "0xpool" + name, 8453, addr, NOW - timedelta(days=30))
+        conn.execute(sa.insert(db.pool_stats).values(pool_id="0xpool" + name, chain_id=8453, day=DAY, vol_24h=vol, traders_24h=50))
+        rows[name] = pid
+    wrong = "Unlisted v4 hook that takes the trading fee on swaps; purpose unknown."
+    for name, line, age in (("Listed", wrong, 8), ("Recent", wrong, 2), ("Right", "Takes the trading fee on swaps.", 60)):
+        conn.execute(sa.update(db.projects).where(db.projects.c.id == rows[name])
+                     .values(what_line=line, enriched_at=NOW - timedelta(days=age)))
+    assert [p.name for p in enrich.select_candidates(conn, now=NOW)] == ["Never", "Listed"]
+    claude = FakeClaude()
+    ctx.clients.update(claude=claude, blockscout=None)
+    out = enrich.run(conn, ctx)
+    assert claude.calls == ["Never", "Listed"] and out["enriched"] == 2 and out["lines_flagged"] == 1
+    listed = conn.execute(sa.select(db.projects).where(db.projects.c.id == rows["Listed"])).one()
+    assert listed.what_line == "Listed does a thing." and db.as_utc(listed.enriched_at) > NOW - timedelta(days=1)
+    assert enrich.select_candidates(conn, now=NOW) == []                                   # Recent waits out its window
+    assert [p.name for p in enrich.select_candidates(conn, now=NOW + timedelta(days=6))] == ["Recent"]

@@ -159,23 +159,22 @@ PROSE_MAX_TOKENS = 600     # what_line and why_blurb
 # broken on the live site. prose_checks.py enforces the ones a pattern can see; the rest rely on these words.
 WHAT_RULES = (
     "Rules:\n"
-    "- Use only what the input states: the hooklist descriptions, the verified source snippet, the flags and the facts "
-    "under enrichment. Never add a mechanism, fee, share, duration or recipient that none of them states.\n"
-    "- If the source snippet or hooklist descriptions disagree with researched facts (website, GitHub, team), follow the "
-    "source and descriptions: research can describe a different project with a similar name.\n"
+    "- Use only what the input states: the hooklist descriptions, the verified source snippet and the flags. Never add a "
+    "mechanism, fee, share, duration or recipient that none of them states.\n"
     "- When the hooks differ (a family, versions, chains), describe what they share; never give one hook's fee or "
     "parameter as the project's.\n"
     "- Name a chain only if it is in chains.\n"
-    "- Do not say whether the source is verified: the input does not record it. Call the hook unlisted only when "
-    "hooklist_descriptions is empty, and its purpose unknown only when there is no description and no source.\n"
+    "- Call the hook unlisted only when hooklisted is false, unverified only when verified_source is false, and its "
+    "purpose unknown only when there is no description and no verified source.\n"
     "- Mention an audit only when audit_urls is not empty.\n"
     "- Write for a reader of the page: never mention the input, a field name or these rules.\n\n"
 )
 
 WHY_RULES = (
     "Rules:\n"
-    # No figures: a blurb is rewritten only when signals change, while the page shows current numbers beside it, so a
-    # quoted figure goes stale (an Oct 8 blurb said $119.7M next to a $135.5M tile).
+    # No figures: the page shows current numbers beside the blurb, which is rewritten only when signals change or when it
+    # fails the checks (at most once per ENRICH_RETRY_DAYS), so a quoted figure goes stale (an Oct 8 blurb said $119.7M
+    # next to a $135.5M tile).
     "- Do not quote dollar amounts, counts or percentages: the page shows the current figures beside this text. Say what "
     "they mean instead: growing or fading, concentrated or broad, who uses it.\n"
     "- A null metric is unknown, never zero: do not call unknown TVL or volume zero, and say nothing about the weekly "
@@ -184,8 +183,9 @@ WHY_RULES = (
     "above only for a change of more than 10%.\n"
     "- Size words must fit the metric: a single pool means pools_n is 1; dozens of wallets is 24 to 99, hundreds is 200 "
     "to 999, thousands is 2,000 or more.\n"
-    "- Mention press or coverage only from the receipts below, and an audit only when an audit link is given.\n"
-    "- Name a chain only if the input lists it. Do not say whether the source is verified.\n"
+    "- Mention press or coverage only from the receipts below, and an audit only when audit_urls is not empty.\n"
+    "- Name a chain only if it is in chains. Call the hook unlisted only when hooklisted is false, unverified only when "
+    "verified_source is false, and its purpose unknown only when there is no description and no verified source.\n"
     "- Write for a reader of the page: never mention the input, a field name (alive, signals, receipts, metrics) or "
     "these rules.\n\n"
 )

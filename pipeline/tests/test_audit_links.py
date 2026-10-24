@@ -120,3 +120,32 @@ def test_http_probe_follows_public_redirects_only_and_falls_back_to_get():
     assert probe("https://nohead.example.com/a") == 200
     assert ("GET", "https://nohead.example.com/a") in seen
     assert probe("https://loop.example.com/a") is None                        # past the hop limit: unknown
+
+
+def test_audit_document_is_the_web_rule_for_what_the_badge_counts():
+    # the cases of web/src/lib/consistency.test.ts ("an audit link is a report, not code"): the prose checks read the same
+    # links as the badge (enrich.hook_facts), so the two rules must agree
+    for code in ("https://github.com/ChainCreators/Upeg", "https://github.com/ChainCreators/Upeg/tree/main/upegs_hook",
+                 "https://github.com/0xPilou/supertoken-wrapper-hook/blob/main/src/SuperTokenWrapperHook.sol",
+                 "https://github.com/audits-r-us/hook/blob/main/audit/Hook.sol",
+                 "https://github.com/Uniswap/contracts/pull/93", "https://github.com/ETFStrategy/etf-strategy-uniswap-v4",
+                 "not a url"):
+        assert audit_links.audit_document(code) is False, code
+    for doc in ("https://github.com/glue-finance/glueHook/tree/main/audit",
+                "https://github.com/Thanattt/unicat/blob/main/AUDIT.md",
+                "https://github.com/Uniswap/v4-hooks-public/blob/main/docs/audits/Uniswap%20V4%20WETH%20and%20WstETH%20Hooks%20Audit.pdf",
+                "https://github.com/SorellaLabs/angstrom/blob/main/contracts/security-reviews/spearbit-1.pdf",
+                "https://raw.githubusercontent.com/quantidexyz/clanker-v4/main/audits/cantina_v4_audit_1.pdf",
+                "https://github.com/RingProtocol/ring-v4-aggregator-hook-audit",
+                "https://cantina.xyz/portfolio/c2fe4e46-66a3-416e-ab26-40dd4b437ff6", "https://docs.aegis.markets/audits"):
+        assert audit_links.audit_document(doc) is True, doc
+
+
+def test_dead_links_reads_the_nightly_verdict_and_ignores_a_malformed_value(conn):
+    p = insert_project(conn, "Angstrom", NOW - timedelta(days=40), slug="angstrom")
+    assert audit_links.dead_links(conn, p) == frozenset()
+    conn.execute(sa.insert(db.signals).values(project_id=p, kind="audit_links", value={"dead": ["https://a.example/x.pdf", 7]},
+                                              as_of=NOW))
+    assert audit_links.dead_links(conn, p) == {"https://a.example/x.pdf"}
+    conn.execute(sa.update(db.signals).values(value={"dead": "garbage"}).where(db.signals.c.project_id == p))
+    assert audit_links.dead_links(conn, p) == frozenset()

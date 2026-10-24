@@ -1,15 +1,26 @@
-"""Deterministic checks on generated prose (what_line, why_blurb) before it is stored. Pure functions, no I/O.
+"""Deterministic checks on generated prose (what_line, why_blurb). Pure functions, no I/O.
 
 The 2026-10-24 fact-check of the 30 busiest described projects found text that the facts Bait passed in did not
 support: a hooklisted hook called "unlisted, purpose unknown", a verified one called "unverified", "growing" over a
 7-day volume that had halved, dollar figures and counts that matched no metric, audits named with no audit link,
 press cited with no receipts, and internal words ("the input", "the alive signal") on the page. The prompts in
-clients/claude.py ask for none of that; these checks make sure of it.
+clients/claude.py ask for none of that; these checks make sure of it twice: Claude.what_line and Claude.why_blurb clean
+new text before it is stored, and enrich and signals write stored text again when it fails against today's facts.
 
 A failing clause (what_line, split on ";") or sentence (why_blurb) is dropped and the rest is kept. An empty result is
-stored as empty: an empty what_line is retried after ENRICH_RETRY_DAYS, and an empty blurb is not shown. A check needs
-the fact it compares against; when the context does not carry it (no `chains` in a blurb context, say) that check
-does not run, so a missing fact never strips text.
+stored as empty, and an empty line or blurb is written again after ENRICH_RETRY_DAYS. Both contexts carry the facts the
+checks read (enrich.hook_facts, plus the blurb's metrics and receipts). Where a fact is missing anyway, a check either
+skips or drops, by which way the error would go:
+
+- Skips, because the text may be true: chain names without `chains`; "unlisted" unless `hooklisted`, or a hooklist
+  description when that is null, says the hook is listed; "purpose unknown" unless a description, a source snippet or
+  `verified_source` true documents it; press or coverage without a `receipts` key; TVL words without `tvl_usd` in the
+  metrics; trend words without metrics; a number word ("three pools") when that count is unknown.
+- Drops, because the claim needs the fact to stand: "unverified" unless `verified_source` is false; an audit unless
+  `audit_urls` holds a web link; press or coverage when `receipts` is empty; a dollar amount, percentage or digit count
+  that matches no metric passed in and is not quoted in the context (an unknown metric matches nothing); a size phrase
+  ("hundreds of wallets") over an unknown count; a weekly trend when either week's volume is unknown; zero TVL when TVL
+  is unknown.
 """
 from __future__ import annotations
 
@@ -91,7 +102,6 @@ _NEGATED_AFTER = re.compile(r"^\W*(?:\w+\W+){0,4}?(?:are|is|was|were|remains?|co
                             r"(?:undocumented|unknown|unclear|missing|absent"
                             r"|not\s+(?:be\s+)?(?:listed|found|linked|known|documented|identified|available))\b", re.I)
 _CONTRAST = re.compile(r".*(?:[;:]|\b(?:but|though|although|while|yet|whereas)\b)", re.I | re.S)
-_CORE_AUDIT = re.compile(r"^https?://(?:www\.)?github\.com/uniswap/v4-(?:core|periphery)\b", re.I)
 
 
 def _positive_mention(rx: re.Pattern, part: str) -> bool:
@@ -105,17 +115,9 @@ def _positive_mention(rx: re.Pattern, part: str) -> bool:
 
 
 def audit_links(ctx: dict) -> list[str]:
-    """The audit links the context carries: the hooks' (hooklist) audit_urls, and a researched one only with a team,
-    as the web's auditLinks counts them. A Uniswap v4 core/periphery audit is nobody's hook audit."""
-    urls = [u for u in (ctx.get("audit_urls") or []) if u]
-    if ctx.get("audit_url"):
-        urls.append(ctx["audit_url"])
-    enr = ctx.get("enrichment") or {}
-    for facts in (enr, enr.get("parallel") if isinstance(enr, dict) else None):
-        if isinstance(facts, dict) and facts.get("audit_url") and str(facts.get("team") or "").strip() \
-                and not _CORE_AUDIT.match(str(facts["audit_url"])):
-            urls.append(facts["audit_url"])
-    return [u for u in urls if isinstance(u, str) and re.match(r"https?://", u, re.I)]
+    """The audit links the context carries: the web URLs among the hooks' hooklist audit_urls, the links the web's
+    audit badge shows (auditLinks / firstWebUrl in web/src/lib/present.ts)."""
+    return [u for u in (ctx.get("audit_urls") or []) if isinstance(u, str) and re.match(r"https?://", u, re.I)]
 
 
 def _audit_problems(part: str, ctx: dict) -> list[Problem]:
@@ -124,17 +126,11 @@ def _audit_problems(part: str, ctx: dict) -> list[Problem]:
     return []
 
 
-def _has_receipts(ctx: dict) -> bool:
-    if ctx.get("receipts"):
-        return True
-    exa = (ctx.get("signals") or {}).get("exa") or {}
-    return bool(exa.get("hits_30d"))
-
-
 def _coverage_problems(part: str, ctx: dict) -> list[Problem]:
-    if "receipts" not in ctx and "signals" not in ctx:
+    """Press needs a receipt among the stored ones the blurb context lists (signals no longer searches for new ones)."""
+    if "receipts" not in ctx:
         return []
-    if _positive_mention(_COVERAGE, part) and not _has_receipts(ctx):
+    if _positive_mention(_COVERAGE, part) and not ctx["receipts"]:
         return [Problem("coverage", part, "cites press or coverage, but no receipts were passed in")]
     return []
 
@@ -162,22 +158,26 @@ def _source_snippet(ctx: dict) -> str:
 
 
 def _verified(ctx: dict) -> bool | None:
-    """True / False when the context says, None when it does not (a chain whose explorer refuses bots has no source
-    in the context, yet the hook may well be verified: 2026-10-24, a Robinhood LaunchHook on Sourcify read
-    "Unverified hook")."""
-    if "verified_source" in ctx:
+    """True / False when the context says (`verified_source`, true when any hook is: enrich.hook_facts), else True
+    when a source snippet is there, else None: a chain whose explorer refuses bots leaves no source in the context, yet
+    the hook may well be verified (2026-10-24, a Robinhood LaunchHook on Sourcify read "Unverified hook")."""
+    if ctx.get("verified_source") is not None:
         return bool(ctx["verified_source"])
     return True if _source_snippet(ctx) else None
 
 
 def _listed(ctx: dict) -> bool | None:
-    if "hooklisted" in ctx:
+    """`hooklisted` when known (true when any hook is in the hooklist), else True when a hooklist description is there,
+    else None. A hook dropped from the registry keeps its description but reads hooklisted false: "unlisted" is true."""
+    if ctx.get("hooklisted") is not None:
         return bool(ctx["hooklisted"])
     return True if ctx.get("hooklist_descriptions") else None
 
 
 def _documented(ctx: dict) -> bool:
-    return bool(ctx.get("hooklist_descriptions")) or bool(_source_snippet(ctx))
+    """A hooklist description, a source snippet, or a verified source (`verified_source` true: the blurb context does
+    not carry the snippet, and SessionFeeHook's blurb called its fee logic unknown beside a verified SessionFeeHook.sol)."""
+    return bool(ctx.get("hooklist_descriptions")) or bool(_source_snippet(ctx)) or ctx.get("verified_source") is True
 
 
 def _status_problems(part: str, ctx: dict) -> list[Problem]:
@@ -187,7 +187,7 @@ def _status_problems(part: str, ctx: dict) -> list[Problem]:
     if _UNLISTED.search(part) and _listed(ctx):
         out.append(Problem("status", part, "calls the hook unlisted; it has a hooklist entry"))
     if _UNKNOWN_PURPOSE.search(part) and _documented(ctx):
-        out.append(Problem("status", part, "calls the purpose unknown; a hooklist description or source snippet documents it"))
+        out.append(Problem("status", part, "calls the purpose unknown; a hooklist description or verified source documents it"))
     return out
 
 

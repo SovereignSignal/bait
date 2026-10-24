@@ -1,8 +1,9 @@
+import json
 from datetime import timedelta
 
 import sqlalchemy as sa
 
-from bait import db
+from bait import audit_links, db
 from bait.steps import digest, signals
 from tests.conftest import DAY, NOW, insert_hook, insert_project
 
@@ -56,7 +57,7 @@ def test_signals_targets_github_alive_and_blurb_only_on_change(conn, ctx):
     gh, claude = FakeGitHub(), FakeClaude()
     ctx.clients.update(exa=NoExa(), github=gh, claude=claude)
     out = signals.run(conn, ctx)
-    assert out == {"projects": 2, "github": 1, "blurbs": 2, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
+    assert out == {"projects": 2, "github": 1, "blurbs": 2, "blurbs_flagged": 0, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     assert conn.execute(sa.select(sa.func.count()).select_from(db.receipts)).scalar_one() == 0
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == hot))}
     assert sig["alive"] == {"alive": True} and sig["github"]["stars"] == 12 and "exa" not in sig
@@ -120,11 +121,12 @@ def test_frozen_exa_and_nansen_signals_stay_out_of_alive_and_the_blurb(conn, ctx
             return super().why_blurb(c)
     ctx.clients.update(exa=NoExa(), github=None, claude=Capture())
     out = signals.run(conn, ctx)
-    assert out == {"projects": 1, "github": 0, "blurbs": 1, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
+    assert out == {"projects": 1, "github": 0, "blurbs": 1, "blurbs_flagged": 0, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == p))}
     assert sig["alive"] == {"alive": None} and sig["exa"]["hits_30d"] == 3           # stored row left as it was
     assert seen[0]["signals"] == {} and [r["title"] for r in seen[0]["receipts"]] == ["Hot hook ships"]
     assert "enrichment" not in seen[0]                                                # stored Parallel facts: never prompt
+    assert "parallel" not in json.dumps(seen[0], default=str)
 
 
 def test_a_changed_audit_link_verdict_alone_never_marks_the_blurb_stale_or_reaches_the_prompt(conn, ctx):
@@ -184,7 +186,7 @@ def test_alive_is_unknown_without_a_github_reading_and_never_reaches_the_blurb_a
             return super().why_blurb(c)
     ctx.clients.update(exa=NoExa(), github=GitHub(), claude=Capture())
     out = signals.run(conn, ctx)
-    assert out == {"projects": 3, "github": 2, "blurbs": 3, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
+    assert out == {"projects": 3, "github": 2, "blurbs": 3, "blurbs_flagged": 0, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     alive = {n: conn.execute(sa.select(db.signals.c.value).where(db.signals.c.project_id == pid, db.signals.c.kind == "alive"))
              .scalar_one() for n, pid in ids.items()}
     assert alive == {"Linkless": {"alive": None}, "Stale": {"alive": False}, "Busy": {"alive": True}}
@@ -195,10 +197,12 @@ def test_alive_is_unknown_without_a_github_reading_and_never_reaches_the_blurb_a
 def test_blurb_context_names_its_windows_and_never_a_made_up_swap_count(conn, ctx):
     hot = insert_project(conn, "Hot", NOW - timedelta(days=40))
     insert_hook(conn, f"0x{hot}", 1, project_id=hot)
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.project_id == hot).values(
+        hooklisted=True, verified_source=False, description="limit orders", audit_url="https://example.org/audit.pdf"))
     conn.execute(sa.insert(db.project_daily).values(
         project_id=hot, day=DAY, window_end=DAY - timedelta(days=1), tvl_usd=1e6, vol_24h=10_000.0, vol_7d=70_000.0,
-        vol_7d_prev=35_000.0, swaps_24h=500, swaps_7d=None, wallets_24h=1_142, wallets_exact=False, pools_n=6,
-        score_trending=30.0, is_new=False, is_spam=False))
+        vol_7d_prev=35_000.0, swaps_24h=500, swaps_7d=None, wallets_24h=1_142, wallets_exact=False, wallets_7d=2_345,
+        pools_n=6, score_trending=30.0, is_new=False, is_spam=False))
     washy = insert_project(conn, "Washy", NOW - timedelta(days=40), slug="washy")
     insert_hook(conn, f"0x{washy}", 1, project_id=washy)
     conn.execute(sa.insert(db.project_daily).values(project_id=washy, day=DAY, tvl_usd=1.0, vol_7d=9e8, vol_7d_prev=1e6, pools_n=1,
@@ -215,7 +219,100 @@ def test_blurb_context_names_its_windows_and_never_a_made_up_swap_count(conn, ct
     m = seen[0]["metrics"]
     assert m["windows"].startswith("closed UTC days ending 2026-10-05")
     assert (m["vol_24h"], m["swaps_24h"], m["swaps_7d"]) == (10_000.0, 500, None)
-    assert (m["wallets_24h"], m["wallets_24h_kind"]) == (1_142, "upper bound (buyers + sellers per pool)")
+    assert (m["wallets_24h"], m["wallets_24h_kind"], m["wallets_7d"]) == (1_142, "upper bound (buyers + sellers per pool)", 2_345)
+    # the hook facts the prose checks compare (enrich.hook_facts), the same the what_line context carries
+    facts = {k: seen[0][k] for k in ("hooks_n", "chains", "hooklisted", "verified_source", "hooklist_descriptions", "audit_urls")}
+    assert facts == {"hooks_n": 1, "chains": ["ethereum"], "hooklisted": True, "verified_source": False,
+                     "hooklist_descriptions": ["limit orders"], "audit_urls": ["https://example.org/audit.pdf"]}
+
+
+
+def test_both_contexts_carry_the_audit_links_the_badge_shows(conn, ctx):
+    # a link to code is not an audit, and a link the nightly check found gone leaves the badge (audit_links.py): neither
+    # may let a line or blurb claim an audit the page does not show
+    from bait.steps import enrich
+    p = insert_project(conn, "Angstrom", NOW - timedelta(days=40), slug="angstrom")
+    gone = "https://github.com/spearbit/portfolio/blob/master/pdfs/Sorella-Spearbit-Security-Review-October-2024.pdf"
+    for i, url in enumerate((gone, "https://github.com/SorellaLabs/angstrom", "https://example.org/report.pdf")):
+        insert_hook(conn, f"0xa{i}", 1, project_id=p)
+        conn.execute(sa.update(db.hooks).values(audit_url=url).where(db.hooks.c.address == f"0xa{i}"))
+    seed_daily(conn, p, score=30.0, tvl=1e6)
+    conn.execute(sa.insert(db.signals).values(project_id=p, kind="audit_links", value={"dead": [gone]}, as_of=NOW))
+    target, daily = signals.select_targets(conn, ctx)[0]
+    hs = enrich.hooks_of(conn, p)
+    assert signals._blurb_ctx(conn, target, daily)["audit_urls"] == ["https://example.org/report.pdf"]
+    assert enrich.what_context(target, hs, {}, audit_links.dead_links(conn, p))["audit_urls"] == ["https://example.org/report.pdf"]
+
+STALE = "It holds about $25.5M of TVL across 3 pools. Usage is broad."     # an Oct 8 style blurb: figures since moved
+
+
+def _blurb_project(conn, name, score=0.0, vol_7d=50_000.0, blurb=None, age_days=8):
+    """A project with today's row (TVL $1M, one pool), alive already stored as tonight computes it (no GitHub link:
+    null) and dated before the blurb, so its signals do not change, and a stored blurb `age_days` old."""
+    pid = insert_project(conn, name, NOW - timedelta(days=40), slug=name.lower())
+    insert_hook(conn, f"0x{pid}", 1, project_id=pid)
+    conn.execute(sa.insert(db.project_daily).values(
+        project_id=pid, day=DAY, window_end=DAY - timedelta(days=1), tvl_usd=1e6, vol_24h=vol_7d / 7, vol_7d=vol_7d,
+        vol_7d_prev=vol_7d / 2, swaps_7d=10, pools_n=1, score_trending=score, is_new=False, is_spam=False))
+    conn.execute(sa.insert(db.signals).values(project_id=pid, kind="alive", value={"alive": None}, as_of=NOW - timedelta(days=30)))
+    if blurb is not None:
+        conn.execute(sa.update(db.projects).values(why_blurb=blurb, blurb_at=NOW - timedelta(days=age_days))
+                     .where(db.projects.c.id == pid))
+    return pid
+
+
+def test_a_stored_blurb_that_fails_the_checks_is_rewritten_once_per_retry_window(conn, ctx):
+    """A blurb was rewritten only when signals changed, so Oct 8 blurbs kept quoting Oct 8 figures. A target's stored
+    blurb that fails the prose checks against tonight's context is rewritten once it is ENRICH_RETRY_DAYS (7) old. The
+    rewrite restarts the wait: text that fails again is not rewritten every night."""
+    hot = _blurb_project(conn, "Hot", score=30.0, blurb=STALE)
+    _blurb_project(conn, "Fine", score=20.0, blurb="Usage is broad.")
+    _blurb_project(conn, "Young", score=10.0, blurb=STALE, age_days=3)
+    claude = FakeClaude()
+    ctx.clients.update(claude=claude)
+    out = signals.run(conn, ctx)
+    assert out == {"projects": 3, "github": 0, "blurbs": 1, "blurbs_flagged": 1, "errors": 0, "audit_links": 0,
+                   "audit_links_dead": 0}
+    rows = {r.slug: r for r in conn.execute(sa.select(db.projects))}
+    assert rows["hot"].why_blurb == "People use it. Numbers went up." and db.as_utc(rows["hot"].blurb_at) == NOW
+    assert rows["fine"].why_blurb == "Usage is broad." and rows["young"].why_blurb == STALE   # passes / inside the window
+    # say the figures moved and the new blurb fails the next night: it waits a full window from its rewrite
+    conn.execute(sa.update(db.projects).values(why_blurb=STALE).where(db.projects.c.id == hot))
+    ctx.now = NOW + timedelta(days=1)
+    assert signals.run(conn, ctx)["blurbs"] == 0 and claude.calls == 1
+    ctx.now = NOW + timedelta(days=7)
+    out = signals.run(conn, ctx)
+    assert out["blurbs_flagged"] == 2 and claude.calls == 3        # Hot, 7 days after its rewrite, and Young, now 10 days old
+
+
+def test_an_empty_stored_blurb_is_written_again_after_the_window(conn, ctx):
+    # the checks can drop every sentence; an empty blurb is not shown, and gets another call once the window has passed
+    _blurb_project(conn, "Blank", score=30.0, blurb="")
+    claude = FakeClaude()
+    ctx.clients.update(claude=claude)
+    assert signals.run(conn, ctx)["blurbs_flagged"] == 1 and claude.calls == 1
+
+
+def test_failing_blurbs_outside_the_targets_are_rewritten_busiest_first_up_to_the_cap(conn, ctx, monkeypatch):
+    """A blurb stays on its page after the project leaves the targets (trending weighs growth, so a project whose volume
+    fell drops out), beside figures that keep moving. Up to BLURB_RECHECK_MAX whose stored blurb fails the checks are
+    rewritten a night, busiest first; spam and wash-like projects are left out as for targets."""
+    monkeypatch.setenv("BLURB_RECHECK_MAX", "2")
+    for name, vol in (("Big", 9e6), ("Right", 8e6), ("Mid", 5e6), ("Small", 1e6)):
+        _blurb_project(conn, name, vol_7d=vol, blurb="Usage is broad." if name == "Right" else STALE)
+    washy = _blurb_project(conn, "Washy", vol_7d=7e6, blurb=STALE)
+    conn.execute(sa.update(db.project_daily).values(is_wash=True).where(db.project_daily.c.project_id == washy))
+    claude = FakeClaude()
+    ctx.clients.update(claude=claude)
+    out = signals.run(conn, ctx)
+    assert out == {"projects": 0, "github": 0, "blurbs": 2, "blurbs_flagged": 2, "errors": 0, "audit_links": 0,
+                   "audit_links_dead": 0}
+    new = "People use it. Numbers went up."
+    assert {r.slug: r.why_blurb for r in conn.execute(sa.select(db.projects))} == {
+        "big": new, "right": "Usage is broad.", "mid": new, "small": STALE, "washy": STALE}
+    monkeypatch.setenv("BLURB_RECHECK_MAX", "0")                # 0 turns the pass off
+    ctx.now = NOW + timedelta(days=30)
+    assert signals.run(conn, ctx)["blurbs"] == 0 and claude.calls == 2
 
 
 def test_digest_leaves_wash_out_of_the_week_and_names_the_window(conn, ctx):
