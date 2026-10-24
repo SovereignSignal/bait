@@ -5,10 +5,17 @@ Next.js App Router frontend for Bait: a dark trading-terminal view of Uniswap v4
 ## Run
 
 ```sh
-npm install
-npm run dev            # http://localhost:3000, fixture data (no DATABASE_URL)
-npm run build && npm start
+npm ci
+BAIT_FIXTURES=1 npm run dev    # http://localhost:3000 on sample data, no database
+npm run dev                    # reads Postgres: DATABASE_URL in web/.env or web/.env.local, or exported
+npm run build && npm start     # production server, same env
 ```
+
+Next.js reads env files from this directory only, never `../.env`: link it (`ln -s ../.env .env`) or copy
+`.env.example` to `.env.local`.
+
+`npm start` warns that `next start` does not work with `output: "standalone"`. Locally it serves the site anyway
+(the browser suites run on it); the Docker image runs the standalone `server.js` instead.
 
 Set `DATABASE_URL` to read Postgres. For local UI work without a database, run with `BAIT_FIXTURES=1` to serve `src/fixtures/sample.ts` (16 projects from the Oct 8 snapshot in `terminal-sample.json`, with sample buy/sell splits and top wallets); the footer then says "Sample figures". With neither set, every page renders empty, which is what the Docker build does so no sample figures are ever baked into the image.
 
@@ -68,11 +75,13 @@ about production ingestion or deployment.
 
 ```sh
 docker build -t bait-web .
-docker run -p 3000:3000 -e DATABASE_URL=postgres://... bait-web
+docker run -p 3000:3000 -e DATABASE_URL=postgres://... -e NEXT_PUBLIC_SITE_URL=https://your.host bait-web
 ```
 
 Multi-stage, `node:22-alpine`, `output: 'standalone'`.
 
 ## Env
 
-See `.env.example`. `NEXT_PUBLIC_SITE_URL` is used for RSS links and OG metadata.
+See `.env.example`. `NEXT_PUBLIC_SITE_URL` is your public origin, no trailing slash: RSS links and OG metadata use it
+(`http://localhost:3000` when unset or empty), and the read API's `url` fields fall back to the reference deployment
+when it is unset or empty, so set it on any other host.

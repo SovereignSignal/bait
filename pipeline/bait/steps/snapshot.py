@@ -59,11 +59,13 @@ def _keyless(conn, ctx: RunContext, chain_ids: list[int], out: dict) -> None:
     nets = [net for net, (cid, *_rest) in K.CHAINS.items() if cid in chain_ids]
     log.info("snapshot keyless chains=%s", ",".join(K.CHAINS[n][1] for n in nets))
     http = keyless_http(ctx)
-    found = K.collect(http, int(os.environ.get("KEYLESS_PAGES", "4")), int(os.environ.get("KEYLESS_NEW_PAGES", "2")), nets=nets)
+    # `or default`: a copied .env.example leaves these set but empty, which means the default, not a crash
+    found = K.collect(http, int(os.environ.get("KEYLESS_PAGES", "") or 4), int(os.environ.get("KEYLESS_NEW_PAGES", "") or 2),
+                      nets=nets)
     K.resolve_hooks(http, found)
     K.resolve_via_logs(http, found)
     hooked = [p for p in found.values() if p.get("key") and int(p["key"]["hooks"], 16) != 0]
-    K.fetch_ohlcv(http, hooked, int(os.environ.get("KEYLESS_OHLCV_CAP", "70")))
+    K.fetch_ohlcv(http, hooked, int(os.environ.get("KEYLESS_OHLCV_CAP", "") or 70))
 
     end = ctx.day - timedelta(days=1)
     known = {(r.address, r.chain_id) for r in conn.execute(sa.select(hooks.c.address, hooks.c.chain_id))}

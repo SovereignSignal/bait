@@ -14,6 +14,15 @@ export function apiRedirect(path: string): Response {
 }
 
 export const API_VERSION = "1";
+/** The reference deployment: the read API's `url` fields point here when NEXT_PUBLIC_SITE_URL is unset or empty. */
+export const REFERENCE_SITE = "https://bait-production-2706.up.railway.app";
+
+/** The read API's origin, no trailing slash. `||`, not `??`: a copied .env.example sets NEXT_PUBLIC_SITE_URL to "",
+ *  which means unset (as in layout.tsx and feed.xml), not relative `url` fields. */
+export function apiSite(configured: string | undefined): string {
+  return (configured || REFERENCE_SITE).replace(/\/$/, "");
+}
+
 export const LIST_LIMIT_DEFAULT = 100;
 export const LIST_LIMIT_MAX = 500;
 export const SORTS = ["vol7d", "trending", "new", "tvl"] as const;

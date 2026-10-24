@@ -28,11 +28,16 @@ with the classic Uniswap swap widget.
 
 ## Run it locally
 
-```
+From the repository root, with Python 3.12 and Node 20.9 or later; no keys, no database:
+
+```sh
 cd pipeline && python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m pytest -q
-cd web && npm install && npm test && npx tsc --noEmit
-cd web && BAIT_FIXTURES=1 npm run dev     # sample data at http://localhost:3000, no database needed
+cd ../web && npm ci && npm test && npm run typecheck
+BAIT_FIXTURES=1 npm run dev     # sample data at http://localhost:3000, no database needed
 ```
+
+To run the pipeline into a Postgres of your own and see the result in the site, follow "On your own data" in
+`README.md`.
 
 The live site reads the real database; use it for UX review.
 

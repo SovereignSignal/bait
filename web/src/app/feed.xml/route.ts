@@ -5,7 +5,7 @@ import { escXml as esc } from "@/lib/xml";
 
 export const dynamic = "force-dynamic";
 
-const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+const SITE = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";   // empty = unset, as in layout.tsx
 
 export async function GET(req: Request) {
   const [digests, fresh] = await Promise.all([listDigests(12), getFeed({ tab: "new" })]);

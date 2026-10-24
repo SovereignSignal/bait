@@ -107,8 +107,9 @@ def coingecko_key() -> str | None:
 
 
 def keyless_spacing() -> float:
-    """Seconds between keyless GeckoTerminal calls: KEYLESS_SPACING, default 10."""
-    return float(os.environ.get("KEYLESS_SPACING", "10"))
+    """Seconds between keyless GeckoTerminal calls: KEYLESS_SPACING, default 10 (also when set but empty, as a copied
+    .env.example leaves it)."""
+    return float(os.environ.get("KEYLESS_SPACING", "") or 10)
 
 
 def keyed_spacing() -> float:
@@ -390,7 +391,7 @@ def resolve_via_logs(http: Http, pools: dict) -> None:
     for key, p in pools.items():
         if not p.get("key") and p["attrs"].get("pool_created_at") and key[0] in LOGS:
             pending[key[0]].append(key)
-    budget = float(os.environ.get("KEYLESS_FALLBACK_BUDGET", "150"))  # seconds per chain; public endpoints throttle
+    budget = float(os.environ.get("KEYLESS_FALLBACK_BUDGET", "") or 150)  # seconds per chain; public endpoints throttle
     for net, keys in pending.items():
         pm, url, win = LOGS[net]
         bs = BLOCKSCOUT_LOGS.get(net)

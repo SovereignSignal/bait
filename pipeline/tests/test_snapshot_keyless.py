@@ -171,3 +171,18 @@ def test_an_idle_launch_holding_most_of_its_supply_has_unknown_tvl(conn, ctx, mo
     assert out["tvl_self_priced"] == 1
     assert {r.tvl_usd for r in _rows(conn, idle["attrs"]["address"]).values()} == {None}
     assert {r.tvl_usd for r in _rows(conn, busy["attrs"]["address"]).values()} == {14_095_343.0}
+
+
+def test_empty_keyless_settings_mean_the_defaults(conn, ctx, monkeypatch):
+    # `cp .env.example .env` leaves these set to "": the keyless snapshot must run on its defaults, not fail on float("")
+    for name in ("KEYLESS", "KEYLESS_PAGES", "KEYLESS_NEW_PAGES", "KEYLESS_OHLCV_CAP", "KEYLESS_SPACING"):
+        monkeypatch.setenv(name, "")
+    seen = {}
+    monkeypatch.setattr(K, "collect", lambda http, pages, new_pages, nets=None: seen.update(pages=pages, new_pages=new_pages,
+                                                                                            spacing=http.gt_spacing) or {})
+    for name in ("resolve_hooks", "resolve_via_logs"):
+        monkeypatch.setattr(K, name, lambda *a, **k: None)
+    monkeypatch.setattr(K, "fetch_ohlcv", lambda http, hooked, cap: seen.update(cap=cap))
+    out = snapshot.run(conn, ctx)
+    assert out["errors"] == 0
+    assert seen == {"pages": 4, "new_pages": 2, "spacing": 10.0, "cap": 70}

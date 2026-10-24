@@ -3,11 +3,11 @@
 import { getFreshness } from "@/db/health";
 import { respondJson } from "@/lib/http";
 import { createTokenBucket } from "@/lib/token-bucket";
-import { API_VERSION, type ApiError } from "@/lib/api-v1";
+import { API_VERSION, apiSite, type ApiError } from "@/lib/api-v1";
 
 const bucket = createTokenBucket({ capacity: 120, refillPerSec: 10 }); // 600 a minute sustained, 120 in a burst
 
-export const SITE = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://bait-production-2706.up.railway.app").replace(/\/$/, "");
+export const SITE = apiSite(process.env.NEXT_PUBLIC_SITE_URL);
 
 export async function apiHeaders(maxAge = 300): Promise<Record<string, string>> {
   const fresh = await getFreshness();
