@@ -34,7 +34,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "ineligible",
         "auditCount": 1,
         "auditUrl": "https://github.com/spearbit/portfolio/blob/master/pdfs/Sorella-Spearbit-Security-Review-October-2024.pdf"
@@ -213,7 +212,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "ineligible",
         "auditCount": 0,
         "auditUrl": null
@@ -638,7 +636,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "ineligible",
         "auditCount": 0,
         "auditUrl": null
@@ -893,7 +890,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "ineligible",
         "auditCount": 0,
         "auditUrl": null
@@ -1087,7 +1083,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "ineligible",
         "auditCount": 1,
         "auditUrl": "https://macroaudits.com/library/audits/clanker-4"
@@ -1347,7 +1342,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "ineligible",
         "auditCount": 1,
         "auditUrl": "https://cdn.prod.website-files.com/65d35b01a4034b72499019e8/677d4757ee5ee90cea211e90_ChainSecurity_Arrakis_Finance_Uniswap_V4_Module_audit.pdf"
@@ -1976,7 +1970,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null
@@ -2094,7 +2087,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null
@@ -2212,7 +2204,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null
@@ -2330,7 +2321,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null
@@ -2448,7 +2438,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null
@@ -2566,7 +2555,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null
@@ -2684,7 +2672,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null
@@ -2802,7 +2789,6 @@
       },
       "signals": {
         "lastCommitAt": null,
-        "lastExaHitAt": null,
         "routable": "eligible",
         "auditCount": 0,
         "auditUrl": null

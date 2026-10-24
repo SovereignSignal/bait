@@ -186,6 +186,18 @@ function receiptV1(r: ReceiptView) {
   return { title: r.title, url: r.url, source: r.source, published_at: r.publishedAt };
 }
 
+/** The newest published date among the receipts the response lists; null when none has one. Read from the same list, so
+ *  `last_mention_at` can never name a mention the response does not show (it used to read a stored Exa signal that
+ *  outlived its receipts, and even sat on unnamed hooks). */
+export function lastMentionAt(receipts: ReceiptView[]): string | null {
+  let best: number | null = null;
+  for (const r of receipts) {
+    const t = r.publishedAt ? Date.parse(r.publishedAt) : NaN;
+    if (Number.isFinite(t) && (best == null || t > best)) best = t;
+  }
+  return best == null ? null : new Date(best).toISOString();
+}
+
 export function projectV1(p: ProjectDetail & { rank?: number }, site: string) {
   const days = p.series.length;
   const end = p.through ? Date.parse(`${p.through}T00:00:00Z`) : null;
@@ -202,7 +214,7 @@ export function projectV1(p: ProjectDetail & { rank?: number }, site: string) {
     })),
     top_wallets: p.topWallets.map(walletV1),
     receipts: p.receipts.map(receiptV1),
-    signals: { last_commit_at: p.signals.lastCommitAt, last_mention_at: p.signals.lastExaHitAt, audit_count: p.signals.auditCount },
+    signals: { last_commit_at: p.signals.lastCommitAt, last_mention_at: lastMentionAt(p.receipts), audit_count: p.signals.auditCount },
   };
 }
 

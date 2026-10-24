@@ -173,8 +173,8 @@ export const walletLabels = pgTable(
  * One row per (project, kind). Value shapes written by the pipeline:
  *   github {repo, stars, last_commit_at, commits_30d}
  *   alive  {alive: bool}            (GitHub only since 2026-10-24)
- *   exa    {hits_30d, latest, top: [{url, title}]}   frozen since 2026-10-24 (receipts search removed)
- * Frozen and no longer read by the web: nansen (until 2026-10-08).
+ * Frozen, no longer written or read by the web: nansen (until 2026-10-08) and exa {hits_30d, latest, top} (until
+ * 2026-10-24, when the receipts search was removed).
  */
 export const signals = pgTable(
   "signals",

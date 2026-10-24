@@ -407,7 +407,6 @@ function num(v: unknown): number | null {
 }
 
 type GithubValue = { last_commit_at?: string | null };
-type ExaValue = { latest?: string | null };
 // `parallel` was written by the retired Parallel lane (removed 2026-10-24) and is never refreshed; only its audit link is read.
 type Enrichment = { secondary_categories?: Category[]; color?: string; parallel?: { audit_url?: string | null; team?: string | null } };
 
@@ -547,7 +546,6 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
     const hs = (hooksBy.get(p.id) ?? []).filter((h) => knownChain(h.chainId)).map(toHook);
     const chains = [...new Set(hs.map((h) => h.chainId))];
     const gh = sigBy.get(`${p.id}:github`) as GithubValue | undefined;
-    const exa = sigBy.get(`${p.id}:exa`) as ExaValue | undefined;
     const enrichment = (p.enrichment ?? {}) as Enrichment;
     const top = topBy.get(p.id);
     const recs = (receiptsBy.get(p.id) ?? []).filter((r) => receiptRelevant(p.name, r.title ?? "", r.source ?? "")).map(toReceipt);
@@ -613,7 +611,6 @@ async function loadFromDb(db: Db, opts: { slug?: string; full: boolean; latest?:
         },
         signals: {
           lastCommitAt: gh?.last_commit_at ?? null,
-          lastExaHitAt: exa?.latest ?? null,
           routable: "unknown", // derive() computes it from hooks and pools
           auditCount: audits.length,
           auditUrl: audits[0] ?? null,

@@ -163,8 +163,6 @@ export interface ReceiptView {
 export interface SignalsView {
   /** ISO of the last GitHub commit, if any */
   lastCommitAt: string | null;
-  /** ISO of the last Exa hit, if any */
-  lastExaHitAt: string | null;
   routable: Eligibility;
   /** what decided `routable`: Uniswap's published allowlist or denylist, or the automatic rule */
   routingSource?: RoutingSource;
