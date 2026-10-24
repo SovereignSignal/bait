@@ -59,6 +59,8 @@ export interface HookProperties {
   swapAccess?: string;
 }
 
+export type DeployerSource = "hooklist" | "sourcify" | "explorer";
+
 export interface HookView {
   address: string;
   chainId: ChainId;
@@ -71,8 +73,9 @@ export interface HookView {
   /** in the Uniswap hooklist as of the last ingest; null = not yet evaluated */
   hooklisted: boolean | null;
   deployer: string | null;
-  /** where the deployer came from: the hooklist registry, or the explorer's contract creator; null when unknown */
-  deployerSource: "hooklist" | "explorer" | null;
+  /** where the deployer came from: the hooklist registry, or the sender of the hook's creation transaction from
+   * Sourcify or the explorer (Blockscout); null when unknown */
+  deployerSource: DeployerSource | null;
   firstSeenAt: string; // ISO
 }
 

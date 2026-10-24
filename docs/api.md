@@ -45,7 +45,9 @@ curl -s "https://bait-production-2706.up.railway.app/api/v1/hooks/0x0000000aa232
 One address can be a hook on several chains and so belong to several projects; `chain` narrows it. 404 when no listed
 project has that hook: Bait lists hooks with at least one pool, so a deployed hook with no pool is not here yet.
 Response: `{ api_version, data_day, address, matches: [{ project: summary, hooks: [{address, chain_id, name,
-hooklisted, deployer, deployer_source}] }] }`.
+hooklisted, deployer, deployer_source}] }] }`. `deployer` is the wallet that deployed the hook; `deployer_source` is
+`hooklist` (the registry names it), `sourcify` or `explorer` (the sender of the hook's creation transaction, from
+Sourcify or Blockscout); both are null when it is unknown.
 
 ## The summary object
 

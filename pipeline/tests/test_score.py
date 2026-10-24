@@ -727,13 +727,14 @@ def test_deployer_share_of_swaps_from_known_deployer_wallets(conn, ctx):
     quiet = _onchain_project(conn, "Team", "0xtp", wallets=3, vol_per_day=1_000)             # deployer known, never traded
     conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xTeam").values(deployer="0xteamwallet"))
     factory = _onchain_project(conn, "Fac", "0xfp", wallets=3, vol_per_day=1_000)
-    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xFac").values(deployer="0x4e59b44847b379578588920ca78fbf26c0b4956c"))
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xFac")                        # registry-supplied proxy
+                 .values(deployer="0x4e59b44847b379578588920ca78fbf26c0b4956c", deployer_source="hooklist"))
     unknown = _onchain_project(conn, "Anon", "0xap", wallets=3, vol_per_day=1_000)
     _optimism_ready(conn)
     score.run(conn, ctx)
     assert daily(conn, lop).deployer_swap_share_7d == round(8 / 9, 4)
     assert daily(conn, quiet).deployer_swap_share_7d == 0.0
-    assert daily(conn, factory).deployer_swap_share_7d is None       # a CREATE2 factory is nobody's wallet
+    assert daily(conn, factory).deployer_swap_share_7d is None       # a CREATE2 factory is nobody's wallet: unknown, not 0
     assert daily(conn, unknown).deployer_swap_share_7d is None
 
 

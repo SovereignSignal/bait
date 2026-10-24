@@ -1,7 +1,7 @@
 // One project, one set of figures across pages: names, counts, TVL and audit badges (demo smoke, 2026-10-14).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditLinks, auditMention, topWalletText, deployerShareText, deployersOf, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
+import { auditLinks, auditMention, topWalletText, deployerShareText, deployersOf, deployerSourceLabel, digestIntro, poolTvlNote, tradePool, withCurrentNames } from "./present";
 import type { DigestItem } from "./types";
 
 const item = (slug: string, name: string, kind: DigestItem["kind"] = "trending"): DigestItem => ({ slug, name, kind, line: "", vol7d: 1 });
@@ -88,6 +88,17 @@ test("deployer share: unknown is a dash, a known deployer that never traded is n
   assert.equal(deployerShareText(null), "–");
   assert.equal(deployerShareText(0), "none");
   assert.equal(deployerShareText(0.8889), "89% of swaps");
+});
+
+test("deployers of a project: a CREATE2 deployment proxy is nobody's wallet, even when the registry names it", () => {
+  const out = deployersOf([
+    { chainId: 4663, deployer: "0x4e59b44847b379578588920cA78FbF26c0B4956C", deployerSource: "hooklist" },
+    { chainId: 1, deployer: "0xba5ed099633d3b313e4d5f7bdc1305d3c28ba5ed", deployerSource: "explorer" },
+    { chainId: 1, deployer: "0xe49acc3b16c097ec88dc9352ce4cd57ab7e35b95", deployerSource: "sourcify" },
+  ]);
+  assert.deepEqual(out, [{ chainId: 1, address: "0xe49acc3b16c097ec88dc9352ce4cd57ab7e35b95", source: "sourcify" }]);
+  assert.deepEqual(deployersOf([{ chainId: 1, deployer: "0x4e59b44847b379578588920ca78fbf26c0b4956c", deployerSource: "hooklist" }]), []);
+  assert.deepEqual(["hooklist", "sourcify", "explorer", null].map((s) => deployerSourceLabel(s as never)), ["registry", "Sourcify", "explorer", "source unknown"]);
 });
 
 test("deployers of a project: one line per distinct wallet and chain, registry-supplied first", () => {

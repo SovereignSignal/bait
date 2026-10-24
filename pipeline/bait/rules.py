@@ -98,12 +98,27 @@ GENERIC_STEMS = (
 GENERIC = re.compile(r"^(?:(?:" + "|".join(GENERIC_STEMS) + r")(?:hooks?)?|hooks?)(?:v?\d+)?$"
                      r"|^.*proxy.*$|^(?:implementation|main|contract)$")
 
-# Deterministic CREATE2 deployers (Arachnid, ImmutableCreate2Factory, CreateX) deploy for everyone: not team evidence.
+# Deterministic CREATE2 deployers deploy for everyone: not team evidence, and never stored as a hook's deployer (such a
+# contract creator says nothing about who deployed; the creation transaction's sender does). The same address on
+# every chain. Keep SHARED_DEPLOYERS in web/src/lib/present.ts in step.
 SHARED_DEPLOYERS = frozenset({
-    "0x4e59b44847b379578588920ca78fbf26c0b4956c",
-    "0x0000000000ffe8b47b3e2130213b802212439497",
-    "0xba5ed099633d3b313e4d5f7bdc1305d3c28ba5ed",
+    "0x4e59b44847b379578588920ca78fbf26c0b4956c",   # Arachnid's deterministic deployment proxy (Foundry's default)
+    "0x0000000000ffe8b47b3e2130213b802212439497",   # ImmutableCreate2Factory
+    "0xba5ed099633d3b313e4d5f7bdc1305d3c28ba5ed",   # CreateX
+    "0x914d7fec6aac8cd542e72bca78b30650d45643d7",   # Safe singleton factory
+    "0x7a0d94f55792c434d74a40883c6ed8545e406d12",   # Zoltu's deterministic deployment proxy
+    "0x13b0d85ccb8bf860b6b79af3029fca081ae9bef2",   # Create2Deployer
+    "0x9fbb3df7c40da2e5a0de984ffe2ccb7c47cd0abf",   # CREATE3Factory
 })
+
+
+_ADDRESS = re.compile(r"0x[0-9a-f]{40}")
+
+
+def deployer_or_none(v) -> str | None:
+    """v as a hook's deployer: a lowercased 20-byte hex address that is not a shared CREATE2 deployer, else None."""
+    s = v.strip().lower() if isinstance(v, str) else ""
+    return s if _ADDRESS.fullmatch(s) and s not in SHARED_DEPLOYERS else None
 
 
 def useful_name(name: str | None, max_len: int | None = 60) -> str | None:

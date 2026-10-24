@@ -1,0 +1,140 @@
+{
+ "captured_at": "2026-10-24",
+ "sourcify": [
+  {
+   "chain_id": 1,
+   "address": "0x0000113dcf4add69999fad8f20f2b63f979bfcc0",
+   "note": "StablePairHook, Ethereum: verified; deployer is the EOA that sent the CREATE2 call",
+   "url": "https://sourcify.dev/server/v2/contract/1/0x0000113dcf4add69999fad8f20f2b63f979bfcc0?fields=deployment",
+   "status": 200,
+   "body": {
+    "deployment": {
+     "transactionHash": "0x09688cef7e724472f0d822cec48fcc47ecca5ddb9365488bd0d44345f2490ff7",
+     "blockNumber": "25626560",
+     "transactionIndex": "241",
+     "deployer": "0xE49ACc3B16c097ec88Dc9352CE4Cd57aB7e35B95"
+    },
+    "matchId": "47196012",
+    "creationMatch": null,
+    "runtimeMatch": "match",
+    "verifiedAt": "2026-09-06T12:19:51Z",
+    "match": "match",
+    "chainId": "1",
+    "address": "0x0000113dCf4ADd69999Fad8F20F2b63F979bfcC0"
+   }
+  },
+  {
+   "chain_id": 42161,
+   "address": "0x630e9cac0fff557bd3a01daa111ed253c771bcc0",
+   "note": "StablePairHook, Arbitrum: not verified on Sourcify (404)",
+   "url": "https://sourcify.dev/server/v2/contract/42161/0x630e9cac0fff557bd3a01daa111ed253c771bcc0?fields=deployment",
+   "status": 404,
+   "body": {
+    "match": null,
+    "creationMatch": null,
+    "runtimeMatch": null,
+    "chainId": "42161",
+    "address": "0x630e9CaC0ffF557Bd3A01DAa111ed253c771Bcc0"
+   }
+  },
+  {
+   "chain_id": 8453,
+   "address": "0xd60d6b218116cfd801e28f78d011a203d2b068cc",
+   "note": "Clanker static fee hook, Base: verified with deployer",
+   "url": "https://sourcify.dev/server/v2/contract/8453/0xd60d6b218116cfd801e28f78d011a203d2b068cc?fields=deployment",
+   "status": 200,
+   "body": {
+    "deployment": {
+     "transactionHash": "0x344fc8f0cbbe601d725b94a8a793ae9fc546cac3e52dd6deadb1ed33cbe83049",
+     "blockNumber": "35578976",
+     "transactionIndex": "264",
+     "deployer": "0xD46618f35099074C5a456b21D2967a6FF6841Bd3"
+    },
+    "matchId": "9293482",
+    "creationMatch": "match",
+    "runtimeMatch": "match",
+    "verifiedAt": "2025-09-16T19:03:32Z",
+    "match": "match",
+    "chainId": "8453",
+    "address": "0xd60D6B218116cFd801E28F78d011a203D2b068Cc"
+   }
+  },
+  {
+   "chain_id": 4663,
+   "address": "0x4445520306c9c70952bdfec28f3989f53d9f80c4",
+   "note": "UniswapV4KEMHook, Robinhood: verified with deployer",
+   "url": "https://sourcify.dev/server/v2/contract/4663/0x4445520306c9c70952bdfec28f3989f53d9f80c4?fields=deployment",
+   "status": 200,
+   "body": {
+    "deployment": {
+     "transactionHash": "0xb338be6a982bdcaa6dc28da23cd106570e73cd007e0acead425b15a1368b79f9",
+     "blockNumber": "22260145",
+     "transactionIndex": "11",
+     "deployer": "0x697161A9ECE8aFD6AE30946D790077050F993cbc"
+    },
+    "matchId": "43005658",
+    "creationMatch": "exact_match",
+    "runtimeMatch": "exact_match",
+    "verifiedAt": "2026-07-29T07:09:20Z",
+    "match": "exact_match",
+    "chainId": "4663",
+    "address": "0x4445520306c9C70952bDFEc28F3989f53d9f80C4"
+   }
+  },
+  {
+   "chain_id": 8453,
+   "address": "0x8f29bd5c8429730fa4c46e6295c4e679ededd0cc",
+   "note": "Aegis, Base: verified (runtime match only) with no deployment record",
+   "url": "https://sourcify.dev/server/v2/contract/8453/0x8f29bd5c8429730fa4c46e6295c4e679ededd0cc?fields=deployment",
+   "status": 200,
+   "body": {
+    "deployment": {
+     "transactionHash": null,
+     "blockNumber": null,
+     "transactionIndex": null,
+     "deployer": null
+    },
+    "matchId": "29722412",
+    "creationMatch": null,
+    "runtimeMatch": "match",
+    "verifiedAt": "2026-05-25T05:56:35Z",
+    "match": "match",
+    "chainId": "8453",
+    "address": "0x8f29BD5c8429730fA4C46e6295c4e679eDEdd0cC"
+   }
+  }
+ ],
+ "blockscout": [
+  {
+   "url": "https://eth.blockscout.com/api/v2/addresses/0x0000113dcf4add69999fad8f20f2b63f979bfcc0",
+   "status": 200,
+   "trimmed": true,
+   "body": {
+    "hash": "0x0000113dCf4ADd69999Fad8F20F2b63F979bfcC0",
+    "is_contract": true,
+    "creator_address_hash": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+    "creation_transaction_hash": "0x09688cef7e724472f0d822cec48fcc47ecca5ddb9365488bd0d44345f2490ff7",
+    "name": "ERC1967Proxy"
+   }
+  },
+  {
+   "url": "https://eth.blockscout.com/api/v2/transactions/0x09688cef7e724472f0d822cec48fcc47ecca5ddb9365488bd0d44345f2490ff7",
+   "status": 200,
+   "trimmed": true,
+   "body": {
+    "hash": "0x09688cef7e724472f0d822cec48fcc47ecca5ddb9365488bd0d44345f2490ff7",
+    "from": {
+     "hash": "0xE49ACc3B16c097ec88Dc9352CE4Cd57aB7e35B95",
+     "is_contract": false
+    },
+    "to": {
+     "hash": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+     "is_contract": true
+    },
+    "created_contract": null,
+    "status": "ok",
+    "block_number": 25626560
+   }
+  }
+ ]
+}

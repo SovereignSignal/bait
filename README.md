@@ -73,7 +73,7 @@ Per-service details: [`pipeline/README.md`](pipeline/README.md), [`web/README.md
 | Uniswap hooklist | registry names, flags, audit links | names are candidates; merges need bytecode or deployer evidence |
 | Envio HyperSync | every hooked pool, 14 days of swaps, 16 chains | free tier is about 20 queries a minute; Base pool lookups are the slow part |
 | GeckoTerminal | pool TVL, rolling 24h figures, closed-day candles, recent trades, top wallets | about 5 calls a minute on the free tier; keyless runs take ~35 minutes |
-| Public RPC, Blockscout, Sourcify, Routescan | hook resolution, bytecode, contract names | per-chain quirks listed in `pipeline/README.md` |
+| Public RPC, Blockscout, Sourcify, Routescan | hook resolution, bytecode, contract names, deployers | per-chain quirks listed in `pipeline/README.md` |
 | DefiLlama | prices | current prices, so raw indexer USD is an estimate |
 | Claude | the two text lines, classifying unnamed hooks and radar results | paid; optional and budget-capped |
 | Exa | the Building tab's web results (audits, launches, hackathons, incubators) | paid; optional and budget-capped; radar only |

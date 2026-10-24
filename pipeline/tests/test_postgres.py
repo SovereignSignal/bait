@@ -11,7 +11,7 @@ from tests.conftest import DAY, FIXTURE, NOW
 
 def _ctx():
     return RunContext(day=DAY, now=NOW, hooklist_file=FIXTURE, max_code_fetch=0,
-                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names")})
+                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names", "sourcify")})
 
 
 def test_one_bad_item_does_not_lose_the_step_on_postgres(pg_engine):

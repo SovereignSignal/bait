@@ -45,7 +45,7 @@ export const hooks = pgTable(
     auditUrl: text("audit_url"),
     hooklisted: boolean("hooklisted"),
     deployer: text("deployer"),
-    deployerSource: text("deployer_source").$type<"hooklist" | "explorer">(), // 0019: registry-supplied or the explorer's contract creator
+    deployerSource: text("deployer_source").$type<"hooklist" | "sourcify" | "explorer">(), // 0019: registry-supplied, or the creation tx sender from Sourcify / the explorer
     deployerCheckedAt: timestamp("deployer_checked_at", { withTimezone: true }),
     codeHash: text("code_hash"),
     projectId: integer("project_id").references(() => projects.id),

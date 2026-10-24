@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def conn(engine):
 def ctx():
     # clients pre-populated with None = "no key"; tests override what they need
     return RunContext(day=DAY, now=NOW, hooklist_file=FIXTURE, max_code_fetch=0,
-                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names")})
+                      clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names", "sourcify")})
 
 
 @pytest.fixture
@@ -62,6 +63,58 @@ def insert_snap(conn, pool_id, chain_id, day, tvl, vol, tx, vol_day=None, tx_day
 def _no_keyless_network(monkeypatch):
     """The snapshot step falls back to GeckoTerminal + public RPC; tests must never hit the network."""
     monkeypatch.setenv("KEYLESS", "0")
+
+
+NETWORK_ATTEMPTS: list[str] = []      # hosts a test tried to reach; _no_network fails the test that added one
+
+
+def _loopback(host) -> bool:
+    host = host.decode() if isinstance(host, bytes) else host
+    return host is None or (isinstance(host, str) and (host in ("localhost", "::1") or host.startswith("127.")))
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _block_network():
+    """Tests never reach the network: name lookups and TCP connects to anything but loopback are refused and recorded
+    (the Claude SDK test's local server and CI's Postgres are loopback). Code under test usually reads the refusal as a
+    transient failure and carries on, which is how the CLI test reached the explorers and Sourcify unnoticed until
+    2026-10-24 (KEYLESS=0 above covers the snapshot step only), so _no_network fails the test that tried."""
+    real_getaddrinfo, real_connect, real_connect_ex = socket.getaddrinfo, socket.socket.connect, socket.socket.connect_ex
+
+    def refuse(host):
+        NETWORK_ATTEMPTS.append(str(host))
+        return f"tests must not reach the network: {host}"
+
+    def getaddrinfo(host, *a, **k):
+        if not _loopback(host):
+            raise socket.gaierror(refuse(host))
+        return real_getaddrinfo(host, *a, **k)
+
+    def connect(self, address):
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not _loopback(address[0]):
+            raise ConnectionRefusedError(refuse(address[0]))
+        return real_connect(self, address)
+
+    def connect_ex(self, address):
+        if self.family in (socket.AF_INET, socket.AF_INET6) and not _loopback(address[0]):
+            refuse(address[0])
+            return 111                                   # ECONNREFUSED
+        return real_connect_ex(self, address)
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(socket, "getaddrinfo", getaddrinfo)
+    mp.setattr(socket.socket, "connect", connect)
+    mp.setattr(socket.socket, "connect_ex", connect_ex)
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _no_network(_block_network):
+    before = len(NETWORK_ATTEMPTS)
+    yield
+    if tried := NETWORK_ATTEMPTS[before:]:
+        pytest.fail(f"tried to reach the network {len(tried)} times: {', '.join(sorted(set(tried))[:5])}", pytrace=False)
 
 
 @pytest.fixture

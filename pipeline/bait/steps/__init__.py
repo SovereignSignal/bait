@@ -29,12 +29,13 @@ class RunContext:
         """Lazy from_env() per client; tests pre-populate ctx.clients."""
         if name in self.clients:
             return self.clients[name]
-        from ..clients import blockscout, claude, contract_names, exa, github, graph
+        from ..clients import blockscout, claude, contract_names, exa, github, graph, sourcify
         factory = {
             "graph": graph.Graph.from_env, "blockscout": blockscout.Blockscout.from_env,
             "claude": claude.Claude.from_env, "exa": exa.Exa.from_env,
             "github": github.GitHub.from_env,
             "names": contract_names.ContractNames.from_env,
+            "sourcify": sourcify.Sourcify.from_env,
         }[name]
         c = factory()
         if c is not None and self.meter is not None and hasattr(c, "meter"):

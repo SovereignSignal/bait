@@ -1,5 +1,5 @@
 // Presentation helpers shared by server pages, client components and the OG image. Pure.
-import type { HookView } from "./types";
+import type { DeployerSource, HookView } from "./types";
 import { CHAINS, knownChain } from "./chains";
 import { weekDelta } from "./feed";
 import { clip, dayLabel, deltaWords, fmtDelta, int, usd } from "./format";
@@ -192,15 +192,33 @@ export function deployerShareText(share: number | null): string {
   return topWalletText(share);
 }
 
-/** Distinct deployer wallets across a project's hooks, registry-supplied first, for the page's "Deployer" line. */
-export function deployersOf(hooks: Array<Pick<HookView, "chainId" | "deployer" | "deployerSource">>): Array<{ chainId: ChainId; address: string; source: "hooklist" | "explorer" | null }> {
-  const seen = new Map<string, { chainId: ChainId; address: string; source: "hooklist" | "explorer" | null }>();
+// Keep in step with SHARED_DEPLOYERS in pipeline/bait/rules.py: CREATE2 deployers that deploy for anyone, so never a
+// hook's deployer (the pipeline stores none of them; this guards rows written before it stopped).
+export const SHARED_DEPLOYERS: ReadonlySet<string> = new Set([
+  "0x4e59b44847b379578588920ca78fbf26c0b4956c", // Arachnid's deterministic deployment proxy
+  "0x0000000000ffe8b47b3e2130213b802212439497", // ImmutableCreate2Factory
+  "0xba5ed099633d3b313e4d5f7bdc1305d3c28ba5ed", // CreateX
+  "0x914d7fec6aac8cd542e72bca78b30650d45643d7", // Safe singleton factory
+  "0x7a0d94f55792c434d74a40883c6ed8545e406d12", // Zoltu's deterministic deployment proxy
+  "0x13b0d85ccb8bf860b6b79af3029fca081ae9bef2", // Create2Deployer
+  "0x9fbb3df7c40da2e5a0de984ffe2ccb7c47cd0abf", // CREATE3Factory
+]);
+
+/** Distinct deployer wallets across a project's hooks, registry-supplied first, for the page's "Deployer" line. A
+ * shared CREATE2 deployer is not a wallet and is left out. */
+export function deployersOf(hooks: Array<Pick<HookView, "chainId" | "deployer" | "deployerSource">>): Array<{ chainId: ChainId; address: string; source: DeployerSource | null }> {
+  const seen = new Map<string, { chainId: ChainId; address: string; source: DeployerSource | null }>();
   for (const h of hooks) {
-    if (!h.deployer) continue;
+    if (!h.deployer || SHARED_DEPLOYERS.has(h.deployer.toLowerCase())) continue;
     const k = `${h.chainId}:${h.deployer.toLowerCase()}`;
     if (!seen.has(k)) seen.set(k, { chainId: h.chainId, address: h.deployer.toLowerCase(), source: h.deployerSource ?? null });
   }
   return [...seen.values()].sort((a, b) => Number(b.source === "hooklist") - Number(a.source === "hooklist"));
+}
+
+/** Where a deployer came from, as the "Deployer" line says it. */
+export function deployerSourceLabel(source: DeployerSource | null): string {
+  return source === "hooklist" ? "registry" : source === "sourcify" ? "Sourcify" : source === "explorer" ? "explorer" : "source unknown";
 }
 
 export function walletsText(n: number | null, exact: boolean | null): string {
