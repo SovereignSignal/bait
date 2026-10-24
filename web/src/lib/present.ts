@@ -4,6 +4,7 @@ import { CHAINS, knownChain } from "./chains";
 import { weekDelta } from "./feed";
 import { clip, dayLabel, deltaWords, fmtDelta, int, usd } from "./format";
 import { CATEGORY_LABEL, CATEGORY_SHORT, isShownCategory, type ChainId, type DigestItem, type ProjectSummary, type RowView } from "./types";
+import { isUnnamed } from "./unlisted";
 
 export function chainNames(ids: ChainId[], sep = ", "): string {
   return ids.map((c) => CHAINS[c]?.name ?? `Chain ${c}`).join(sep);
@@ -44,9 +45,11 @@ export function deltaText(r: { vol7d: number | null; vol7dPrev: number | null })
 // is what the Uniswap app's "Past day" shows, and the two differ by up to two days of trading.
 export type Win = "1d" | "7d";
 
-/** The number a row or mover shows and the window it covers. The closed day only when asked for and known. */
+/** The number a row or mover shows and the window it covers. The closed day only when asked for and it traded: a launch
+ * that went quiet on the closed day shows its week, not "$0 1d" (New tab, 2026-10-24: ScoreHook, CabalFeeHook and
+ * ArcadeHook read "$0 1d" beside $12K to $207K weeks). An unknown day shows the week too. */
 export function rowMetric(r: { vol24h: number | null; vol7d: number | null }, use24h: boolean): { v: number | null; win: Win } {
-  return use24h && r.vol24h != null ? { v: r.vol24h, win: "1d" } : { v: r.vol7d, win: "7d" };
+  return use24h && r.vol24h != null && r.vol24h > 0 ? { v: r.vol24h, win: "1d" } : { v: r.vol7d, win: "7d" };
 }
 
 const DAY_MS = 86_400_000;
@@ -81,11 +84,44 @@ export function firstWebUrl(urls: Iterable<unknown>): string | null {
 // Uniswap's own v4 core/periphery audits cover the PoolManager, not anyone's hook: a search that found nothing returns them.
 const CORE_AUDIT = /^https?:\/\/(www\.)?github\.com\/uniswap\/v4-(core|periphery)\b/i;
 
+// On GitHub a link's path says what it is. 2026-10-24: the registry's "audit" links for Upeg were its repository and its
+// upegs_hook code folder (counted as two audits); others were a .sol file or a pull request. A GitHub link is an audit
+// when the path under the repository names an audit, review, report or security file or folder, or the repository
+// itself is an audit repository. Other hosts are taken as published: their paths say nothing reliable.
+const AUDIT_PATH = /audit|review|report|security/i;
+const SOURCE_FILE = /\.(sol|vy|rs|ts|js|py|go|move|cairo)$/i;
+
+/** False for a GitHub link to code (a repository, a code folder or source file, a pull request), not to an audit. */
+export function auditDocument(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  if (host !== "github.com" && host !== "raw.githubusercontent.com") return true;
+  const parts = u.pathname.split("/").filter(Boolean).map((x) => {
+    try {
+      return decodeURIComponent(x);
+    } catch {
+      return x;
+    }
+  });
+  // github.com/<owner>/<repo>/(blob|tree|raw|blame)/<ref>/<path>, or /<owner>/<repo>/<pull|releases|…>/…;
+  // raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>
+  const path = host === "raw.githubusercontent.com" ? parts.slice(3) : ["blob", "tree", "raw", "blame"].includes(parts[2]) ? parts.slice(4) : parts.slice(2);
+  if (path.length === 0) return AUDIT_PATH.test(parts[1] ?? "");
+  if (SOURCE_FILE.test(path[path.length - 1])) return false;
+  return AUDIT_PATH.test(path.join("/"));
+}
+
 /**
  * A project's audit links, the only source of the "Audit linked" badge: web URLs published on its hooks (hooklist), plus
  * the one Parallel found (stored before Parallel was removed on 2026-10-24; none are added now), but only when Parallel
  * identified a team and the project has a name to research. An unnamed hook is just an address, so an audit "found" for
- * it belongs to someone else. Count = links.length; badge = links[0].
+ * it belongs to someone else. A link to code (auditDocument) is not an audit, and a link the pipeline found gone (404
+ * or 410: signals "audit_links", pipeline/bait/audit_links.py) is not shown. Count = links.length; badge = links[0].
  */
 /** The generated text names an audit the registry and team details do not link: the badge must say so, not "No audit". */
 const AUDIT_WORD = /\baudit(?:ed|s|or|ors|ing)?\b/gi;
@@ -107,15 +143,18 @@ export function auditLinks(
   hookUrls: Iterable<unknown>,
   parallel: { audit_url?: unknown; team?: unknown } | null | undefined,
   unnamed: boolean,
+  dead: unknown = [],
 ): string[] {
+  const gone = new Set(Array.isArray(dead) ? dead.filter((u): u is string => typeof u === "string") : []);
+  const usable = (url: string | null): url is string => url != null && auditDocument(url) && !gone.has(url);
   const out = new Set<string>();
   for (const u of hookUrls) {
     const url = firstWebUrl([u]);
-    if (url) out.add(url);
+    if (usable(url)) out.add(url);
   }
   const par = firstWebUrl([parallel?.audit_url]);
   const team = typeof parallel?.team === "string" && parallel.team.trim() !== "";
-  if (par && team && !unnamed && !CORE_AUDIT.test(par)) out.add(par);
+  if (usable(par) && team && !unnamed && !CORE_AUDIT.test(par)) out.add(par);
   return [...out];
 }
 
@@ -279,16 +318,35 @@ export function withCurrentNames(items: DigestItem[], names: ReadonlyMap<string,
   return items.map((i) => ({ ...i, name: names.get(i.slug) ?? i.name }));
 }
 
-/** The digest's one-line summary. `traded` is the /leaders "Projects traded this week" count (non-spam, non-wash, 7-day
- * volume > 0); digests written before it existed stored only every tracked project, and say that instead. */
+/** A digest's items as the feed's tabs would list them (feed.ts applyTab): never a project nobody named, and in New never
+ * a launch whose 7-day volume is a measured $0 (unknown stays). The 2026-10-12 and 10-19 digests stored 20 New each,
+ * mostly such rows, and the week page said "20 new projects" above 4 and 6. Intro, week page and RSS use this one list. */
+export function listedDigestItems(items: DigestItem[]): DigestItem[] {
+  return items.filter((i) => !isUnnamed(i.name) && (i.kind !== "new" || i.vol7d !== 0));
+}
+
+/** The digest's one-line summary, counting the New items it lists (`fresh`, already listedDigestItems). `totals.new`
+ * (digests from 2026-10-26) is every project that cleared the bar, of which the digest lists at most 20. Older digests
+ * kept only the 20 with the most TVL, unnamed and $0 ones included, so how many cleared the bar is not known: they say
+ * how many are listed. `traded` is the /leaders "Projects traded this week" count (non-spam, non-wash, 7-day volume > 0);
+ * digests written before it existed stored only every tracked project, and say that instead. */
 export function digestIntro(
   fresh: DigestItem[],
   hot: DigestItem[],
-  totals: { projects: number; traded?: number; tvl_usd: number; vol_7d: number },
+  totals: { projects: number; traded?: number; new?: number; tvl_usd: number; vol_7d: number },
 ): string {
   const n = (x: number) => x.toLocaleString("en-US");
+  const projects = (x: number) => `${n(x)} new project${x === 1 ? "" : "s"}`;
+  const listed = fresh.length;
+  const cleared = totals.new == null ? null : Math.max(totals.new, listed);
   return [
-    fresh.length === 0 ? "No new projects cleared the bar." : `${fresh.length} new project${fresh.length === 1 ? "" : "s"} cleared the bar.`,
+    cleared == null
+      ? listed === 0 ? "No new projects listed." : `${projects(listed)} listed.`
+      : cleared === 0
+        ? "No new projects cleared the bar."
+        : cleared > listed
+          ? `${projects(cleared)} cleared the bar; ${n(listed)} ${listed === 1 ? "is" : "are"} listed.`
+          : `${projects(cleared)} cleared the bar.`,
     hot.length > 0 ? `${hot[0].name} led trending.` : null,
     totals.traded != null
       ? `${n(totals.traded)} project${totals.traded === 1 ? "" : "s"} traded this week, ${usd(totals.tvl_usd)} TVL, ${usd(totals.vol_7d)} 7d volume.`

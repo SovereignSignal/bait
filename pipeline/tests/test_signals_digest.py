@@ -56,7 +56,7 @@ def test_signals_targets_github_alive_and_blurb_only_on_change(conn, ctx):
     gh, claude = FakeGitHub(), FakeClaude()
     ctx.clients.update(exa=NoExa(), github=gh, claude=claude)
     out = signals.run(conn, ctx)
-    assert out == {"projects": 2, "github": 1, "blurbs": 2, "errors": 0}
+    assert out == {"projects": 2, "github": 1, "blurbs": 2, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     assert conn.execute(sa.select(sa.func.count()).select_from(db.receipts)).scalar_one() == 0
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == hot))}
     assert sig["alive"] == {"alive": True} and sig["github"]["stars"] == 12 and "exa" not in sig
@@ -120,11 +120,39 @@ def test_frozen_exa_and_nansen_signals_stay_out_of_alive_and_the_blurb(conn, ctx
             return super().why_blurb(c)
     ctx.clients.update(exa=NoExa(), github=None, claude=Capture())
     out = signals.run(conn, ctx)
-    assert out == {"projects": 1, "github": 0, "blurbs": 1, "errors": 0}
+    assert out == {"projects": 1, "github": 0, "blurbs": 1, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == p))}
     assert sig["alive"] == {"alive": None} and sig["exa"]["hits_30d"] == 3           # stored row left as it was
     assert seen[0]["signals"] == {} and [r["title"] for r in seen[0]["receipts"]] == ["Hot hook ships"]
     assert "enrichment" not in seen[0]                                                # stored Parallel facts: never prompt
+
+
+def test_a_changed_audit_link_verdict_alone_never_marks_the_blurb_stale_or_reaches_the_prompt(conn, ctx):
+    # audit_links (audit_links.py) changes whenever a published audit link dies or comes back. It is for the badge: on
+    # its own it must not make the why_blurb stale (a paid Claude call), and its dead links never reach the prompt.
+    url = "https://github.com/spearbit/portfolio/blob/master/pdfs/Sorella-Spearbit-Security-Review-October-2024.pdf"
+    p = insert_project(conn, "Angstrom", NOW - timedelta(days=40), slug="angstrom")
+    insert_hook(conn, f"0x{p}", 1, project_id=p)
+    conn.execute(sa.update(db.hooks).values(audit_url=url).where(db.hooks.c.project_id == p))
+    seed_daily(conn, p, score=30.0, tvl=1e6)
+    claude = FakeClaude()
+    ctx.clients.update(exa=NoExa(), github=None, claude=claude)
+    ctx.extras["audit_probe"] = {url: 200}.get
+    assert signals.run(conn, ctx)["blurbs"] == 1                                # the first blurb; the link answers
+
+    ctx.extras["audit_probe"] = {url: 404}.get                                  # the next night the link is gone
+    ctx.now = NOW + timedelta(days=1)
+    out = signals.run(conn, ctx)
+    assert out["audit_links_dead"] == 1 and out["blurbs"] == 0 and claude.calls == 1
+    row = conn.execute(sa.select(db.signals)
+                       .where(db.signals.c.project_id == p, db.signals.c.kind == "audit_links")).one()
+    blurb_at = conn.execute(sa.select(db.projects.c.blurb_at).where(db.projects.c.id == p)).scalar_one()
+    assert row.value == {"dead": [url]} and db.as_utc(row.as_of) > db.as_utc(blurb_at)   # newer than the blurb, yet
+    target, daily = signals.select_targets(conn, ctx)[0]
+    assert signals._needs_blurb(conn, target, daily) is False
+    assert "audit_links" not in signals._blurb_ctx(conn, target, daily)["signals"]
+    signals._set_signal(conn, p, "github", {"repo": "x/y", "stars": 1}, NOW + timedelta(days=2))
+    assert signals._needs_blurb(conn, target, daily) is True                    # a signal the blurb reads still counts
 
 
 def test_alive_is_unknown_without_a_github_reading_and_never_reaches_the_blurb_as_false(conn, ctx):
@@ -156,7 +184,7 @@ def test_alive_is_unknown_without_a_github_reading_and_never_reaches_the_blurb_a
             return super().why_blurb(c)
     ctx.clients.update(exa=NoExa(), github=GitHub(), claude=Capture())
     out = signals.run(conn, ctx)
-    assert out == {"projects": 3, "github": 2, "blurbs": 3, "errors": 0}
+    assert out == {"projects": 3, "github": 2, "blurbs": 3, "errors": 0, "audit_links": 0, "audit_links_dead": 0}
     alive = {n: conn.execute(sa.select(db.signals.c.value).where(db.signals.c.project_id == pid, db.signals.c.kind == "alive"))
              .scalar_one() for n, pid in ids.items()}
     assert alive == {"Linkless": {"alive": None}, "Stale": {"alive": False}, "Busy": {"alive": True}}
@@ -201,7 +229,7 @@ def test_digest_leaves_wash_out_of_the_week_and_names_the_window(conn, ctx):
     digest.run(conn, ctx)
     body = conn.execute(sa.select(db.digests.c.body)).scalar_one()
     assert body["window_end"] == "2026-10-05"
-    assert body["totals"] == {"projects": 1, "traded": 1, "tvl_usd": 100.0, "vol_7d": 50_000.0}
+    assert body["totals"] == {"projects": 1, "traded": 1, "new": 0, "tvl_usd": 100.0, "vol_7d": 50_000.0}
     assert [c["slug"] for c in body["trending"]] == ["real"]
 
 
@@ -216,4 +244,42 @@ def test_digest_counts_projects_traded_this_week_as_leaders_does(conn, ctx):
     ctx.force_digest = True
     digest.run(conn, ctx)
     totals = conn.execute(sa.select(db.digests.c.body)).scalar_one()["totals"]
-    assert totals == {"projects": 3, "traded": 1, "tvl_usd": 100.0, "vol_7d": 5_000.0}
+    assert totals == {"projects": 3, "traded": 1, "new": 0, "tvl_usd": 100.0, "vol_7d": 5_000.0}
+
+
+def test_digest_lists_new_and_trending_as_the_feed_tabs_do(conn, ctx):
+    # 2026-10-12: the digest stored 20 New, 16 of them unnamed hooks or $0 launches; the week page skipped those and
+    # still said "20 new projects cleared the bar" above four. The stored lists now follow the feed's New and Trending.
+    def row(name, slug, **kw):
+        pid = insert_project(conn, name, NOW - timedelta(days=2), slug=slug)
+        conn.execute(sa.insert(db.project_daily).values(project_id=pid, day=DAY, pools_n=1, **kw))
+    row("Fresh", "fresh", tvl_usd=5_000.0, vol_7d=12_000.0, is_new=True)
+    row("Quiet", "quiet", tvl_usd=9_000.0, vol_7d=None, is_new=True)            # unknown volume is not $0: listed
+    row("Seeded", "seeded", tvl_usd=50_000.0, vol_7d=0.0, is_new=True)          # liquidity, no trade yet: not listed
+    row("Unlisted hook 0xabcd…1234", "unlisted-hook-0xabcd-1234", tvl_usd=80_000.0, vol_7d=40_000.0, is_new=True)
+    row("Unlisted hook family 0x0f48…", "unlisted-hook-family-0x0f48", tvl_usd=1e6, vol_7d=2e6, score_trending=40.0)
+    row("Hot", "hot", tvl_usd=1e6, vol_7d=5e5, score_trending=30.0)
+    ctx.force_digest = True
+    assert digest.run(conn, ctx) == {"written": 1, "new": 2, "trending": 1}
+    body = conn.execute(sa.select(db.digests.c.body)).scalar_one()
+    assert [c["slug"] for c in body["new"]] == ["quiet", "fresh"]               # most TVL first
+    assert [c["slug"] for c in body["trending"]] == ["hot"]
+    assert body["totals"]["new"] == 2
+
+
+def test_digest_counts_every_new_project_but_lists_twenty(conn, ctx):
+    for i in range(23):
+        pid = insert_project(conn, f"Launch{i}", NOW - timedelta(days=1), slug=f"launch{i}")
+        conn.execute(sa.insert(db.project_daily).values(project_id=pid, day=DAY, pools_n=1, tvl_usd=1_000.0 + i,
+                                                        vol_7d=100.0, is_new=True))
+    ctx.force_digest = True
+    digest.run(conn, ctx)
+    body = conn.execute(sa.select(db.digests.c.body)).scalar_one()
+    assert len(body["new"]) == 20 and body["totals"]["new"] == 23
+    assert body["new"][0]["slug"] == "launch22"
+
+
+def test_named_matches_the_group_steps_placeholders():
+    assert not digest.named("Unlisted hook 0x7bc2…2aec") and not digest.named("Unlisted hook family 0x0f48…")
+    assert not digest.named(None) and not digest.named("")
+    assert digest.named("BeigeBoxHook 0x9c40…6a80") and digest.named("Aegis")   # a names.py two-team split is named

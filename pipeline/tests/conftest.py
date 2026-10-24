@@ -61,8 +61,10 @@ def insert_snap(conn, pool_id, chain_id, day, tvl, vol, tx, vol_day=None, tx_day
 
 @pytest.fixture(autouse=True)
 def _no_keyless_network(monkeypatch):
-    """The snapshot step falls back to GeckoTerminal + public RPC; tests must never hit the network."""
+    """The snapshot step falls back to GeckoTerminal + public RPC, and signals asks audit links; tests must never hit the
+    network (a test that checks audit links passes its own probe)."""
     monkeypatch.setenv("KEYLESS", "0")
+    monkeypatch.setenv("AUDIT_LINKS", "0")
 
 
 NETWORK_ATTEMPTS: list[str] = []      # hosts a test tried to reach; _no_network fails the test that added one

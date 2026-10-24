@@ -173,6 +173,7 @@ export const walletLabels = pgTable(
  * One row per (project, kind). Value shapes written by the pipeline:
  *   github {repo, stars, last_commit_at, commits_30d}
  *   alive  {alive: bool | null}     (GitHub only since 2026-10-24; null = no GitHub reading, unknown)
+ *   audit_links {dead: string[]}    (audit_links.py, nightly: published audit links that answered 404 or 410, verbatim)
  * Frozen, no longer written or read by the web: nansen (until 2026-10-08) and exa {hits_30d, latest, top} (until
  * 2026-10-24, when the receipts search was removed).
  */
@@ -221,8 +222,9 @@ export interface DigestBody {
   week_of: string;
   generated_at: string;
   /** projects: every tracked (non-spam, non-wash) project; traded (newer digests): those with 7-day volume > 0, the
-   * /leaders count. tvl_usd and vol_7d are summed over the traded set when it is present. */
-  totals: { projects: number; traded?: number; tvl_usd: number; vol_7d: number };
+   * /leaders count. tvl_usd and vol_7d are summed over the traded set when it is present. new (from 2026-10-26): every
+   * project that cleared the New bar, of which `new` keeps 20. */
+  totals: { projects: number; traded?: number; new?: number; tvl_usd: number; vol_7d: number };
   new: DigestCard[];
   trending: DigestCard[];
 }

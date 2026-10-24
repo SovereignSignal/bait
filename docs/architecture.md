@@ -45,6 +45,8 @@ slugs redirect.
 - Windows are closed UTC days: `vol_24h` is the last closed day, `vol_7d` the last seven, `vol_7d_prev` the seven
   before. A pool with no row on a day adds $0 of volume but an unknown swap count; a pool whose volume the onchain step
   could not measure is left out of every window, and when that is every pool the project's volume is NULL, never $0.
+  A $0 sum is NULL too when it leaves out such a pool, or a pool on a chain that is not ready with no known daily
+  volume in the window (only the pools GeckoTerminal lists have rows there); a positive sum is a partial observed total.
 - The indexer is the source where it has caught up (`indexer_state.backfilled`, fresh, cursor past the window);
   GeckoTerminal's daily figures stand in elsewhere, and for hooks that keep their own accounting (custom accounting
   bit). Raw indexer USD uses current DefiLlama prices.
@@ -67,7 +69,8 @@ slugs redirect.
   Score `log1p(vol_7d) * clamp(vol_7d / max(vol_7d_prev, 1000), 0.5, 10)`; tie-break on TVL; top 20 on the home page.
   Folded launchpad volume (a capped hook's aggregate pool) is displayed, never ranked.
 - **New**: first seen within 7 days, and a pool above $1K TVL or at least 10 swaps in the week. Unnamed hooks and
-  wash-flagged projects are excluded.
+  wash-flagged projects are excluded, and the New tab and the weekly digest skip a project whose 7-day volume is a
+  measured $0 (an unknown week stays). The digest's Trending list is named projects only, as on the Trending tab.
 - **Spam** (hidden, 404): no pools, or every pool under $100 TVL with fewer than 10 swaps lifetime, unless the project
   moved $1M or more or has historical usage.
 - **Wash-like** (`WASH_REASONS`, badge in All, out of every ranking): pools carrying at least half the project's volume

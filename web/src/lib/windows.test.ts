@@ -22,6 +22,15 @@ test("wash rows: in All after the rest, never in Trending, New or movers", () =>
   assert.deepEqual(applyTab(rows, { tab: "all" }).map((r) => r.slug), ["real", "fresh", "wash"]);
   assert.ok(!movers(rows).some((r) => r.slug === "wash"));
 });
+test("New never lists a launch whose 7-day volume is a measured $0; an unknown week stays (2026-10-24 audit)", () => {
+  const rows = [
+    row({ slug: "seeded", isNew: true, vol7d: 0, tvlUsd: 50_000 }),     // cleared the bar on liquidity, never traded
+    row({ slug: "quiet", isNew: true, vol7d: null }),
+    row({ slug: "busy", isNew: true, vol7d: 207_084, vol24h: 0 }),
+  ];
+  assert.deepEqual(applyTab(rows, { tab: "new" }).map((r) => r.slug).sort(), ["busy", "quiet"]);
+  assert.deepEqual(applyTab(rows, { tab: "all" }).map((r) => r.slug).sort(), ["busy", "quiet", "seeded"]);   // still listed in All
+});
 test("wash rows are listed in All only, not in the In Uniswap app tab", () => {
   const rows = [row({ slug: "real", routable: "eligible", vol7d: 5 }), row({ slug: "wash", routable: "eligible", isWash: true, vol7d: 9 })];
   assert.deepEqual(applyTab(rows, { tab: "verified" }).map((r) => r.slug), ["real"]);

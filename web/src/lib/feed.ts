@@ -92,7 +92,8 @@ export function applyTab<T extends FeedItem>(all: T[], q: FeedQuery): Array<T & 
   const trending = trendingOrder(all);
   const rankOf = new Map(trending.map((p, i) => [p.slug, i + 1]));
   let rows: T[];
-  if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash && !p.isDormant && !isUnnamed(p.name)).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
+  // New: never a launch whose 7-day volume is a measured $0 (liquidity added, nothing traded yet); an unknown week stays
+  if (q.tab === "new") rows = all.filter((p) => p.isNew && !p.isWash && !p.isDormant && !isUnnamed(p.name) && p.vol7d !== 0).sort((a, b) => +new Date(b.firstSeenAt) - +new Date(a.firstSeenAt));
   else if (q.tab === "trending") rows = trending;
   else if (q.tab === "verified") rows = all.filter((p) => inApp(p) && !p.isWash && !p.isDormant).sort(byVol7d);
   else rows = [...all].sort((a, b) => Number(a.isWash) - Number(b.isWash) || Number(!!a.isDormant) - Number(!!b.isDormant) || byVol7d(a, b)); // wash-like rows after the rest

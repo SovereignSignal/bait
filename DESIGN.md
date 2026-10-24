@@ -916,3 +916,44 @@ series and trade fetches.
   docs.coingecko.com/reference/pool-ohlcv-contract-address; `/onchain/simple/networks/{network}/token_price/{addresses}`
   prices up to 100 tokens a call), so a swap could be priced at its own time rather than at index time. That moves
   figures on cards, so it gets its own note (which side, confidence, what stays a dash) before any code.
+
+## New, the digest, $0 sums and audit links (2026-10-24)
+
+Audit items open for the MVP, checked against the live API on 2026-10-24 (data day 10/23).
+
+- **New lists what traded.** The New tab and the digest skip a project whose 7-day volume is a measured $0 (it cleared
+  the bar on liquidity alone); an unknown week stays. A New row shows the closed day only when that day traded, else the
+  week: ScoreHook ($207K), CabalFeeHook ($172K) and ArcadeHook ($12K) read "$0 1d".
+- **The digest lists what the tabs list.** The 10/12 and 10/19 digests stored 20 New each, mostly unnamed hooks and $0
+  launches; the week page skipped those but its intro still said "20 new projects cleared the bar" above 4 and 6, and
+  10/19's Trending was led by an unnamed hook the Trending tab never shows. The step now keeps both lists to named
+  projects and New to non-zero weeks, and stores `totals.new` (every project that cleared the bar; the list keeps 20).
+  The web filters stored digests the same way (`listedDigestItems`) and the intro, week page and RSS count that list.
+- **A $0 sum must cover every pool.** A window's sum of exactly $0 is NULL when a pool of the project has unknown volume,
+  or sits on a chain that is not ready (Base while it catches up) with no known daily volume in the window: only pools
+  GeckoTerminal lists have rows there, so a missing one is unknown, not idle. A positive sum stays a partial observed
+  total. On 10/23 stonkhook's day (Ethereum $0, four Base pools with no row) and v4alphahook's prior week (two Base
+  test pools with no row) read $0; no Base project's week read $0 (183 read a dash). Positive amounts under 50 cents render
+  "<$1": RwagmiHookV2, $0.01 over 3,782 Base pools, read "$0".
+- **Audit links are reports that still open.** A GitHub link counts when its path names an audit, review, report or
+  security file or folder, or the repository is an audit repository; a repository root, code folder, source file or
+  pull request does not (Upeg's repository and `upegs_hook` folder counted as two audits). Other hosts count as
+  published. The signals step asks every published link nightly (`audit_links.py`: HEAD, else GET without the body;
+  public hosts only, every redirect re-checked; `AUDIT_LINKS_MAX`, `AUDIT_LINKS_BUDGET_S`) and keeps 404/410 links in
+  `signals` kind `audit_links`; only 2xx, 404 or 410 changes a verdict, so a bot wall or outage neither hides a live
+  audit nor revives a dead one. The web drops dead links from the badge and the count.
+- **Angstrom.** Its hooklist `auditUrl` (spearbit/portfolio `pdfs/Sorella-Spearbit-Security-Review-October-2024.pdf`) is a
+  404: that repository dropped its PDFs. The same review is live on Spearbit's portfolio index (Cantina,
+  `cantina.xyz/portfolio/c2fe4e46-66a3-416e-ab26-40dd4b437ff6`) and in the project's repository
+  (`SorellaLabs/angstrom` `contracts/security-reviews/spearbit-1.pdf`, beside a Cantina competition report). The
+  registry entry is what is wrong; Bait does not hardcode a replacement.
+- **Not only Angstrom.** The same check on 2026-10-24 found six more registry links gone (404): DualPoolHook's and the
+  WETH/WstETH hooks' reports in `Uniswap/v4-hooks-public` (renamed or removed), both Clanker reports
+  (`quantidexyz/clanker-v4` no longer exists), unicat's `AUDIT.md` and The-Pool's audit (a redirect to a 404). Hacken
+  answers 403 to a script, which is no verdict, so its link stays. Code links the GitHub rule drops: Upeg (two),
+  Seedify (a repository root; a report sits at the root, but the link is to the code), ETFStrategy, the Zora and
+  SuperTokenWrapper `.sol` files and `Uniswap/contracts` pull request 93 (a deployment).
+- **Older digests.** Digests before `totals.new` kept only the 20 New with the most TVL, so how many cleared the bar is
+  not known; their intro says how many are listed ("4 new projects listed") instead of a count it cannot back.
+- **Still open.** A project page's daily volume bars (and the API's `daily_volume_usd`) still draw $0 for a day with no
+  rows on a chain that is not ready: Base projects whose week reads a dash can show a row of $0 days.

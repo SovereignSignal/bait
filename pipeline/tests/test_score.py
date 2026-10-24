@@ -987,3 +987,63 @@ def test_a_week_old_tvl_reading_is_unknown_not_current(conn, ctx):
     insert_snap(conn, "0xnow", 8453, END - timedelta(days=1), 50_000.0, 1_000.0, 10, vol_day=1_000.0, tx_day=10)
     score.run(conn, ctx)
     assert daily(conn, p).tvl_usd == pytest.approx(50_000.0)
+
+
+def _two_chain_project(conn, name, other_chain, other_rows):
+    """One pool on Optimism (ready) with $800 three days before END and a measured $0 on END, plus a pool on `other_chain`."""
+    if not conn.execute(sa.select(db.indexer_state.c.chain_id).where(db.indexer_state.c.chain_id == 10)).first():
+        _optimism_ready(conn)
+    p = insert_project(conn, name, first_seen=NOW - timedelta(days=60), slug=name.lower())
+    insert_hook(conn, f"0x{name.lower()}o", 10, project_id=p)
+    insert_hook(conn, f"0x{name.lower()}x", other_chain, project_id=p)
+    insert_pool(conn, f"0x{name.lower()}op", 10, f"0x{name.lower()}o", created=NOW - timedelta(days=60))
+    insert_pool(conn, f"0x{name.lower()}xp", other_chain, f"0x{name.lower()}x", created=NOW - timedelta(days=60))
+    series(conn, f"0x{name.lower()}op", 10, {END - timedelta(days=3): 800.0, END: 0.0}, tx={END - timedelta(days=3): 4, END: 0})
+    if other_rows:
+        series(conn, f"0x{name.lower()}xp", other_chain, other_rows)
+    return p
+
+
+def test_a_zero_total_that_leaves_out_a_pool_on_a_chain_catching_up_is_unknown(conn, ctx):
+    # stonkhook, 2026-10-23: its Ethereum pools measured $0 on the closed day and its Base pools had no row at all (Base
+    # is still catching up, so only the pools GeckoTerminal lists have rows). The project read "$0" for the day.
+    p = _two_chain_project(conn, "Stonk", 8453, None)
+    score.run(conn, ctx)
+    d = daily(conn, p)
+    assert d.vol_24h is None                      # $0 on Optimism says nothing about the Base pool
+    assert d.vol_7d == 800                        # a positive partial total stays a partial observed total
+    assert d.vol_7d_prev is None                  # no daily value at all in that week: unknown, as before
+
+
+def test_a_zero_total_is_measured_when_every_pool_is_on_a_ready_chain_or_has_its_days(conn, ctx):
+    quiet = _two_chain_project(conn, "Quiet", 10, None)                         # an Optimism pool with no row did not trade
+    listed = _two_chain_project(conn, "Listed", 8453, {END - timedelta(days=1): 50.0, END: 0.0})   # Base pool, day known
+    score.run(conn, ctx)
+    assert (daily(conn, quiet).vol_24h, daily(conn, quiet).vol_7d) == (0, 800)
+    assert (daily(conn, listed).vol_24h, daily(conn, listed).vol_7d) == (0, 850)
+
+
+def test_a_pool_born_after_the_window_proves_its_zero_there(conn, ctx):
+    # v4alphahook: its AXIS/USDC pool on Base was created on 10/19, so it did $0 in the week before by construction; two
+    # older Base test pools with no row at all leave that week unknown.
+    p = insert_project(conn, "Alpha", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xal", 8453, project_id=p)
+    insert_pool(conn, "0xalnew", 8453, "0xal", created=NOW - timedelta(days=4))
+    series(conn, "0xalnew", 8453, {END - timedelta(days=2): 5_000.0, END: 7_000.0})
+    score.run(conn, ctx)
+    assert (daily(conn, p).vol_7d, daily(conn, p).vol_7d_prev) == (12_000, 0)
+    insert_pool(conn, "0xaltest", 8453, "0xal", created=NOW - timedelta(days=150))
+    score.run(conn, ctx)
+    assert (daily(conn, p).vol_7d, daily(conn, p).vol_7d_prev) == (12_000, None)
+
+
+def test_a_zero_total_beside_a_pool_with_unknown_volume_is_unknown(conn, ctx):
+    _optimism_ready(conn)
+    p = insert_project(conn, "Held", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xhe", 10, project_id=p)
+    for pool in ("0xhepriced", "0xheheld"):
+        insert_pool(conn, pool, 10, "0xhe", created=NOW - timedelta(days=60))
+    insert_snap(conn, "0xhepriced", 10, END, 0, 0.0, 5, vol_day=0.0, tx_day=0)
+    insert_snap(conn, "0xheheld", 10, END, 0, None, 50, vol_day=None, tx_day=12)   # swapped, USD unknown (held back)
+    score.run(conn, ctx)
+    assert (daily(conn, p).vol_24h, daily(conn, p).vol_7d) == (None, None)

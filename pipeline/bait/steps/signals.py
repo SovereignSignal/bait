@@ -1,5 +1,6 @@
 """Step 7 (signals): for New ∪ Trending (top N): GitHub activity and the alive signal, then Claude why_blurb when
-signals changed since blurb_at.
+signals changed since blurb_at. First, for every project, published audit links that are gone (audit_links.py): that
+row is for the "Audit linked" badge, so it is no blurb input and never makes a blurb stale (FROZEN_KINDS).
 
 The per-project Exa receipts search was removed on 2026-10-24 (Exa now serves only the radar step). The receipts table
 and the "exa" / "nansen" signal rows written before then stay stored; they no longer change, so they are left out of
@@ -18,12 +19,17 @@ from ..db import as_utc, project_daily, projects, receipts, savepoint, signals, 
 from ..rules import is_alive
 from . import RunContext, log
 
-# signal kinds no step writes any more (Exa receipts until 2026-10-24, Nansen until 2026-10-08): frozen, never prompt input
-FROZEN_KINDS = ("exa", "nansen")
+# Signal kinds that are no blurb input: never in the prompt, and a change to one never makes a blurb stale. exa and
+# nansen are frozen (no step writes them since 2026-10-24 and 2026-10-08). audit_links (audit_links.py) is refreshed
+# nightly for the badge; a changed dead-link list alone is no reason to pay for a new why_blurb.
+FROZEN_KINDS = ("exa", "nansen", "audit_links")
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
     out = {"projects": 0, "github": 0, "blurbs": 0, "errors": 0}
+    links = _audit_links(conn, ctx)
+    out["errors"] += links.pop("failed", 0)            # a soft error in the run receipt
+    out.update(links)
     targets = select_targets(conn, ctx)
     out["projects"] = len(targets)
     if not targets:
@@ -84,6 +90,18 @@ def _set_signal(conn, pid: int, kind: str, value: dict, now: datetime) -> bool:
     return True
 
 
+def _audit_links(conn, ctx: RunContext) -> dict:
+    """Every published audit link, not only tonight's targets: a dead one leaves the "Audit linked" badge (audit_links.py).
+    Free; a failure is logged and never stops the step."""
+    from .. import audit_links
+    try:
+        with savepoint(conn):
+            return audit_links.check(conn, ctx.now, _set_signal, ctx.extras.get("audit_probe"))
+    except Exception as e:
+        log.warning("signals audit links failed: %s", e)
+        return {"failed": 1}
+
+
 def _alive(conn, pid: int, now: datetime) -> bool | None:
     """A GitHub commit in the last 30 days; None (unknown) when Bait has no GitHub reading for the project. GitHub is the
     only input since the Exa half went with the receipts search on 2026-10-24, so no reading is no evidence either way,
@@ -108,7 +126,8 @@ _ZERO_TVL = re.compile(r"\b(zero|no|\$0)\b[^.]{0,24}\bTVL\b|\bTVL\b[^.]{0,24}\b(
 
 
 def _needs_blurb(conn, p, daily=None) -> bool:
-    latest = conn.execute(sa.select(sa.func.max(signals.c.as_of)).where(signals.c.project_id == p.id)).scalar_one()
+    latest = conn.execute(sa.select(sa.func.max(signals.c.as_of))
+                          .where(signals.c.project_id == p.id, signals.c.kind.not_in(FROZEN_KINDS))).scalar_one()
     if p.blurb_at is None:
         return True
     if daily is not None and daily.tvl_usd is None and p.why_blurb and _ZERO_TVL.search(p.why_blurb):

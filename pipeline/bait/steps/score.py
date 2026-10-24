@@ -184,6 +184,7 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
     unknown_volume_projects = {pool_project[key][0] for key in unknown_vol}
+    unproven = _unproven_windows(pool_project, by_pool, unknown_vol, ready, {"vol24": w24, "vol7": w7, "vol7p": wp})
     # A project's age is its earliest pool when known; on a first run every project was "first seen" today.
     for (pid, created) in pool_project.values():
         if created is not None and pid in first_seen:
@@ -213,6 +214,10 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
         wash = pid in reasons
         # every pool's volume unknown (p5 held it back): the project's volume is unknown, never $0
         known = a["vol_known"] or (not a["usage_rows"] and not a["missing_rows"])
+        # a $0 sum that leaves out a pool it cannot vouch for (unknown volume, or no day on a chain still catching up) is
+        # unknown, never $0; a positive sum stays a partial observed total (DESIGN.md "Historical listing and dormancy")
+        vol = {n: a[n] if known and a[n + "_known"] and not (a[n] == 0 and n in unproven.get(pid, ())) else None
+               for n in ("vol24", "vol7", "vol7p")}
         young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
         # covered for the week (concentration has the project) and no wallet that day: a measured 0. `wallets` reads the
         # indexer's last day on ready chains only, so elsewhere only a week without any wallet proves it.
@@ -220,9 +225,7 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
         w24 = wallets.get(pid, (0, True) if quiet else (None, None))
         rows.append({
             "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"] if a["tvl_known"] else None, "pools_n": a["pools"] + extra.get(pid, 0),
-            "vol_24h": a["vol24"] if known and a["vol24_known"] else None,
-            "vol_7d": a["vol7"] if known and a["vol7_known"] else None,
-            "vol_7d_prev": a["vol7p"] if known and a["vol7p_known"] else None,
+            "vol_24h": vol["vol24"], "vol_7d": vol["vol7"], "vol_7d_prev": vol["vol7p"],
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
             "wallets_24h": w24[0], "wallets_exact": w24[1],
             "wallets_7d": concentration.get(pid, (None, None))[0],
@@ -407,6 +410,23 @@ def _check_swap_copy(conn, w: tuple[date, date], pool_project: dict, by_pool: di
                 a["tx24_known"] = False
                 if a["vol24"] == 0:
                     a["vol24_known"] = False
+
+
+def _unproven_windows(pool_project: dict, by_pool: dict, unknown_vol: set, ready: list[int],
+                      windows: dict[str, tuple[date, date]]) -> dict[int, set[str]]:
+    """Per project, the volume windows a $0 total cannot prove: a pool whose volume is unknown (onchain held it back), or
+    a pool on a chain that is not ready with no known daily volume in the window. On a ready chain the indexer saw every
+    swap, so a pool without a row did not trade; elsewhere (Base, while the indexer catches up) only the pools
+    GeckoTerminal listed have rows, and a missing pool is unknown. A pool created after the window proves its $0."""
+    ready = set(ready)
+    out: dict[int, set[str]] = {}
+    for key, (pid, created) in pool_project.items():
+        rows = by_pool.get(key, {})
+        for name, w in windows.items():
+            if key in unknown_vol or (key[1] not in ready and not (created is not None and created > w[1])
+                                      and not any(w[0] <= d <= w[1] and r.volume_usd_day is not None for d, r in rows.items())):
+                out.setdefault(pid, set()).add(name)
+    return out
 
 
 def _ready(conn, ctx: RunContext, end: date) -> list[int]:

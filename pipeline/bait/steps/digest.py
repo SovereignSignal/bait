@@ -1,5 +1,6 @@
 """Step 8 (digest): Monday (or --force-digest) -> digests(week_of=day): the week's New + Trending over the closed days
-ending day - 1; wash-like projects are left out."""
+ending day - 1; wash-like projects are left out. Both lists follow the feed's tabs (web/src/lib/feed.ts applyTab): a
+project nobody named is never listed, and New skips a launch whose 7-day volume is a measured $0 (unknown stays)."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -8,6 +9,12 @@ import sqlalchemy as sa
 
 from ..db import digests, project_daily, projects, upsert
 from . import RunContext, log
+
+
+def named(name: str | None) -> bool:
+    """False for a name nobody chose: the group step's "Unlisted hook 0x…" and "Unlisted hook family 0x…" placeholders.
+    The web labels those by a pool pair and keeps them out of Trending, New and the movers (web/src/lib/unlisted.ts)."""
+    return bool(name) and not name.startswith("Unlisted hook")
 
 
 def run(conn: sa.Connection, ctx: RunContext) -> dict:
@@ -27,11 +34,16 @@ def run(conn: sa.Connection, ctx: RunContext) -> dict:
                 "tvl_usd": r.tvl_usd, "vol_7d": r.vol_7d, "vol_7d_prev": r.vol_7d_prev,
                 "swaps_7d": r.swaps_7d, "pools_n": r.pools_n, "score_trending": r.score_trending}
 
-    trending = sorted([r for r in live if (r.score_trending or 0) > 0], key=lambda r: (-(r.score_trending or 0), -(r.tvl_usd or 0)))[:20]
-    new = sorted([r for r in live if r.is_new], key=lambda r: -(r.tvl_usd or 0))[:20]   # 85 were New on 10/8
+    trending = sorted([r for r in live if (r.score_trending or 0) > 0 and named(r.name)],
+                      key=lambda r: (-(r.score_trending or 0), -(r.tvl_usd or 0)))[:20]
+    # The 2026-10-12 and 10-19 digests kept 20 New each, mostly unnamed hooks and $0 launches, so the week page (which
+    # skips those) said "20 new projects" above a list of 4 and of 6. Filter here, and count every one that qualified.
+    fresh = [r for r in live if r.is_new and named(r.name) and r.vol_7d != 0]
+    new = sorted(fresh, key=lambda r: -(r.tvl_usd or 0))[:20]
     body = {
         "week_of": ctx.day.isoformat(), "window_end": (ctx.day - timedelta(days=1)).isoformat(), "generated_at": ctx.now.isoformat(),
-        "totals": {"projects": len(live), "traded": len(traded),
+        # new: every project that cleared the New bar this week; the "new" list keeps the 20 with the most TVL
+        "totals": {"projects": len(live), "traded": len(traded), "new": len(fresh),
                    "tvl_usd": sum(r.tvl_usd or 0 for r in traded), "vol_7d": sum(r.vol_7d or 0 for r in traded)},
         "new": [card(r) for r in new], "trending": [card(r) for r in trending],
     }
