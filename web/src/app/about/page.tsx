@@ -50,7 +50,8 @@ export default function AboutPage() {
             of Bait&apos;s 30 busiest pools, once a day. Distinct wallet counts come from the indexer where it has caught up, otherwise from those
             trades; a &quot;≤&quot; marks an upper bound. The live trade feed on a project page reads GeckoTerminal&apos;s recent trades for the project&apos;s
             busiest pool, hides trades under $10, and refreshes every minute while you watch. &quot;Wallets 7d&quot; and the top wallet&apos;s share of swaps come from the indexer
-            and are shown at any size, with no threshold; they are unknown unless every chain the project is on has caught up through the week. A project page names the wallet that deployed
+            and are shown at any size, with no threshold; they are unknown unless the indexer has every swap of the project&apos;s pools for the week (on a chain
+            still catching up, a hook past the indexer&apos;s per-hook pool cap leaves them unknown). A project page names the wallet that deployed
             each hook (from the registry, or the explorer&apos;s contract creator) and the share of the week&apos;s swaps those wallets made.
             The same figures are available as JSON from the read API: /api/v1/projects, /api/v1/projects/[slug] and /api/v1/hooks/[address].
             The field reference is in the repository under docs/api.md.

@@ -5,7 +5,7 @@ import pytest
 import sqlalchemy as sa
 
 from bait import db
-from bait.steps import activity, score
+from bait.steps import activity, onchain, score
 from tests.conftest import DAY, NOW, insert_hook, insert_pool, insert_project, insert_snap
 
 END = DAY - timedelta(days=1)          # window_end: the run on DAY reports closed UTC days through END
@@ -717,6 +717,141 @@ def test_wallets_7d_is_zero_for_a_covered_silent_project(conn, ctx):
     score.run(conn, ctx)
     d = daily(conn, pid)
     assert d.wallets_7d == 0 and d.top_wallet_share_7d is None
+
+
+def _chain_state(conn, chain_id, backfilled=True, swap_time=NOW):
+    conn.execute(sa.insert(db.indexer_state).values(chain_id=chain_id, initialize_block=1, swap_block=1, head_block=1,
+                                                    backfilled=backfilled, updated_at=NOW, swap_block_time=swap_time))
+
+
+def _indexed_week(conn, chain_id, hook, pool, swaps_by_wallet: dict):
+    """A pool of `hook` whose seven closed days the indexer counted: each wallet makes its swaps every day."""
+    insert_pool(conn, pool, chain_id, hook, created=NOW - timedelta(days=60))
+    for i in range(7):
+        d = END - timedelta(days=i)
+        conn.execute(sa.insert(db.pool_daily_onchain).values(chain_id=chain_id, pool_id=pool, day=d, swaps=sum(swaps_by_wallet.values()),
+                                                             wallets=len(swaps_by_wallet), volume_usd=1_000.0))
+        for address, swaps in swaps_by_wallet.items():
+            conn.execute(sa.insert(db.pool_wallet_day).values(chain_id=chain_id, pool_id=pool, day=d, address=address, swaps=swaps))
+
+
+def test_wallets_7d_ignores_a_registry_hook_on_a_chain_bait_does_not_index(conn, ctx):
+    """2026-10-24: StablePair (Ethereum + Arbitrum, both ready, 19K swaps a week) read "Wallets 7d -" because the registry
+    also lists its hook on X Layer (196), a chain the indexer does not cover and so can never be ready. The site shows no
+    pool, swap or volume there, so the figure covers the chains it does show."""
+    pid = insert_project(conn, "Stable", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xstable1", 1, project_id=pid, name="Stable")
+    insert_hook(conn, "0xstable42161", 42161, project_id=pid, name="Stable")
+    insert_hook(conn, "0xstable196", 196, project_id=pid, name="Stable")             # registry entry only
+    _indexed_week(conn, 1, "0xstable1", "0xsp1", {"0xa": 3, "0xb": 1})
+    _indexed_week(conn, 42161, "0xstable42161", "0xsp2", {"0xa": 1, "0xc": 1})          # 0xa on both chains: one wallet
+    _chain_state(conn, 1)
+    _chain_state(conn, 42161)
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert (d.wallets_7d, d.top_wallet_share_7d) == (3, round(28 / 42, 4))
+    # a pool Bait stored on such a chain would have swaps nothing counts: then the figure is unknown again
+    insert_pool(conn, "0xsp3", 196, "0xstable196", created=NOW - timedelta(days=60))
+    score.run(conn, ctx)
+    assert daily(conn, pid).wallets_7d is None
+
+
+def test_wallets_7d_counts_a_hook_under_the_cap_on_a_chain_still_settling_its_lookup_queue(conn, ctx):
+    """Base is not "ready" while launchpad pools past the per-hook cap owe swaps to pool_lookup_queue. Every pool of a hook
+    under the cap is a v4_pools row from its Initialize on, so none of its swaps can be owed: once the swap cursor is past
+    the window, the indexer has its whole week. 2026-10-24: Angstrom (Ethereum + Base) and eleven others read "-"."""
+    pid = insert_project(conn, "Ang", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xang1", 1, project_id=pid, name="Ang")
+    insert_hook(conn, "0xang8453", 8453, project_id=pid, name="Ang")
+    _indexed_week(conn, 1, "0xang1", "0xap1", {"0xa": 2, "0xb": 1})
+    _indexed_week(conn, 8453, "0xang8453", "0xap2", {"0xc": 1})
+    _chain_state(conn, 1)
+    _chain_state(conn, 8453, backfilled=False)
+    conn.execute(sa.insert(db.pool_lookup_queue).values(chain_id=8453, pool_id="0x" + "9" * 64, from_block=1, seen_block=2,
+                                                        from_time=NOW - timedelta(days=3)))
+    assert onchain.ready_chains(conn, ctx) == [1]
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert (d.wallets_7d, d.top_wallet_share_7d) == (3, 0.5)
+    # past the cap, some of the hook's pools are not rows and their swaps may still be owed to the queue: unknown
+    conn.execute(sa.insert(db.hook_pool_counts).values(chain_id=8453, hook_address="0xang8453", pools_total=2_500))
+    score.run(conn, ctx)
+    assert daily(conn, pid).wallets_7d is None
+    # under the cap again, but the swap cursor stopped short of the window's end: unknown
+    conn.execute(sa.delete(db.hook_pool_counts))
+    conn.execute(sa.update(db.indexer_state).where(db.indexer_state.c.chain_id == 8453).values(swap_block_time=NOW - timedelta(hours=7)))
+    score.run(conn, ctx)
+    assert daily(conn, pid).wallets_7d is None
+
+
+def test_a_week_counted_on_a_settling_chain_never_reads_an_unread_last_day_as_zero_wallets(conn, ctx):
+    """The 24h figure reads the indexer only on ready chains, so a week counted on Base proves no 24h zero; a covered week
+    with no wallet at all still does."""
+    busy = insert_project(conn, "Fam", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xfam", 8453, project_id=busy, name="Fam")
+    _indexed_week(conn, 8453, "0xfam", "0xfp", {"0xa": 1, "0xb": 1})
+    quiet = insert_project(conn, "Still", first_seen=NOW - timedelta(days=60), slug="still")
+    insert_hook(conn, "0xstill", 8453, project_id=quiet, name="Still")
+    _indexed_week(conn, 8453, "0xstill", "0xstp", {})
+    _chain_state(conn, 8453, backfilled=False)
+    score.run(conn, ctx)
+    b, q = daily(conn, busy), daily(conn, quiet)
+    assert (b.wallets_7d, b.wallets_24h, b.wallets_exact) == (2, None, None)
+    assert (q.wallets_7d, q.wallets_24h, q.wallets_exact) == (0, 0, True)
+
+
+def test_wallets_7d_on_a_settling_chain_needs_indexed_history_from_the_start_of_the_window(conn, ctx):
+    """A swap cursor past the window's end says nothing about its start. A chain whose indexed history begins inside the
+    week (re-scoring a day whose week starts before the chain's swap history does) holds a partial count, which would read
+    as a small project."""
+    pid = insert_project(conn, "Late", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xlate", 8453, project_id=pid, name="Late")
+    _indexed_week(conn, 8453, "0xlate", "0xltp", {"0xa": 1, "0xb": 1})
+    _chain_state(conn, 8453, backfilled=False)
+    score.run(conn, ctx)
+    assert daily(conn, pid).wallets_7d == 2
+    for t in (db.pool_daily_onchain, db.pool_wallet_day):            # history now starts on the window's second day
+        conn.execute(sa.delete(t).where(t.c.chain_id == 8453, t.c.day == END - timedelta(days=6)))
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert (d.wallets_7d, d.top_wallet_share_7d, d.deployer_swap_share_7d, d.wallets_24h) == (None, None, None, None)
+
+
+def test_deployer_swaps_on_a_settling_chain_count_toward_the_deployer_share(conn, ctx):
+    """The deployer query reads the same chains as the wallet count: Base swaps in the total but not in the deployer's part
+    would understate a team trading its own Base pool."""
+    pid = insert_project(conn, "Team", first_seen=NOW - timedelta(days=60))
+    insert_hook(conn, "0xteam1", 1, project_id=pid, name="Team")
+    insert_hook(conn, "0xteam8453", 8453, project_id=pid, name="Team")
+    conn.execute(sa.update(db.hooks).where(db.hooks.c.address == "0xteam8453").values(deployer="0xdep", deployer_source="explorer"))
+    _indexed_week(conn, 1, "0xteam1", "0xtp1", {"0xa": 2, "0xb": 1})               # 21 swaps
+    _indexed_week(conn, 8453, "0xteam8453", "0xtp2", {"0xdep": 1, "0xc": 1})       # 14 swaps, 7 of them the deployer's
+    _chain_state(conn, 1)
+    _chain_state(conn, 8453, backfilled=False)
+    score.run(conn, ctx)
+    d = daily(conn, pid)
+    assert (d.wallets_7d, d.top_wallet_share_7d, d.deployer_swap_share_7d) == (4, 0.4, 0.2)
+
+
+def test_a_quiet_last_day_on_the_ready_chain_is_not_a_zero_while_the_settling_chain_traded(conn, ctx):
+    """Every hook has to be on a ready chain for "covered, no wallet that day" to be a measured 0, whichever order the hooks
+    come in. Here Ethereum (ready) had no wallet on the last day but the Base hook did: the 24h figure is unknown."""
+    pids = []
+    for name, chains in (("BaseFirst", (8453, 1)), ("EthFirst", (1, 8453))):
+        pid = insert_project(conn, name, first_seen=NOW - timedelta(days=60))
+        for i, c in enumerate(chains):               # address order = insertion order, so the scan order is the same either way
+            insert_hook(conn, f"0x{name.lower()}{i}", c, project_id=pid, name=name)
+            _indexed_week(conn, c, f"0x{name.lower()}{i}", f"0x{name.lower()}p{c}", {f"0x{name.lower()}w{c}": 1})
+            if c == 1:                               # no swap on Ethereum on the last day
+                for t in (db.pool_daily_onchain, db.pool_wallet_day):
+                    conn.execute(sa.delete(t).where(t.c.pool_id == f"0x{name.lower()}p1", t.c.day == END))
+        pids.append(pid)
+    _chain_state(conn, 1)
+    _chain_state(conn, 8453, backfilled=False)
+    score.run(conn, ctx)
+    for pid in pids:
+        d = daily(conn, pid)
+        assert (d.wallets_7d, d.wallets_24h, d.wallets_exact) == (2, None, None)
 
 
 def test_deployer_share_of_swaps_from_known_deployer_wallets(conn, ctx):

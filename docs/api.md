@@ -61,7 +61,7 @@ Sourcify or Blockscout); both are null when it is unknown.
 | `status.is_new`, `status.is_wash`, `status.wash_reasons[]`, `status.wash_historical`, `status.is_dormant`, `status.activity_status`, `status.has_historical_usage` | the pipeline's classification; reasons are `24h`, `7d`, `concentrated`, `vol_tvl`, `no_liquidity`, `symmetric`, `uniform`, `unverified`, `lookalike` |
 | `metrics.vol_7d_usd`, `vol_7d_prev_usd`, `vol_24h_usd`, `tvl_usd`, `swaps_7d`, `swaps_24h`, `pools`, `hooks` | closed UTC days; volume is a USD estimate |
 | `metrics.wallets_24h`, `wallets_24h_exact` | distinct wallets on the last closed day; when `exact` is false the number is an upper bound |
-| `metrics.wallets_7d`, `top_wallet_share_7d`, `deployer_swap_share_7d` | from the indexer's exact per-wallet swap counts; known only when every chain of the project is caught up; shares are of swaps, not volume |
+| `metrics.wallets_7d`, `top_wallet_share_7d`, `deployer_swap_share_7d` | from the indexer's exact per-wallet swap counts; known only when the indexer has every swap of the project's hooks for the week (a ready chain, or a chain whose swap cursor is past the week and the hook is under the per-hook pool cap; registry hooks on chains Bait does not index are out of scope, as everywhere else); shares are of swaps, not volume |
 | `metrics.buys_24h_rolling`, `sells_24h_rolling` | GeckoTerminal's rolling 24h counts |
 | `metrics.score_trending`, `rank_trending`, `trending_min_vol_usd` | the site's trending score and rank (null when not ranked) |
 | `links.website`, `links.github`, `links.x` | validated links; may be null |

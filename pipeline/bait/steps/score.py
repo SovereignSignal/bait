@@ -26,8 +26,9 @@ from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 
-from ..db import (HOOK_POOL_PREFIX, as_utc, historical_swap_evidence, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats, pool_top_wallets, pool_wallet_day, pools,
-                  project_daily, projects, upsert)
+from ..db import (HOOK_POOL_PREFIX, as_utc, historical_swap_evidence, hook_pool_counts, hooks, indexer_state, pool_daily_onchain, pool_snapshots, pool_stats,
+                  pool_top_wallets, pool_wallet_day, pools, project_daily, projects, upsert)
+from ..indexer.chains import CHAIN_BY_ID as INDEXED_CHAINS
 from ..rules import (SHARED_DEPLOYERS, SPAM_EXEMPT_VOL, WASH_CONCENTRATED_WALLETS, WASH_MAX_WALLETS_7D, WASH_MIN_VOL_7D, WASH_REASONS, WASH_SHARE, corroborated, custom_accounting,
                      is_new, is_spam, is_symmetric, is_uniform, is_wash_7d, is_wash_7d_by_swaps, is_wash_24h, is_wash_concentrated,
                      is_wash_no_liquidity, is_wash_roundtrip, is_wash_vol_tvl, score_trending, wallets_lower_bound, is_idle_tvl,
@@ -179,7 +180,7 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
     reasons, wallet_known = _wash(conn, day, end, pool_project, ready, unknown_vol, pool_vol7, pool_tvl, pool_swaps7, custom,
                                   pool_vol_days, lookalike)
     wallets = _wallets(conn, day, end, ready, pool_project)
-    concentration = _wallets_7d(conn, w7, ready, hook_rows)
+    concentration, all_ready = _wallets_7d(conn, ctx, w7, ready, hook_rows, set(pool_hook.values()))
 
     first_seen = {r.id: as_utc(r.first_seen_at) for r in conn.execute(sa.select(projects.c.id, projects.c.first_seen_at))}
     unknown_volume_projects = {pool_project[key][0] for key in unknown_vol}
@@ -213,15 +214,17 @@ def run(conn: sa.Connection, ctx: RunContext, project_ids: set[int] | None = Non
         # every pool's volume unknown (p5 held it back): the project's volume is unknown, never $0
         known = a["vol_known"] or (not a["usage_rows"] and not a["missing_rows"])
         young = fs > datetime.combine(day - 7 * _D, datetime.min.time(), tzinfo=timezone.utc)
+        # covered for the week (concentration has the project) and no wallet that day: a measured 0. `wallets` reads the
+        # indexer's last day on ready chains only, so elsewhere only a week without any wallet proves it.
+        quiet = pid in concentration and (pid in all_ready or concentration[pid][0] == 0)
+        w24 = wallets.get(pid, (0, True) if quiet else (None, None))
         rows.append({
             "project_id": pid, "day": day, "window_end": end, "tvl_usd": a["tvl"] if a["tvl_known"] else None, "pools_n": a["pools"] + extra.get(pid, 0),
             "vol_24h": a["vol24"] if known and a["vol24_known"] else None,
             "vol_7d": a["vol7"] if known and a["vol7_known"] else None,
             "vol_7d_prev": a["vol7p"] if known and a["vol7p_known"] else None,
             "swaps_24h": a["tx24"] if a["tx24_known"] else None, "swaps_7d": a["tx7"] if a["tx7_known"] else None,
-            # every chain ready and covering the window (concentration has the project) and no wallet that day: a measured 0
-            "wallets_24h": wallets.get(pid, (0, True) if pid in concentration else (None, None))[0],
-            "wallets_exact": wallets.get(pid, (0, True) if pid in concentration else (None, None))[1],
+            "wallets_24h": w24[0], "wallets_exact": w24[1],
             "wallets_7d": concentration.get(pid, (None, None))[0],
             "top_wallet_share_7d": concentration.get(pid, (None, None))[1],
             "deployer_swap_share_7d": concentration.get(pid, (None, None, None))[2],
@@ -487,33 +490,56 @@ def _wallets(conn, day: date, end: date, ready: list[int], pool_project: dict) -
     return {pid: (sum(n for n, _ in ps), len(ps) == 1 and ps[0][1]) for pid, ps in parts.items()}
 
 
-def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -> dict[int, tuple[int, float | None, float | None]]:
+def _wallets_7d(conn, ctx: RunContext, w: tuple[date, date], ready: list[int], hook_rows: list,
+                pooled: set[tuple]) -> tuple[dict[int, tuple[int, float | None, float | None]], set[int]]:
     """Distinct wallets over the 7-day window and the busiest wallet's share of the project's swaps, from the indexer's
-    exact per-wallet counts (pool_wallet_day, wallet = tx.from). Known only for projects whose every chain is ready
-    with indexed history reaching the start of the window: a partial count would read as a small, concentrated project.
+    exact per-wallet counts (pool_wallet_day, wallet = tx.from). Known only when the indexer has every swap of every
+    hook of the project through the window: a partial count would read as a small, concentrated project.
+    A hook is covered when its chain's indexed history reaches the start of the window and either the chain is ready,
+    or the chain's swap cursor is past the window's end and the hook is under the per-hook pool cap (no hook_pool_counts
+    row). Every pool of such a hook is a v4_pools row from its Initialize on, so none of its swaps can wait in
+    pool_lookup_queue, the only thing that keeps a caught-up chain from being ready (Base: launchpad pools past the cap).
+    A capped hook there may still be owed swaps: unknown.
+    A registry hook on a chain the indexer does not cover (X Layer, Arc, ...) is outside Bait: no pool, swap or volume of
+    it is stored and the site does not show it, so it does not void the figure. One with a stored pool still would.
     The share is of swaps, not volume, because wallet volume is a sample (pool_top_wallets) while swap counts are
-    complete on a ready chain. No threshold: this is the figure the wash rules only act on past $250K a day.
+    complete where covered. No threshold: this is the figure the wash rules only act on past $250K a day.
     Third value: the share of those swaps made by the project's known deployer wallets on their own chains (hooks.deployer,
-    CREATE2 factories excluded); None when no deployer is known, 0.0 when one is known and did not trade."""
+    CREATE2 factories excluded); None when no deployer is known, 0.0 when one is known and did not trade.
+    Also returns the covered projects whose hooks are all on ready chains (where `_wallets` reads the indexer too)."""
     ready_set = set(ready)
-    if not ready_set:
-        return {}
+    boundary = datetime.combine(w[1] + _D, datetime.min.time(), tzinfo=timezone.utc)
+    swept = {st.chain_id for st in conn.execute(sa.select(indexer_state.c.chain_id, indexer_state.c.swap_block_time))
+             if st.chain_id not in ready_set and (not ctx.chains or st.chain_id in ctx.chains)
+             and st.swap_block_time is not None and as_utc(st.swap_block_time) >= boundary}
+    chains = sorted(ready_set | swept)
+    if not chains:
+        return {}, set()
     coverage = dict(conn.execute(sa.select(pool_daily_onchain.c.chain_id, sa.func.min(pool_daily_onchain.c.day))
                                  .where(pool_daily_onchain.c.day <= w[1]).group_by(pool_daily_onchain.c.chain_id)).all())
-    chains_of: dict[int, set[int]] = {}
+    capped = ({(r.chain_id, r.hook_address) for r in conn.execute(sa.select(hook_pool_counts.c.chain_id, hook_pool_counts.c.hook_address)
+                                                                  .where(hook_pool_counts.c.chain_id.in_(sorted(swept))))}
+              if swept else set())
+    covered: dict[int, bool] = {}
+    on_ready: dict[int, bool] = {}
     for r in hook_rows:
-        chains_of.setdefault(r.project_id, set()).add(r.chain_id)
-    eligible = {pid for pid, cs in chains_of.items()
-                if cs <= ready_set and all(c in coverage and _as_date(coverage[c]) <= w[0] for c in cs)}
+        key = (r.chain_id, r.address)
+        if r.chain_id not in INDEXED_CHAINS and key not in pooled:
+            continue
+        ok = (r.chain_id in coverage and _as_date(coverage[r.chain_id]) <= w[0]
+              and (r.chain_id in ready_set or (r.chain_id in swept and key not in capped)))
+        covered[r.project_id] = covered.get(r.project_id, True) and ok
+        on_ready[r.project_id] = on_ready.get(r.project_id, True) and r.chain_id in ready_set
+    eligible = {pid for pid, ok in covered.items() if ok}
     if not eligible:
-        return {}
+        return {}, set()
     per_wallet = (sa.select(hooks.c.project_id.label("pid"), pool_wallet_day.c.address,
                             sa.func.sum(pool_wallet_day.c.swaps).label("swaps"))
                   .select_from(pool_wallet_day
                                .join(pools, (pools.c.pool_id == pool_wallet_day.c.pool_id) & (pools.c.chain_id == pool_wallet_day.c.chain_id))
                                .join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
                   .where(pool_wallet_day.c.day >= w[0], pool_wallet_day.c.day <= w[1],
-                         pool_wallet_day.c.chain_id.in_(ready), hooks.c.project_id.is_not(None))
+                         pool_wallet_day.c.chain_id.in_(chains), hooks.c.project_id.is_not(None))
                   .group_by(hooks.c.project_id, pool_wallet_day.c.address).subquery())
     q = (sa.select(per_wallet.c.pid, sa.func.count().label("wallets"), sa.func.sum(per_wallet.c.swaps).label("swaps"),
                    sa.func.max(per_wallet.c.swaps).label("top")).group_by(per_wallet.c.pid))
@@ -526,7 +552,7 @@ def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -
           .select_from(pool_wallet_day
                        .join(pools, (pools.c.pool_id == pool_wallet_day.c.pool_id) & (pools.c.chain_id == pool_wallet_day.c.chain_id))
                        .join(hooks, (hooks.c.address == pools.c.hook_address) & (hooks.c.chain_id == pools.c.chain_id)))
-          .where(pool_wallet_day.c.day >= w[0], pool_wallet_day.c.day <= w[1], pool_wallet_day.c.chain_id.in_(ready),
+          .where(pool_wallet_day.c.day >= w[0], pool_wallet_day.c.day <= w[1], pool_wallet_day.c.chain_id.in_(chains),
                  hooks.c.project_id.in_(list(deployers_of)) if deployers_of else sa.false(),
                  sa.tuple_(hooks.c.project_id, pool_wallet_day.c.chain_id, pool_wallet_day.c.address).in_(
                      [(pid, c, a) for pid, ds in deployers_of.items() for (c, a) in ds]) if deployers_of else sa.false())
@@ -538,7 +564,7 @@ def _wallets_7d(conn, w: tuple[date, date], ready: list[int], hook_rows: list) -
         share = round(top / swaps, 4) if swaps else None
         dshare = (round(min(deployer_swaps.get(pid, 0), swaps) / swaps, 4) if swaps else 0.0) if pid in deployers_of else None
         out[pid] = (wallets, share, dshare)
-    return out
+    return out, {pid for pid in eligible if on_ready[pid]}
 
 
 def _wash(conn, day: date, end: date, pool_project: dict, ready: list[int], unknown: set[tuple], vol7: dict,
