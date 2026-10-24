@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { apiRedirect, findByHook, isHexAddress, lastMentionAt, listProjects, parseListQuery, projectSummaryV1, projectV1 } from "./api-v1";
+import {
+  apiRedirect, apiSite, findByHook, isHexAddress, lastMentionAt, listProjects, parseListQuery, projectSummaryV1, projectV1,
+  REFERENCE_SITE,
+} from "./api-v1";
 import { SAMPLE_PROJECTS } from "../fixtures/sample";
 
 const SITE = "https://example.test";
@@ -79,4 +82,12 @@ test("a retired slug redirects with a relative Location, never the container's o
   assert.equal(r.headers.get("Location"), "/api/v1/projects/launchhook-robinhood");
   assert.equal(r.headers.get("Cache-Control"), "no-store");
   assert.equal(r.headers.get("Access-Control-Allow-Origin"), "*");
+});
+
+test("the read API's origin: NEXT_PUBLIC_SITE_URL unset or empty (a copied .env.example) means the reference deployment", () => {
+  assert.equal(apiSite(undefined), REFERENCE_SITE);
+  assert.equal(apiSite(""), REFERENCE_SITE);
+  assert.equal(apiSite("http://localhost:3000/"), "http://localhost:3000");
+  const p = SAMPLE_PROJECTS[0];
+  assert.equal(projectSummaryV1(p, apiSite("")).url, `${REFERENCE_SITE}/p/${p.slug}`, "url fields stay absolute");
 });

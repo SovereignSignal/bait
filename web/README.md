@@ -84,4 +84,4 @@ Multi-stage, `node:22-alpine`, `output: 'standalone'`.
 
 See `.env.example`. `NEXT_PUBLIC_SITE_URL` is your public origin, no trailing slash: RSS links and OG metadata use it
 (`http://localhost:3000` when unset or empty), and the read API's `url` fields fall back to the reference deployment
-when it is unset, so set it on any other host.
+when it is unset or empty, so set it on any other host.
