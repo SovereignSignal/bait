@@ -12,18 +12,19 @@ def seed_daily(conn, pid, score=0.0, new=False, spam=False, tvl=0.0):
                                                     swaps_7d=0, pools_n=1, score_trending=score, is_new=new, is_spam=spam))
 
 
-class FakeExa:
-    def __init__(self, hits):
-        self.hits, self.calls = hits, 0
+class NoExa:
+    """Exa serves the radar step only since 2026-10-24: signals must never search it."""
 
-    def search_recent(self, query, days=30, n=10, now=None):
-        self.calls += 1
-        return self.hits
+    def search_recent(self, *a, **k):
+        raise AssertionError("signals searched Exa")
 
 
 class FakeGitHub:
+    def __init__(self, stars=12):
+        self.stars = stars
+
     def activity(self, url, days=30, now=None):
-        return {"repo": "x/y", "stars": 12, "last_commit_at": (NOW - timedelta(days=2)).isoformat(), "commits_30d": True}
+        return {"repo": "x/y", "stars": self.stars, "last_commit_at": (NOW - timedelta(days=2)).isoformat(), "commits_30d": True}
 
 
 class FakeClaude:
@@ -36,7 +37,7 @@ class FakeClaude:
         return "People use it. Numbers went up."
 
 
-def test_signals_targets_receipts_alive_and_blurb_only_on_change(conn, ctx):
+def test_signals_targets_github_alive_and_blurb_only_on_change(conn, ctx):
     hot = insert_project(conn, "Hot", NOW - timedelta(days=40))
     conn.execute(sa.update(db.projects).values(github="https://github.com/x/y").where(db.projects.c.id == hot))
     fresh = insert_project(conn, "Fresh", NOW - timedelta(days=1), slug="fresh")
@@ -52,19 +53,13 @@ def test_signals_targets_receipts_alive_and_blurb_only_on_change(conn, ctx):
     targets = [p.slug for p, _ in signals.select_targets(conn, ctx)]
     assert targets == ["hot", "fresh"]          # trending first, then new; spam excluded
 
-    hit = {"url": "https://blog.example.com/post", "title": "Hot hook ships", "source": "blog.example.com",
-           "published_at": NOW - timedelta(days=3), "highlights": []}
-    fresh_hit = {"url": "https://blog.example.com/fresh", "title": "Fresh v4 hook launches", "source": "blog.example.com",
-                 "published_at": NOW - timedelta(days=2), "highlights": []}
-    exa, claude = FakeExa([hit, fresh_hit]), FakeClaude()   # each project keeps only the title that names it
-    ctx.clients.update(exa=exa, github=FakeGitHub(), claude=claude)
+    gh, claude = FakeGitHub(), FakeClaude()
+    ctx.clients.update(exa=NoExa(), github=gh, claude=claude)
     out = signals.run(conn, ctx)
-    assert out["projects"] == 2 and out["exa"] == 2 and out["receipts"] == 2 and out["github"] == 1
-    assert out["blurbs"] == 2 and out["errors"] == 0
-    rec = conn.execute(sa.select(db.receipts).where(db.receipts.c.project_id == hot)).one()
-    assert rec.source == "blog.example.com" and rec.title == "Hot hook ships"
+    assert out == {"projects": 2, "github": 1, "blurbs": 2, "errors": 0}
+    assert conn.execute(sa.select(sa.func.count()).select_from(db.receipts)).scalar_one() == 0
     sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == hot))}
-    assert sig["alive"] == {"alive": True} and sig["github"]["stars"] == 12 and sig["exa"]["hits_30d"] == 1
+    assert sig["alive"] == {"alive": True} and sig["github"]["stars"] == 12 and "exa" not in sig
     p = conn.execute(sa.select(db.projects).where(db.projects.c.id == hot)).one()
     assert p.why_blurb == "People use it. Numbers went up." and p.blurb_at is not None
 
@@ -72,11 +67,11 @@ def test_signals_targets_receipts_alive_and_blurb_only_on_change(conn, ctx):
     ctx.now = NOW + timedelta(days=1)
     out2 = signals.run(conn, ctx)
     assert out2["blurbs"] == 0 and claude.calls == 2
-    # signal changes -> blurb regenerated
-    exa.hits = []
+    # a signal changes -> that project's blurb is regenerated
+    gh.stars = 13
     ctx.now = NOW + timedelta(days=2)
     out3 = signals.run(conn, ctx)
-    assert out3["blurbs"] == 2 and claude.calls == 4
+    assert out3["blurbs"] == 1 and claude.calls == 3
 
 
 def test_signals_without_keys_still_writes_alive(conn, ctx):
@@ -84,7 +79,7 @@ def test_signals_without_keys_still_writes_alive(conn, ctx):
     insert_hook(conn, "0x1", 1, project_id=p)
     seed_daily(conn, p, new=True)
     out = signals.run(conn, ctx)
-    assert out["projects"] == 1 and out["exa"] == 0 and out["blurbs"] == 0
+    assert out["projects"] == 1 and out["github"] == 0 and out["blurbs"] == 0
     assert conn.execute(sa.select(db.signals.c.value).where(db.signals.c.project_id == p)).scalar_one() == {"alive": False}
 
 
@@ -103,25 +98,32 @@ def test_digest_only_on_monday_or_forced(conn, ctx):
     assert conn.execute(sa.select(sa.func.count()).select_from(db.digests)).scalar_one() == 2
 
 
-def test_signals_unnamed_first_target_does_not_crash_or_leak_hits(conn, ctx):
-    # An unlisted hook has no name tokens, so Exa is never queried for it. Before the fix, `hits` was unbound on
-    # the first such project (UnboundLocalError -> soft error) and stale on later ones.
-    unnamed = insert_project(conn, "Unlisted hook 0xabcd…1234", NOW - timedelta(days=40), slug="unlisted-hook-0xabcd-1234")
-    named = insert_project(conn, "Hot", NOW - timedelta(days=40), slug="hot")
-    for pid in (unnamed, named):
-        insert_hook(conn, f"0x{pid}", 1, project_id=pid)
-    seed_daily(conn, unnamed, score=50.0, tvl=5e6)      # ranks first
-    seed_daily(conn, named, score=30.0, tvl=1e6)
-    hit = {"url": "https://blog.example.com/hot", "title": "Hot hook ships", "source": "blog.example.com",
-           "published_at": NOW - timedelta(days=3), "highlights": []}
-    exa = FakeExa([hit])
-    ctx.clients.update(exa=exa, github=None, claude=None)
+def test_frozen_exa_and_nansen_signals_stay_out_of_alive_and_the_blurb(conn, ctx):
+    # Signal rows written before 2026-10-24 stay stored, but no step refreshes them: a recent Exa hit no longer makes a
+    # project alive, and the blurb prompt sees only live signals. Stored receipts are still dated facts it may use.
+    p = insert_project(conn, "Hot", NOW - timedelta(days=40), slug="hot")
+    insert_hook(conn, f"0x{p}", 1, project_id=p)
+    seed_daily(conn, p, score=30.0, tvl=1e6)
+    conn.execute(sa.insert(db.signals), [
+        {"project_id": p, "kind": "exa", "value": {"hits_30d": 3, "latest": (NOW - timedelta(days=2)).isoformat(), "top": []},
+         "as_of": NOW - timedelta(days=5)},
+        {"project_id": p, "kind": "nansen", "value": {"labeled": [], "smart_money": False}, "as_of": NOW - timedelta(days=20)}])
+    conn.execute(sa.insert(db.receipts).values(project_id=p, url="https://blog.example.com/hot", title="Hot hook ships",
+                                               source="blog.example.com", published_at=NOW - timedelta(days=2)))
+    conn.execute(sa.update(db.projects).values(enrichment={"parallel": {"team": "T"}}).where(db.projects.c.id == p))
+    seen = []
+
+    class Capture(FakeClaude):
+        def why_blurb(self, c):
+            seen.append(c)
+            return super().why_blurb(c)
+    ctx.clients.update(exa=NoExa(), github=None, claude=Capture())
     out = signals.run(conn, ctx)
-    assert out["errors"] == 0
-    assert exa.calls == 1                                  # only the named project was searched
-    kinds = {(r.project_id, r.kind) for r in conn.execute(sa.select(db.signals.c.project_id, db.signals.c.kind))}
-    assert (unnamed, "exa") not in kinds                   # no leaked receipt signal on the unnamed project
-    assert (named, "exa") in kinds
+    assert out == {"projects": 1, "github": 0, "blurbs": 1, "errors": 0}
+    sig = {r.kind: r.value for r in conn.execute(sa.select(db.signals).where(db.signals.c.project_id == p))}
+    assert sig["alive"] == {"alive": False} and sig["exa"]["hits_30d"] == 3          # stored row left as it was
+    assert set(seen[0]["signals"]) == {"alive"} and [r["title"] for r in seen[0]["receipts"]] == ["Hot hook ships"]
+    assert "enrichment" not in seen[0]                                                # stored Parallel facts: never prompt
 
 
 def test_blurb_context_names_its_windows_and_never_a_made_up_swap_count(conn, ctx):

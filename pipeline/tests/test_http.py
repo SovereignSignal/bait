@@ -42,15 +42,13 @@ def test_gets_keep_retrying_5xx_and_read_timeouts():
     assert http.get_json(c, "https://free.test/x") == {"ok": True} and len(calls) == 3
 
 
-def test_parallel_and_exa_use_the_paid_post(monkeypatch):
+def test_exa_uses_the_paid_post(monkeypatch):
     from bait.clients.exa import Exa
-    from bait.clients.parallel import Parallel
     sent = []
     monkeypatch.setattr(http, "post_json", lambda *a, **k: pytest.fail("paid call through the retrying POST"))
-    monkeypatch.setattr(http, "post_json_paid", lambda c, url, **k: sent.append(url) or {"run_id": "r1", "results": []})
-    assert Parallel("k", http_client=object()).submit("P", "hints") == "r1"
+    monkeypatch.setattr(http, "post_json_paid", lambda c, url, **k: sent.append(url) or {"results": []})
     assert Exa("k", http_client=object()).search_recent("q") == []
-    assert sent == ["https://api.parallel.ai/v1/tasks/runs", "https://api.exa.ai/search"]
+    assert sent == ["https://api.exa.ai/search"]
 
 
 class _Meter:
@@ -77,16 +75,12 @@ def _status(code):
                                          (_status(429), False), (_status(400), False)])
 def test_a_lost_response_on_a_paid_post_is_recorded_as_ambiguous_spend(monkeypatch, make, billed):
     from bait.clients.exa import Exa
-    from bait.clients.parallel import Parallel
 
     def boom(c, url, **k):
         raise make(httpx.Request("POST", url))
     monkeypatch.setattr(http, "post_json_paid", boom)
-    par, exa = Parallel("k", http_client=object()), Exa("k", http_client=object())
-    par.meter, exa.meter = _Meter(), _Meter()
-    with pytest.raises(httpx.HTTPError):
-        par.submit("P", "hints")
+    exa = Exa("k", http_client=object())
+    exa.meter = _Meter()
     with pytest.raises(httpx.HTTPError):
         exa.search_recent("q")
-    for meter, provider in ((par.meter, "parallel"), (exa.meter, "exa")):
-        assert [(p, "ambiguous" in d) for p, d in meter.records] == ([(provider, True)] if billed else [])
+    assert [(p, "ambiguous" in d) for p, d in exa.meter.records] == ([("exa", True)] if billed else [])

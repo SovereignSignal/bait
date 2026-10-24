@@ -54,7 +54,7 @@ def _rows(e, pool_id):
 
 
 def _ctx(http=None, day=DAY, now=NOW):
-    ctx = RunContext(day=day, now=now, clients={k: None for k in ("graph", "blockscout", "claude", "exa", "parallel", "github", "names")})
+    ctx = RunContext(day=day, now=now, clients={k: None for k in ("graph", "blockscout", "claude", "exa", "github", "names")})
     if http is not None:
         ctx.extras["keyless_http"] = http
     return ctx
@@ -206,6 +206,7 @@ CUT = ("word " * 40)[:199] + "x"          # 200 chars, mid-word, the old strip()
 
 def _prose_seed(c):
     ids = {}
+    # stored Parallel facts with no Claude line were a "missing" target until Parallel was removed (2026-10-24)
     ids["missing"] = _project(c, "missing", "0xm", what_line="placeholder from the hooklist",
                               enrichment={"parallel": {"website": "https://m.xyz", "team": "M"}})
     ids["failed"] = _project(c, "failed", "0xf", enrichment={"parallel": {"_failed": "run1", "reason": "404"}})
@@ -218,34 +219,29 @@ def _prose_seed(c):
     return ids
 
 
-def test_what_line_targets_missing_first_then_cut_mid_word_busiest_first(engine):
+def test_what_line_targets_are_lines_cut_mid_word_busiest_first(engine):
     with engine.begin() as c:
         _prose_seed(c)
         got = [(p.slug, kind) for p, kind in repair.what_line_targets(c)]
-    assert got == [("missing", "missing"), ("cut-big", "cut"), ("cut-small", "cut")]
+    assert got == [("cut-big", "cut"), ("cut-small", "cut")]        # stored Parallel facts are no longer a target
     assert repair.cut_mid_word(CUT) and not repair.cut_mid_word(CUT[:-1] + "…") and not repair.cut_mid_word("short")
 
 
-def test_prose_what_lines_use_stored_facts_and_stop_at_the_repair_cap(engine):
+def test_prose_what_lines_rewrite_the_line_only_and_stop_at_the_repair_cap(engine):
     with engine.begin() as c:
-        ids = _prose_seed(c)
+        _prose_seed(c)
         targets = repair.what_line_targets(c)
     meter = repair.CappedMeter(None, cap_usd=0.0085, budgets=Budgets(3.0, 40.0, {}))
     claude = FakeClaude(meter)
     out = repair.write_what_lines(engine, claude, targets)
     # each call is checked at its worst case (~$0.007) on top of what this run spent: the second call no longer fits $0.0085
-    assert out == {"missing": 1, "cut": 0, "errors": 0, "budget_stop": 1}
-    assert claude.what[0]["enrichment"] == {"parallel": {"website": "https://m.xyz", "team": "M"}}
+    assert out == {"cut": 1, "errors": 0, "budget_stop": 1}
+    assert claude.what[0]["name"] == "Cut-Big" and claude.what[0]["enrichment"] == {}
     with engine.connect() as c:
         rows = {r.slug: r for r in c.execute(sa.select(db.projects))}
-    m = rows["missing"]
-    assert (m.what_line, m.category, m.website) == ("Missing routes swaps through a hook.", "orders", "https://m.xyz")
-    assert m.enriched_at is not None and rows["cut-big"].what_line == CUT
-    out = repair.write_what_lines(engine, FakeClaude(repair.CappedMeter(None, None, budgets=Budgets(3.0, 40.0, {}))),
-                                  [(rows["cut-big"], "cut")])
-    with engine.connect() as c:
-        big = c.execute(sa.select(db.projects).where(db.projects.c.slug == "cut-big")).one()
-    assert out["cut"] == 1 and big.what_line == "Cut-Big routes swaps through a hook." and big.category == "other"
+    big = rows["cut-big"]
+    assert big.what_line == "Cut-Big routes swaps through a hook." and big.category == "other"   # the line only
+    assert rows["cut-small"].what_line == CUT and rows["missing"].what_line == "placeholder from the hooklist"
 
 
 def test_blurbs_go_to_stale_signals_targets_scored_with_package_8_windows_only(engine):
@@ -277,7 +273,7 @@ def test_prose_plan_shows_counts_worst_case_and_both_budget_options(engine):
     lines, worst = repair.prose_plan(engine, meter, now, True, True, None, 50, repair.P8_MERGED_AT)
     text = "\n".join(lines)
     assert worst == pytest.approx(expect)
-    assert "prose what-lines: 1 missing (stored Parallel facts, no Claude line), 2 cut mid-word" in text
+    assert "prose what-lines: 2 cut mid-word; worst case" in text
     assert "spent today $1.02 of $3.00" in text and "option A, no budget change" in text
     assert f"option B, one run: the owner sets SPEND_DAILY_USD=3.00 on the pipeline service" in text   # 1.02 + worst fits
     assert f"--max-usd {repair._cents_up(worst):.2f}" in text

@@ -3,9 +3,8 @@
 backfill-days  GeckoTerminal daily candles (free, paced) -> pool_snapshots.volume_usd_day for closed days, where a row has
                no per-day value (written before 0012) or only an estimate. One call per pool, busiest first; resumable.
 rescore        score.run for each stored run day in the range, oldest first, after a one-time backup of that day's rows.
-prose          Claude only, paid: what_line for projects whose Parallel facts are stored but whose line was never written,
-               or whose line the old code cut mid-word at 200 chars; why_blurb for the signals targets whose blurb predates
-               the package 8 window text. Every call passes the spend Meter; --max-usd caps this run on top of it.
+prose          Claude only, paid: what_line for projects whose line the old code cut mid-word at 200 chars; why_blurb
+               for the signals targets whose blurb predates the package 8 window text. Every call passes the spend Meter; --max-usd caps this run on top of it.
 verify         Free: Bait's 24h / 7d / prev-7d against GeckoTerminal candle sums for a few projects, as a markdown table.
 all            The plan (--dry-run), or backfill-days -> rescore -> verify, then prose only within --prose-budget-usd.
 
@@ -341,11 +340,6 @@ class CappedMeter(Meter):
         super().check(provider, est_usd)
 
 
-def stored_parallel(enrichment) -> bool:
-    par = (enrichment or {}).get("parallel")
-    return bool(par) and "_failed" not in par
-
-
 def cut_mid_word(line: str | None) -> bool:
     """The old code stored strip()[:200]: a line of exactly 200 chars that does not end a sentence was cut. cut_line's own
     cuts end in an ellipsis and are left alone."""
@@ -357,19 +351,13 @@ def latest_day(conn) -> date | None:
 
 
 def what_line_targets(conn) -> list[tuple[object, str]]:
-    """("missing") Parallel facts stored but no Claude line yet (enriched_at NULL, the budget stopped enrich), then ("cut")
-    lines cut mid-word; each busiest first by the latest 7-day volume."""
+    """("cut") lines cut mid-word, busiest first by the latest 7-day volume. The "missing" kind (Parallel facts paid for,
+    no Claude line yet) went with Parallel on 2026-10-24: a project never enriched waits for the nightly enrich."""
     day = latest_day(conn)
     vol = {r.project_id: r.vol_7d or 0.0 for r in conn.execute(
         sa.select(project_daily.c.project_id, project_daily.c.vol_7d).where(project_daily.c.day == day))} if day else {}
-    missing, cut = [], []
-    for p in conn.execute(sa.select(projects).order_by(projects.c.id)):
-        if p.enriched_at is None and stored_parallel(p.enrichment):
-            missing.append(p)
-        elif cut_mid_word(p.what_line):
-            cut.append(p)
-    key = lambda p: (-vol.get(p.id, 0.0), p.id)   # noqa: E731
-    return [(p, "missing") for p in sorted(missing, key=key)] + [(p, "cut") for p in sorted(cut, key=key)]
+    cut = [p for p in conn.execute(sa.select(projects).order_by(projects.c.id)) if cut_mid_word(p.what_line)]
+    return [(p, "cut") for p in sorted(cut, key=lambda p: (-vol.get(p.id, 0.0), p.id))]
 
 
 def blurb_targets(conn, day: date, signals_limit: int, stale_before: datetime) -> tuple[list[tuple], dict]:
@@ -401,10 +389,9 @@ def _past(deadline: datetime | None, clock) -> bool:
 
 
 def write_what_lines(engine, claude, targets, deadline: datetime | None = None, clock=None) -> dict:
-    """One Claude call per target from stored facts only (no Parallel, no Blockscout); each line committed on its own.
-    "missing" gets enrich's full write (line, category, links, enriched_at); "cut" gets the line only. Stops between
-    calls at `deadline`."""
-    out = {"missing": 0, "cut": 0, "errors": 0}
+    """One Claude call per target from stored facts only (no Blockscout); each line committed on its own, the line only.
+    Stops between calls at `deadline`."""
+    out = {"cut": 0, "errors": 0}
     for i, (p, kind) in enumerate(targets):
         if _past(deadline, clock):
             out["left_at_deadline"] = len(targets) - i
@@ -421,9 +408,8 @@ def write_what_lines(engine, claude, targets, deadline: datetime | None = None, 
             out["errors"] += 1
             log.warning("repair prose what_line project=%s failed: %s", p.slug, e)
             continue
-        vals = enrich.what_values(p, res, enr) if kind == "missing" else {"what_line": enrich.cut_line(res["what_line"])}
         with engine.begin() as conn:
-            conn.execute(sa.update(projects).values(**vals).where(projects.c.id == p.id))
+            conn.execute(sa.update(projects).values(what_line=enrich.cut_line(res["what_line"])).where(projects.c.id == p.id))
         out[kind] += 1
     return out
 
@@ -491,11 +477,10 @@ def prose_plan(engine, meter: Meter, now: datetime, what: bool, blurbs: bool, li
             t = what_line_targets(conn)
             t = t[:limit] if limit is not None else t
             est = what_line_estimates(conn, t)
-            n_missing = sum(1 for _, k in t if k == "missing")
             w = sum(est)
             worst += w
-            lines.append(f"prose what-lines: {n_missing} missing (stored Parallel facts, no Claude line), {len(t) - n_missing} "
-                         f"cut mid-word; worst case ${w:.2f} (max ${max(est, default=0):.4f} a call), Claude only")
+            lines.append(f"prose what-lines: {len(t)} cut mid-word; worst case ${w:.2f} (max ${max(est, default=0):.4f} a call), "
+                         "Claude only")
         if blurbs:
             day = latest_day(conn)
             t, info = blurb_targets(conn, day, signals_limit, stale_before) if day else ([], {"targets": 0, "fresh": 0, "old_row": 0})

@@ -137,8 +137,9 @@ pool_top_wallets = sa.Table(
     sa.Column("last_trade_at", TS),
 )
 
-# Wallet labels from the retired Nansen lane (credits exhausted 2026-10-08). Frozen: the web still reads existing rows;
-# the pipeline no longer writes here. Delete the table when the web stops reading it.
+# Wallet labels from the retired Nansen lane (credits exhausted 2026-10-08). Frozen: the pipeline no longer writes here,
+# and since 2026-10-24 the site shows none of it; only the read API's top_wallets[].labels / smart_money still read
+# existing rows. Delete the table when that stops.
 wallet_labels = sa.Table(
     "wallet_labels", metadata,
     sa.Column("address", sa.Text, primary_key=True),
@@ -228,7 +229,7 @@ project_aliases = sa.Table(
 )
 
 # --- spend ---
-# One row per paid API call (Anthropic, Parallel, Exa). Written on its own connection by
+# One row per paid API call (Anthropic, Exa; Parallel until 2026-10-24). Written on its own connection by
 # costs.Meter so it survives step rollbacks. Budgets in costs.py read it.
 api_spend = sa.Table(
     "api_spend", metadata,

@@ -14,11 +14,10 @@ def test_link_fields(case):
     assert x_handle(case['value']) == case['x']
 
 
-def test_enrichment_replaces_invalid_stored_fields_with_valid_new_candidates():
+def test_enrichment_drops_invalid_stored_fields():
+    # Parallel's candidates were the fallback until 2026-10-24; now an invalid stored field simply becomes null.
     from bait.steps.enrich import what_values
     p = SimpleNamespace(website='javascript:alert(1)', github='no repository', x_handle='No X handle identified')
     out = what_values(p, {'what_line': 'Example', 'category': 'other'}, {'parallel': {
         'website': 'https://example.org', 'github': 'https://github.com/Uniswap/v4-core', 'x_handle': 'https://x.com/Uniswap'}})
-    assert out['website'] == 'https://example.org'
-    assert out['github'] == 'https://github.com/Uniswap/v4-core'
-    assert out['x_handle'] == 'Uniswap'
+    assert (out['website'], out['github'], out['x_handle']) == (None, None, None)

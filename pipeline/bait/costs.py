@@ -8,11 +8,13 @@ Every paid call goes through a Meter:
 Budgets (USD, all providers together; per-provider caps optional):
   SPEND_DAILY_USD    default 3.00   (UTC day)
   SPEND_MONTHLY_USD  default 40.00  (rolling 30 days)
-  SPEND_DAILY_USD_<PROVIDER> / SPEND_MONTHLY_USD_<PROVIDER>  e.g. SPEND_DAILY_USD_PARALLEL=1
+  SPEND_DAILY_USD_<PROVIDER> / SPEND_MONTHLY_USD_<PROVIDER>  e.g. SPEND_DAILY_USD_EXA=1
+
+Paid providers: Anthropic (group, enrich, signals, radar) and Exa (radar only). Parallel was removed on 2026-10-24; its
+api_spend rows stay in the ledger and still count toward the all-provider budgets while they are inside the window.
 
 Prices checked 2026-10-08 from the providers' published pricing:
   Anthropic per million tokens (input / output): Sonnet 5.5 2/10, Haiku 4.5 1/5, Haiku 5.5 0.10/0.50
-  Parallel Task API per run: lite 0.005, base 0.01, core 0.025, core2x 0.05, pro 0.10, ultra 0.30
   Exa /search auto: 0.007 per request (10 results included) + highlights 0.001 per result page
 """
 from __future__ import annotations
@@ -33,7 +35,6 @@ ANTHROPIC_PER_MTOK = {               # (input, output) USD per million tokens
     "claude-opus-5-5": (4.00, 20.00),   # possible server-side fallback target; priced so it is never under-counted
 }
 ANTHROPIC_UNKNOWN = (5.00, 25.00)      # unknown model id: assume an expensive one
-PARALLEL_PER_RUN = {"lite": 0.005, "base": 0.01, "core": 0.025, "core2x": 0.05, "pro": 0.10, "ultra": 0.30}
 EXA_SEARCH = 0.007
 EXA_PER_HIGHLIGHT_PAGE = 0.001
 
@@ -55,10 +56,6 @@ def anthropic_usd(model: str, input_tokens: int, output_tokens: int,
 def anthropic_estimate(model: str, prompt_chars: int, max_tokens: int) -> float:
     """Worst case before the call: ~3 chars per token (conservative) and a full max_tokens of output."""
     return anthropic_usd(model, prompt_chars // 3 + 50, max_tokens)
-
-
-def parallel_usd(processor: str) -> float:
-    return PARALLEL_PER_RUN.get(processor, PARALLEL_PER_RUN["ultra"])
 
 
 def exa_usd(num_results: int, highlights: bool = True) -> float:
@@ -85,7 +82,7 @@ class Budgets:
     @classmethod
     def from_env(cls) -> "Budgets":
         per = {}
-        for p in ("anthropic", "parallel", "exa"):
+        for p in ("anthropic", "exa"):
             per[p] = (_env_float(f"SPEND_DAILY_USD_{p.upper()}", None), _env_float(f"SPEND_MONTHLY_USD_{p.upper()}", None))
         return cls(_env_float("SPEND_DAILY_USD", DEFAULT_DAILY_USD), _env_float("SPEND_MONTHLY_USD", DEFAULT_MONTHLY_USD), per)
 
@@ -185,8 +182,7 @@ def preview(conn: sa.Connection, ctx, meter: Meter) -> list[dict]:
     from .steps import enrich, group, radar, signals
 
     rows: list[dict] = []
-    have = {k: bool(env(v)) for k, v in (("anthropic", "ANTHROPIC_API_KEY"), ("parallel", "PARALLEL_API_KEY"),
-                                         ("exa", "EXA_API_KEY"))}
+    have = {k: bool(env(v)) for k, v in (("anthropic", "ANTHROPIC_API_KEY"), ("exa", "EXA_API_KEY"))}
     sonnet_call = anthropic_estimate(CLAUDE_BLURB_MODEL, 6000, 600)       # what_line / why_blurb worst case
     haiku_group = anthropic_estimate(CLAUDE_CLASSIFY_MODEL, group.PROMPT_CHARS_MAX, 400)
     haiku_radar = anthropic_estimate(CLAUDE_CLASSIFY_MODEL, 4000, 300)
@@ -198,17 +194,10 @@ def preview(conn: sa.Connection, ctx, meter: Meter) -> list[dict]:
                  "calls": n_group, "unit_usd": haiku_group, "note": "bare-address hooks are never sent"})
 
     n_enrich = len(enrich.select_candidates(conn)) if have["anthropic"] else 0
-    rows.append({"step": "enrich", "provider": "parallel", "what": "Parallel core enrichment",
-                 "calls": n_enrich if have["parallel"] else 0, "unit_usd": parallel_usd("core"), "note": "new busy projects only"})
     rows.append({"step": "enrich", "provider": "anthropic", "what": f"{CLAUDE_BLURB_MODEL} what_line",
-                 "calls": n_enrich, "unit_usd": sonnet_call, "note": ""})
+                 "calls": n_enrich, "unit_usd": sonnet_call, "note": "new busy projects only"})
 
-    from .rules import name_tokens
-    sig_targets = signals.select_targets(conn, ctx)
-    n_sig = len(sig_targets)
-    n_named = sum(1 for p, _ in sig_targets if name_tokens(p.name))
-    rows.append({"step": "signals", "provider": "exa", "what": "Exa receipts search",
-                 "calls": n_named if have["exa"] else 0, "unit_usd": exa_call, "note": "one search per named New/Trending project"})
+    n_sig = len(signals.select_targets(conn, ctx))
     rows.append({"step": "signals", "provider": "anthropic", "what": f"{CLAUDE_BLURB_MODEL} why_blurb",
                  "calls": n_sig if have["anthropic"] else 0, "unit_usd": sonnet_call, "note": "upper bound: only when signals changed"})
 
