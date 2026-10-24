@@ -1044,3 +1044,35 @@ a manual re-enrich.
   budget either way. The cost preview now counts the failing blurbs outside the targets and the failing lines. How many
   stored texts fail on the first night is not known here: the PR's run flagged 54 blurbs and 4 lines in the top 200
   with the checks that could run then.
+
+## Daily volume: a day without a reading is blank, not $0 (2026-10-24)
+
+Checked against the live API on 2026-10-24 (data day 10/23). The project page's daily volume bars, and the read API's
+`daily_volume_usd`, drew $0 for a day nobody read: `loadSeries` filled a day with no `pool_snapshots` row with 0, and a
+$0 sum beside pools with no row was drawn as $0 too. Of 377 project details fetched, 140 ended on a $0 bar under a "–"
+1d header; 3 ended on $0 with a measured $0 1d. Base only: pushbasedynamicfeehook ($55K, $47K and $21K on 10/11 to
+10/13, then ten $0 bars under a "–" week), unlisted-hook-0xc90e-e0cc, limit-order-hook-base, advancedfeehook. Mixed:
+bonker-hook (12 $0 bars under a "–" week), stonkhook (a $0 1d: its Ethereum pools read $0 while four Base pools have no
+row), v4alphahook. Ready chains too: pulsehook (Robinhood, 11 $0 bars under "–"), unlisted-hook-0x55df-60c4,
+unlisted-hook-0x6628-0800, unlisted-hook-0x251b-c040.
+
+- **Rule now** (`present.ts` `dailySeries`). Per closed day: the sum of the pools' known snapshot volumes when it is
+  positive (a lower bound when a pool was not read); else $0 only when score's verdict for that day is a measured $0
+  (`project_daily.vol_24h` of the row whose `window_end` is that day; `day - 1` on rows scored before `window_end` was
+  stored); else null. A day whose rows all have unknown volume stays null, and fewer than two days with rows still reads
+  "Daily history starts with the next snapshot". Score is null unless some pool's volume that day is known, and since
+  #84 (`_unproven_windows`) also for a $0 sum that leaves out a pool it cannot vouch for, so the bars show $0 only where
+  score measured it.
+- **Cost.** One primary-key range read of `project_daily` (at most 14 rows) beside the snapshot sum, in `loadSeries`,
+  which the project page and `/api/v1/projects/<slug>` share. No migration. The API shape is unchanged; it returns null
+  where it returned 0, as its contract (null means unknown, never zero) allows.
+- **On the page.** A day without a reading is a faint dashed mark on the baseline under a full-height hover target ("Oct
+  14: no complete reading (unknown, not $0)"). A note under the axis says blank is unknown, not $0, and, when one of the
+  project's chains is still indexing, that its pools may be missing from these totals. The chart's label counts the
+  unknown days, the peak is over known days (when every known day was $0 the axis read "peak $1"), and a series with no
+  known day says so instead of drawing an empty grid.
+- **Days scored before #84 deployed** keep the $0 verdict they were scored with until they leave the 14-day window
+  (stonkhook's 10/23 among them), unless `repair rescore` re-scores those days: a production write, the owner's call.
+- **Closes** the open item in "New, the digest, $0 sums and audit links (2026-10-24)": "A project page's daily volume
+  bars (and the API's `daily_volume_usd`) still draw $0 for a day with no rows on a chain that is not ready: Base
+  projects whose week reads a dash can show a row of $0 days." The same fill drew $0 on ready chains too (pulsehook).

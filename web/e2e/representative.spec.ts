@@ -177,6 +177,48 @@ test("unknown and positive unpriced swaps never look like observed zero activity
   await expect(page.getByText("Missing recent coverage is not evidence of zero activity.", { exact: false })).toBeVisible();
 });
 
+// Fixture mode skips loadSeries, so this checks rendering only; lib/series.test.ts and queries-postgres.test.ts check
+// which days are unknown.
+test("daily volume: a day without a complete reading is a marked blank with a note, never a $0 bar", async ({ page }) => {
+  const found = errors(page);
+  const chart = page.locator("div.panel").filter({ has: page.getByRole("heading", { name: "Daily volume", exact: true }) });
+  const bars = chart.getByRole("img", { name: /^Daily volume/ });
+  const titles = (text: string | RegExp) => chart.locator("svg title").filter({ hasText: text });
+  const note = page.getByTestId("series-gaps");
+  const blank = "Days without a complete reading are left blank; blank is unknown, not $0.";
+
+  // fourteen unknown days: a message instead of an empty grid, the note, no $0
+  await page.goto("/p/qa-unknown");
+  await expect(chart.getByText("No complete reading for any of the last 14 days.", { exact: true })).toBeVisible();
+  await expect(note).toHaveText(blank);
+  await expect(bars).toHaveCount(0);
+  await expect(titles(/\$0$/)).toHaveCount(0);
+
+  // fourteen measured zeros: $0 bars, a $0 peak (it read "peak $1"), no note
+  await page.goto("/p/qa-dormant");
+  await expect(bars).toHaveAttribute("aria-label", "Daily volume, last 14 days, peak $0");
+  await expect(titles(/^\w{3} \d{1,2}: \$0$/)).toHaveCount(14);
+  await expect(chart.getByText("peak $0", { exact: true })).toBeVisible();
+  await expect(note).toHaveCount(0);
+
+  // Base, mixed: read days drawn, a measured $0 kept, unread days marked and hoverable, the note says Base is indexing
+  await page.goto("/p/qa-base-gaps");
+  await expect(bars).toHaveAttribute("aria-label", "Daily volume, last 14 days, peak $55.2K, 8 days unknown");
+  await expect(titles(/: no complete reading \(unknown, not \$0\)$/)).toHaveCount(8);
+  for (const t of ["Oct 3: $0", "Oct 4: $1.2K", "Oct 8: $55.2K", "Oct 10: $21.5K", "Oct 13: no complete reading (unknown, not $0)"]) {
+    await expect(titles(t)).toHaveCount(1);
+  }
+  await expect(titles(/^Oct 1[1-3]: \$/)).toHaveCount(0);
+  await expect(note).toHaveText(`${blank} Base is still indexing, so Base pools may be missing from these totals.`);
+  // the last day is unknown: its hover target spans the plot, not a 1px sliver
+  const hit = chart.locator("svg g").filter({ has: page.locator("title", { hasText: "Oct 13: no complete reading" }) }).locator("rect");
+  await hit.hover();
+  const [box, svg] = [await hit.boundingBox(), await bars.boundingBox()];
+  expect(box!.height).toBeGreaterThan(svg!.height * 0.8);
+  await fit(page);
+  expect(found).toEqual([]);
+});
+
 test("true dust, missing historical eligibility and absent Bunni are not manufactured as dormant", async ({ page }) => {
   for (const slug of ["qa-dust", "qa-missing-history", "bunnihook"]) {
     expect((await page.goto(`/p/${slug}`))?.status()).toBe(404);
@@ -222,7 +264,7 @@ test("failed full-list fetch offers retry and recovers without losing the reques
 test("representative pages fit narrow phones and compact desktop", async ({ page }) => {
   for (const width of phone() ? [360, 375] : [1094, 1280]) {
     await page.setViewportSize({ width, height: phone() ? 812 : 900 });
-    for (const slug of ["aegis", "clanker-static-fee-hook-v2-base", "arrakisprivatehook", "qa-unknown"]) {
+    for (const slug of ["aegis", "clanker-static-fee-hook-v2-base", "arrakisprivatehook", "qa-unknown", "qa-base-gaps"]) {
       await page.goto(`/p/${slug}`);
       await fit(page);
     }

@@ -18,8 +18,10 @@ that tests the redirect mechanism; it does not assert that a production merge oc
 
 The `QA` records exercise synthetic scoring outcomes: eligible dormant history, incomplete
 recent coverage, positive unpriced swaps, never-active dust, missing history, current and historical wash controls,
-and revival. These inputs verify presentation of pipeline states. Pipeline tests separately
-verify evidence qualification and scoring; browser replay alone does not validate ingestion.
+and revival. `qa-base-gaps` is a Base project whose daily volume mixes read days, a measured $0 day and days without
+a complete reading (null), under the captured Base partial-coverage freshness. These inputs verify presentation of
+pipeline states. Pipeline tests separately verify evidence qualification and scoring; browser replay alone does not
+validate ingestion.
 
 `qa-unknown` is hypothetical output after an approved historical-evidence import and a
 subsequent scorer run: historical eligibility is true, recent usage is unknown, and the

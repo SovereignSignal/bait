@@ -30,7 +30,9 @@ curl -s https://bait-production-2706.up.railway.app/api/v1/projects/angstrom | j
 A retired slug (renamed or merged project) answers 308 to the current one. Spam-flagged projects are 404, as on the
 site. Response: `{ api_version, project }` where `project` is the summary plus `data_day`, `why_blurb`,
 `why_blurb_at`, `hooks[]`, `pools[]`, `daily_volume_usd[]` (`{day, vol_usd}`, oldest first, about 14 days),
-`top_wallets[]`, `receipts[]`, `signals`. `top_wallets[]` is up to 10 `{address, chain_id, volume_usd, trades, buys,
+`top_wallets[]`, `receipts[]`, `signals`. `vol_usd` null means the day has no complete reading: unknown, never $0. A
+positive `vol_usd` is the sum over the pools read that day (a lower bound when a pool was not read); 0 means the nightly
+score measured $0 for that day. `top_wallets[]` is up to 10 `{address, chain_id, volume_usd, trades, buys,
 sells, last_trade_at}`, by volume across the project's pools, from GeckoTerminal's latest ~300 trades in each of Bait's
 busiest pools on the latest day fetched. `receipts[]` are posts about the project found before 2026-10-24 (none are
 added now). `signals` is `{last_commit_at, last_mention_at, audit_count}`: the last GitHub commit Bait saw, the newest

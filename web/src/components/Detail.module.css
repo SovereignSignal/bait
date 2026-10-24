@@ -42,6 +42,11 @@
 .axis { display: flex; justify-content: space-between; gap: 8px; padding-top: 6px; font-size: 11px; color: var(--fg3); }
 .gl { stroke: var(--line); stroke-width: 1; }
 .chartEmpty { padding: 20px 0; color: var(--fg2); }
+/* a day without a complete reading: a faint dashed baseline mark, never a $0 bar */
+.gapMark { stroke: var(--fg3); stroke-width: 2; stroke-dasharray: 3 3; opacity: .55; }
+.gap:hover .gapMark { opacity: 1; }
+.gaps { margin: 6px 0 0; font-size: 12px; color: var(--fg3); }
+.gapKey { display: inline-block; width: 16px; height: 6px; margin-right: 6px; vertical-align: middle; }
 
 .two { display: grid; grid-template-columns: minmax(0,1fr); gap: 12px; }
 .blk { padding: 14px 16px; min-width: 0; }
